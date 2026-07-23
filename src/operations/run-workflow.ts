@@ -214,8 +214,10 @@ function registeredRef(artifacts: readonly RegisteredWorkspaceArtifact[], id: st
 async function snapshotWorkflowState(state: WorkflowExecutionState): Promise<WorkflowStateSnapshot> {
   const artifacts = await state.workspace.readRegisteredArtifacts();
   const refs = (ids: readonly string[]) => ids.map((id) => registeredRef(artifacts, id)).filter((item): item is RegisteredArtifactRef => item !== undefined);
+  const selectedExecutionCases = state.selection === undefined ? state.executionCaseIds : selectedCaseArtifactIds(state.selection, artifacts);
+  if (state.selection !== undefined && selectedExecutionCases.length !== state.selection.selected.length) throw new QaSkillsError("Regression selection does not resolve every selected canonical testcase", "ARTIFACT_BINDING");
   return {
-    importedArtifacts: refs(state.importedArtifactIds), executionCases: refs(state.executionCaseIds),
+    importedArtifacts: refs(state.importedArtifactIds), executionCases: refs(selectedExecutionCases),
     reproductionAttempts: refs(state.reproductionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
     regressionAttempts: refs(state.regressionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
     exploratoryFindings: refs(state.exploratoryFindingIds),
@@ -633,6 +635,22 @@ async function hydrateCheckpointState(state: WorkflowExecutionState): Promise<vo
     const [selection] = await validateCheckpointRefs(state.workspace, [snapshot.selection]);
     if (selection?.record.type !== "regression-selection") throw new QaSkillsError("Workflow checkpoint regression selection is invalid", "ARTIFACT_BINDING");
     state.selection = selection.value as RegressionSelection;
+    const outputRefs = state.checkpoint.operationOutputs["select-regression"] ?? [];
+    if (outputRefs.length !== 1 || outputRefs[0]?.artifactId !== selection.record.id || outputRefs[0]?.sha256 !== selection.record.sha256) {
+      throw new QaSkillsError("Workflow checkpoint selection output is not the canonical selected-case authority", "ARTIFACT_BINDING");
+    }
+    const all = await state.workspace.readRegisteredArtifacts();
+    const selected = selectedCaseArtifactIds(state.selection, all);
+    const selectedRelationships = state.selection.selected.map((decision) => all.filter((artifact) => artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id) && artifact.value.testCaseId === decision.testCaseId && artifact.value.revisionId === decision.revisionId && artifact.value.instanceId === decision.instanceId));
+    if (selected.length !== state.selection.selected.length || selectedRelationships.some((matches) => matches.length !== 1)) throw new QaSkillsError("Workflow checkpoint regression selection has ambiguous selected testcase bindings", "ARTIFACT_BINDING");
+    state.executionCaseIds = selected;
+  } else {
+    const ingested = state.checkpoint.operationOutputs["ingest-testcases"] ?? [];
+    if (ingested.length > 0) {
+      const cases = await validateCheckpointRefs(state.workspace, ingested);
+      if (cases.some((artifact) => artifact.record.type !== "test-case")) throw new QaSkillsError("Workflow checkpoint testcase output is invalid", "ARTIFACT_BINDING");
+      state.executionCaseIds = cases.map((artifact) => artifact.record.id);
+    }
   }
   if (snapshot.charter) {
     const [charter] = await validateCheckpointRefs(state.workspace, [snapshot.charter]);

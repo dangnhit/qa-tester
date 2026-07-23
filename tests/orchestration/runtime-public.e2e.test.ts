@@ -107,6 +107,12 @@ async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId:
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 describe("public runtime QA Tester", () => {
   it("checkpoints a missing runtime as AWAITING_RUNTIME and resumes the same nonterminal run without fabricating a result or report", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-missing-")); roots.push(root);
@@ -242,6 +248,29 @@ describe("public runtime QA Tester", () => {
     expect(result.validation.valid).toBe(true);
     expect(await readFile(sourceManifestPath)).toEqual(sourceBytes);
     await workspace.close();
+  });
+
+  it("rejects a rechecksummed regression checkpoint that replaces the selected execution case with an excluded case", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-regression-checkpoint-tamper-")); roots.push(root);
+    const bundle = await sourceBundle(root, { includeExcluded: true });
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "required" } } },
+      changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "checkpoint-tamper" } } },
+    });
+    const result = await tester({ root, mode: "regression", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const checkpoint = artifacts.find((artifact) => artifact.record.type === "workflow-checkpoint" && JSON.stringify(artifact.value.completedOperations) === JSON.stringify(["select-regression"]));
+    const excluded = artifacts.find((artifact) => artifact.record.type === "test-case" && artifact.value.testCaseId === "TC-EXCLUDED");
+    if (!checkpoint || !excluded) throw new Error("Expected selected checkpoint and excluded testcase");
+    await rechecksumRegisteredArtifact(workspace, checkpoint.record.id, (value) => {
+      const state = value.state as Record<string, unknown>;
+      state.executionCases = [{ artifactId: excluded.record.id, sha256: excluded.record.sha256 }];
+      value.stateChecksum = sha256Text(canonicalJson(state));
+    });
+    await workspace.close();
+    await expect(RunWorkspace.open(root, result.runId)).rejects.toThrow(/checkpoint|selection|execution|binding/i);
   });
 
   it("retests an immutable source bug before independent regression and derives FIXED from registered attempts", async () => {

@@ -125,6 +125,24 @@ function sameCheckpointRefs(left: readonly unknown[], right: readonly unknown[])
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
+/** The selection record, rather than a checkpoint snapshot, owns execution
+ * membership and order. Excluded decisions intentionally never appear here. */
+function selectedExecutionCaseRefs(
+  selection: LoadedArtifact | undefined,
+  artifacts: readonly LoadedArtifact[],
+): readonly { artifactId: string; sha256: string }[] | undefined {
+  if (!selection?.value || selection.record.type !== "regression-selection" || !Array.isArray(selection.value.selected)) return undefined;
+  const refs: { artifactId: string; sha256: string }[] = [];
+  for (const decision of selection.value.selected) {
+    if (!isRecord(decision) || typeof decision.testCaseId !== "string" || typeof decision.revisionId !== "string" || typeof decision.instanceId !== "string") return undefined;
+    const matches = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id)
+      && artifact.value?.testCaseId === decision.testCaseId && artifact.value?.revisionId === decision.revisionId && artifact.value?.instanceId === decision.instanceId);
+    if (matches.length !== 1) return undefined;
+    refs.push({ artifactId: matches[0]!.record.id, sha256: matches[0]!.record.sha256 });
+  }
+  return refs;
+}
+
 function sameResourceIdentity(left: unknown, right: unknown): boolean {
   return isRecord(left) && isRecord(right)
     && left.id === right.id && left.ownerRunId === right.ownerRunId && left.cleanupAction === right.cleanupAction;
@@ -615,10 +633,15 @@ async function inspectWorkspaceState(
       const artifact = artifacts.find((candidate) => candidate.record.id === id && candidate.record.type === "test-case");
       return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
     }).filter((item): item is { artifactId: string; sha256: string } => item !== undefined) ?? []);
+    const selectionOutputRefs = outputs === undefined ? [] : array(outputs["select-regression"]);
+    const selectionOutput = selectionOutputRefs.length === 1 && isRecord(selectionOutputRefs[0]) ? selectionOutputRefs[0] : undefined;
+    const selectionArtifact = selectionOutput === undefined ? undefined : artifacts.find((artifact) => artifact.valid && artifact.record.type === "regression-selection" && artifact.record.id === selectionOutput.artifactId && artifact.record.sha256 === selectionOutput.sha256);
+    const selectedExecutionRefs = selectedExecutionCaseRefs(selectionArtifact, artifacts);
+    const selectionStateValid = !completed.includes("select-regression") || (state !== undefined && selectionArtifact !== undefined && selectedExecutionRefs !== undefined && state.selection !== undefined && sameCheckpointRefs([state.selection], selectionOutputRefs) && sameCheckpointRefs(array(state.executionCases), selectedExecutionRefs));
     const operationStateValid = state !== undefined
       && (!completed.includes("reproduce-bug") || sameCheckpointRefs(array(state.reproductionAttempts), outputs === undefined ? [] : array(outputs["reproduce-bug"])))
       && (!completed.includes("execute-browser-test") || value.mode === "retest" || sameCheckpointRefs(array(state.executionCases), executionCaseRefs))
-      && (!completed.includes("select-regression") || state.selection !== undefined);
+      && selectionStateValid;
     if (value.runId !== expectedRunId || value.mode !== metadata.mode || value.inputChecksum === undefined || value.stateChecksum === undefined || new Set(completed).size !== completed.length || !outputReferencesValid || !stateReferencesValid || !operationStateValid || !validInitial || !validSuccessor) {
       changed = invalidate(checkpoint, diagnostics, "INVALID_REFERENCE", "Workflow checkpoints must form an immutable revision chain with verified operation outputs") || changed;
     }
