@@ -34,9 +34,9 @@ describe("report generation operations", () => {
     await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-2"), relationships: [] });
     await evidence(workspace, "ATTEMPT-1");
 
-    const bug = await generateBugReport({ workspace, attemptId: "ATTEMPT-1", reproductionAttemptIds: ["ATTEMPT-1", "ATTEMPT-2"] });
+    const bug = await generateBugReport({ workspace, attemptId: "ATTEMPT-1", reproductionAttemptIds: ["ATTEMPT-1", "ATTEMPT-2"], triage: { status: "TRIAGED", severity: "Critical", priorityRecommendation: "P0", testPriority: "critical", openQuestions: [] } });
     expect(bug).toMatchObject({ kind: "BUG" });
-    const revision = await generateBugReport({ workspace, attemptId: "ATTEMPT-2", reproductionAttemptIds: ["ATTEMPT-2", "ATTEMPT-1"] });
+    const revision = await generateBugReport({ workspace, attemptId: "ATTEMPT-2", reproductionAttemptIds: ["ATTEMPT-2", "ATTEMPT-1"], triage: { status: "TRIAGED", severity: "Major", priorityRecommendation: "P2", testPriority: "high", openQuestions: [] } });
     expect(revision).toMatchObject({ kind: "BUG" });
     const revisions = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "bug-report");
     expect(revisions).toHaveLength(2);
@@ -44,8 +44,13 @@ describe("report generation operations", () => {
     const report = await generateQaReport({ workspace, locale: "vi" });
     const registered = await workspace.readRegisteredArtifacts();
 
-    expect(report.json).toContain("NOT_READY");
+    const model = JSON.parse(report.json) as { bugs: unknown[]; criticalFindings: string[]; remainingRisks: string[]; summary: string; releaseRecommendation: string };
+    expect(model.releaseRecommendation).toBe("READY_WITH_RISKS");
     expect(report.json).toContain("scrubbed telemetry");
+    expect(model.bugs).toHaveLength(2);
+    expect(model.criticalFindings).toEqual([]);
+    expect(model.remainingRisks).toEqual([revisions[0]?.value.bugId]);
+    expect(model.summary).toContain("1 open product bug");
     expect(report.markdown).toContain("# Báo cáo QA");
     expect(registered.filter((artifact) => artifact.record.type === "bug-report")).toHaveLength(2);
     expect(registered.filter((artifact) => artifact.record.type === "release-gate")).toHaveLength(1);
