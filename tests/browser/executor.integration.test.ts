@@ -24,16 +24,33 @@ afterAll(async () => { if (browser !== undefined) await browser.close(); if (clo
 
 const input = (): ExecuteTestInput => ({
   browser,
-  runId: "RUN-1",
-  testCase: { testCaseId: "TC-1", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "form", browser: { viewport: { width: 800, height: 600 } } },
-  steps: [
+  attemptId: "ATTEMPT-1",
+  testCaseArtifactId: "CASE-ARTIFACT",
+  workspace: {
+    readRegisteredArtifacts: () => Promise.resolve([{
+      record: { id: "PLAN-ARTIFACT", type: "test-plan", relationships: [] },
+      value: { testCases: [{ testCaseId: "TC-1" }] },
+    }, {
+      record: { id: "CASE-ARTIFACT", type: "test-case", relationships: ["PLAN-ARTIFACT"] },
+      value: {
+        testCaseId: "TC-1", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "form",
+        execution: { approval: "APPROVED", testPlanArtifactId: "PLAN-ARTIFACT", browserDsl: { steps: [
     { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" as const },
     { id: "fill", action: { kind: "fill", locator: { label: "Email" }, value: "qa@example.test" }, assertions: [{ kind: "value", locator: { label: "Email" }, value: "qa@example.test" }], sideEffect: "none" as const },
     { id: "click", action: { kind: "click", locator: { role: "button", name: "Save" } }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Saved" }], sideEffect: "none" as const },
-  ],
+        ] } },
+      },
+    }]),
+  } as never,
 });
 
 describe("executeTestInstance", () => {
+  it("rejects an unbound raw execution payload at the public operation boundary", async () => {
+    const raw = input() as Record<string, unknown>;
+    delete raw.workspace;
+    await expect(executeTestInstance(raw as never)).rejects.toThrow(/workspace/i);
+  });
+
   it("executes bounded steps in a fresh context and closes its registered active session", async () => {
     const attempt = await executeTestInstance(input());
     expect(attempt.status).toBe("PASSED");
@@ -45,11 +62,16 @@ describe("executeTestInstance", () => {
   it("fails fast and marks dependent steps not run without retrying the whole test", async () => {
     const attempt = await executeTestInstance({
       ...input(),
-      steps: [
-        { id: "bad", action: { kind: "click", locator: { css: "//button" } }, sideEffect: "none" as const },
-        { id: "dependent", action: { kind: "fill", locator: { label: "Email" }, value: "not-run" }, sideEffect: "none" as const },
-        { id: "independent", action: { kind: "wait", milliseconds: 1 }, sideEffect: "none" as const, independent: true },
-      ],
+      workspace: { readRegisteredArtifacts: async () => {
+        const artifacts = await input().workspace.readRegisteredArtifacts();
+        const testCase = artifacts[1] as unknown as { value: { execution: { browserDsl: { steps: unknown[] } } } };
+        testCase.value.execution.browserDsl.steps = [
+          { id: "bad", action: { kind: "open", url: baseUrl }, assertions: [{ kind: "count", locator: { role: "button" }, count: 2 }], sideEffect: "none" },
+          { id: "dependent", action: { kind: "fill", locator: { label: "Email" }, value: "not-run" }, sideEffect: "none" },
+          { id: "independent", action: { kind: "wait", milliseconds: 1 }, sideEffect: "none", independent: true },
+        ];
+        return artifacts;
+      } },
     });
     expect(attempt.status).toBe("FAILED");
     expect(attempt.steps.map((step) => step.status)).toEqual(["FAILED", "NOT_RUN", "PASSED"]);

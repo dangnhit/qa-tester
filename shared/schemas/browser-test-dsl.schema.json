@@ -8,7 +8,14 @@
   "properties": { "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/step" } } },
   "$defs": {
     "value": { "oneOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false, "required": ["secretRef"], "properties": { "secretRef": { "type": "string", "minLength": 1 } } }] },
-    "locator": { "type": "object", "additionalProperties": false, "minProperties": 1, "properties": { "role": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "testId": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 }, "placeholder": { "type": "string", "minLength": 1 }, "text": { "type": "string", "minLength": 1 }, "css": { "type": "string", "minLength": 1, "not": { "pattern": "^\\s*(?:[Xx][Pp][Aa][Tt][Hh]=|//)" } } } },
+    "locator": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["role"], "properties": { "role": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["testId"], "properties": { "testId": { "type": "string", "minLength": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["label"], "properties": { "label": { "type": "string", "minLength": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["placeholder"], "properties": { "placeholder": { "type": "string", "minLength": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["text"], "properties": { "text": { "type": "string", "minLength": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["css"], "properties": { "css": { "type": "string", "minLength": 1, "not": { "pattern": "^\\s*(?:[Xx][Pp][Aa][Tt][Hh]=|//)" } } } }
+    ] },
     "action": { "oneOf": [
       { "type": "object", "additionalProperties": false, "required": ["kind", "url"], "properties": { "kind": { "const": "open" }, "url": { "$ref": "#/$defs/value" } } },
       { "type": "object", "additionalProperties": false, "required": ["kind", "locator"], "properties": { "kind": { "const": "click" }, "locator": { "$ref": "#/$defs/locator" } } },

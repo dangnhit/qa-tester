@@ -11,7 +11,11 @@ export function locatorKind(definition: LocatorDefinition): LocatorKind {
   for (const key of Object.keys(definition)) {
     if (!allowedKeys.has(key)) throw new Error(`Unsupported locator field: ${key}`);
   }
-  for (const kind of priority) if (definition[kind] !== undefined) return kind;
+  if (definition.name !== undefined && definition.role === undefined) throw new Error("Locator name is only valid with role");
+  const kinds = priority.filter((kind) => definition[kind] !== undefined);
+  if (kinds.length !== 1) throw new Error("A locator requires exactly one selectable kind");
+  const [kind] = kinds;
+  if (kind !== undefined) return kind;
   throw new Error("A locator requires a supported selector");
 }
 

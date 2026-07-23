@@ -63,5 +63,6 @@ export async function assertBrowserAssertion(
       if (violations.length > 0) failed(`Network policy violated: ${violations[0]?.message}`);
       return;
     }
+    default: throw new Error(`Unsupported browser assertion: ${(assertion as { kind?: unknown }).kind === undefined ? "unknown" : String((assertion as { kind: unknown }).kind)}`);
   }
 }

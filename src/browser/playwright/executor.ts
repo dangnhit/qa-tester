@@ -19,6 +19,7 @@ export async function executeAction(page: Page, action: BrowserAction, resolver?
       else await page.waitForTimeout(action.milliseconds ?? 0);
       return;
     }
+    default: throw new Error(`Unsupported browser action: ${(action as { kind?: unknown }).kind === undefined ? "unknown" : String((action as { kind: unknown }).kind)}`);
   }
 }
 

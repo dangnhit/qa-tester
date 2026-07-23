@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
 
 import type { ExecutionStatus, SideEffectClass } from "../contracts/types.js";
+import type { RegisteredWorkspaceArtifact, RunWorkspace } from "../core/run-workspace.js";
 
 export type SecretReference = { secretRef: string };
 export type SecretResolver = (reference: SecretReference) => Promise<string> | string;
@@ -101,12 +102,27 @@ export type ActiveBrowserSession = {
   telemetry: BrowserTelemetry;
 };
 
-export type ExecuteTestInput = {
+type RawExecuteTestInput = {
   browser: Browser;
   runId: string;
   testCase: BrowserTestInstance;
   steps: readonly BrowserTestStep[];
   resolveSecret?: SecretResolver;
 };
+
+export type ExecuteTestInput = {
+  workspace: Pick<RunWorkspace, "readRegisteredArtifacts">;
+  browser: Browser;
+  attemptId: string;
+  testCaseArtifactId: string;
+  resolveSecret?: SecretResolver;
+  onSessionActive?: (input: { attemptId: string; session: ActiveBrowserSession }) => Promise<void> | void;
+};
+
+export type CanonicalBrowserTestCase = BrowserTestInstance & {
+  browserDsl: { steps: readonly BrowserTestStep[] };
+  artifact: RegisteredWorkspaceArtifact;
+};
+export type InternalExecuteTestInput = RawExecuteTestInput & { attemptId: string; onSessionActive?: ExecuteTestInput["onSessionActive"] };
 
 export type ResolvedLocator = Locator;

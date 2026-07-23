@@ -50,6 +50,26 @@ export type Value =
   | {
       secretRef: string;
     };
+export type Locator =
+  | {
+      role: string;
+      name?: string;
+    }
+  | {
+      testId: string;
+    }
+  | {
+      label: string;
+    }
+  | {
+      placeholder: string;
+    }
+  | {
+      text: string;
+    }
+  | {
+      css: string;
+    };
 export type Assertion =
   | {
       kind: "visible";
@@ -105,13 +125,4 @@ export interface Step {
   assertions?: Assertion[];
   sideEffect: "none" | "reversible" | "external" | "destructive";
   independent?: boolean;
-}
-export interface Locator {
-  role?: string;
-  name?: string;
-  testId?: string;
-  label?: string;
-  placeholder?: string;
-  text?: string;
-  css?: string;
 }
