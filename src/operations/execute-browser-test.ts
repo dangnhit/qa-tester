@@ -7,6 +7,8 @@ import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 
 export const activeBrowserSessions = new Map<string, ActiveBrowserSession>();
+const reservedAttemptIds = new Set<string>();
+let executionTail: Promise<void> = Promise.resolve();
 
 export function getActiveBrowserSession(attemptId: string): ActiveBrowserSession | undefined {
   return activeBrowserSessions.get(attemptId);
@@ -18,11 +20,11 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
   const artifact = artifacts.find((candidate) => candidate.record.id === testCaseArtifactId && candidate.record.type === "test-case");
   if (!artifact) throw new QaSkillsError("Execution requires an approved registered test case artifact", "ARTIFACT_BINDING");
   const execution = artifact.value.execution;
-  if (!object(execution) || execution.approval !== "APPROVED" || typeof execution.testPlanArtifactId !== "string" || !object(execution.browserDsl)) {
+  if (!object(execution) || typeof execution.testPlanArtifactId !== "string" || !object(execution.browserDsl)) {
     throw new QaSkillsError("Test case is not an approved executable browser instance", "ARTIFACT_BINDING");
   }
   const plan = artifacts.find((candidate) => candidate.record.id === execution.testPlanArtifactId && candidate.record.type === "test-plan");
-  if (!plan || !artifact.record.relationships.includes(plan.record.id)) throw new QaSkillsError("Test case plan binding is invalid", "ARTIFACT_BINDING");
+  if (!plan || !artifact.record.relationships.includes(plan.record.id) || !object(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== true) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
   const cases = plan.value.testCases;
   if (!Array.isArray(cases) || !cases.some((candidate) => object(candidate) && candidate.testCaseId === artifact.value.testCaseId)) {
     throw new QaSkillsError("Test case does not match its approved registered plan", "ARTIFACT_BINDING");
@@ -84,6 +86,16 @@ async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAt
 export async function executeTestInstance(input: ExecuteTestInput): Promise<TestAttempt> {
   if (!input.workspace) throw new QaSkillsError("Execution requires a workspace", "ARTIFACT_BINDING");
   if (!input.attemptId) throw new QaSkillsError("Execution requires a caller-owned attempt ID", "ARTIFACT_BINDING");
-  const testCase = loadCanonicalTestCase(await input.workspace.readRegisteredArtifacts(), input.testCaseArtifactId);
-  return executeCanonical({ browser: input.browser, runId: testCase.artifact.record.id, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}) });
+  if (reservedAttemptIds.has(input.attemptId)) throw new QaSkillsError("Attempt ID is already active or queued", "ARTIFACT_BINDING");
+  reservedAttemptIds.add(input.attemptId);
+  const operation = executionTail.then(async () => {
+    const artifacts = await input.workspace.readRegisteredArtifacts();
+    if (artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === input.attemptId)) {
+      throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
+    }
+    const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
+    return executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}) });
+  });
+  executionTail = operation.then(() => undefined, () => undefined);
+  return operation.finally(() => reservedAttemptIds.delete(input.attemptId));
 }

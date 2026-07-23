@@ -9,7 +9,6 @@ export interface TestCase {
   instanceId: string;
   title: string;
   execution?: {
-    approval: "APPROVED";
     testPlanArtifactId: string;
     browserDsl: {
       [k: string]: unknown | undefined;

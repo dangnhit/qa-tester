@@ -39,6 +39,9 @@ export interface TestPlan {
   approvalPolicy: {
     mode: "auto-approve-safe" | "human-review";
   };
+  approvalDecision?: {
+    approved: boolean;
+  };
   /**
    * @minItems 1
    */

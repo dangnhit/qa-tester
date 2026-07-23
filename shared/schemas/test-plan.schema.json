@@ -16,6 +16,7 @@
       "required": ["mode"],
       "properties": { "mode": { "enum": ["auto-approve-safe", "human-review"] } }
     },
+    "approvalDecision": { "type": "object", "additionalProperties": false, "required": ["approved"], "properties": { "approved": { "type": "boolean" } } },
     "testCases": {
       "type": "array",
       "minItems": 1,

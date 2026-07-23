@@ -15,9 +15,8 @@
     "title": { "type": "string", "minLength": 1 },
     "execution": {
       "type": "object", "additionalProperties": false,
-      "required": ["approval", "testPlanArtifactId", "browserDsl"],
+      "required": ["testPlanArtifactId", "browserDsl"],
       "properties": {
-        "approval": { "const": "APPROVED" },
         "testPlanArtifactId": { "type": "string", "minLength": 1 },
         "browserDsl": { "type": "object" }
       }

@@ -27,14 +27,15 @@ const input = (): ExecuteTestInput => ({
   attemptId: "ATTEMPT-1",
   testCaseArtifactId: "CASE-ARTIFACT",
   workspace: {
+    runId: "RUN-CANONICAL",
     readRegisteredArtifacts: () => Promise.resolve([{
       record: { id: "PLAN-ARTIFACT", type: "test-plan", relationships: [] },
-      value: { testCases: [{ testCaseId: "TC-1" }] },
+      value: { approvalDecision: { approved: true }, testCases: [{ testCaseId: "TC-1" }] },
     }, {
       record: { id: "CASE-ARTIFACT", type: "test-case", relationships: ["PLAN-ARTIFACT"] },
       value: {
         testCaseId: "TC-1", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "form",
-        execution: { approval: "APPROVED", testPlanArtifactId: "PLAN-ARTIFACT", browserDsl: { steps: [
+        execution: { testPlanArtifactId: "PLAN-ARTIFACT", browserDsl: { steps: [
     { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" as const },
     { id: "fill", action: { kind: "fill", locator: { label: "Email" }, value: "qa@example.test" }, assertions: [{ kind: "value", locator: { label: "Email" }, value: "qa@example.test" }], sideEffect: "none" as const },
     { id: "click", action: { kind: "click", locator: { role: "button", name: "Save" } }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Saved" }], sideEffect: "none" as const },
@@ -56,6 +57,7 @@ describe("executeTestInstance", () => {
     expect(attempt.status).toBe("PASSED");
     expect(attempt.steps.map((step) => step.status)).toEqual(["PASSED", "PASSED", "PASSED"]);
     expect(attempt.contextId).toBeTruthy();
+    expect(attempt.runId).toBe("RUN-CANONICAL");
     expect(activeBrowserSessions.get(attempt.attemptId)).toBeUndefined();
   });
 
@@ -71,7 +73,7 @@ describe("executeTestInstance", () => {
           { id: "independent", action: { kind: "wait", milliseconds: 1 }, sideEffect: "none", independent: true },
         ];
         return artifacts;
-      } },
+      } } as never,
     });
     expect(attempt.status).toBe("FAILED");
     expect(attempt.steps.map((step) => step.status)).toEqual(["FAILED", "NOT_RUN", "PASSED"]);

@@ -111,7 +111,7 @@ type RawExecuteTestInput = {
 };
 
 export type ExecuteTestInput = {
-  workspace: Pick<RunWorkspace, "readRegisteredArtifacts">;
+  workspace: RunWorkspace;
   browser: Browser;
   attemptId: string;
   testCaseArtifactId: string;
