@@ -4,7 +4,7 @@ import { assertExplorationCharter, createExploratoryFinding } from "../../src/ex
 
 const charter = {
   charterId: "CHARTER-LOGIN", mission: "Explore sign-in recovery", scope: ["/login"], roles: ["member"], heuristics: ["boundary values"],
-  safetyRules: ["Use test accounts only"], actionBudget: 12, timeBudgetMinutes: 20, stopConditions: ["A safety rule would be violated"],
+  safetyRules: ["Use test accounts only"], actions: [{ actionId: "open-login", target: "/login", kind: "navigate", sideEffect: "none", safetyRuleId: "Use test accounts only" }], actionBudget: 12, timeBudgetMinutes: 20, stopConditions: ["A safety rule would be violated"],
 } as const;
 
 describe("exploration charters", () => {
@@ -12,6 +12,7 @@ describe("exploration charters", () => {
     expect(assertExplorationCharter(charter)).toEqual(charter);
     expect(() => assertExplorationCharter({ ...charter, actionBudget: 0 })).toThrow(/action budget/i);
     expect(() => assertExplorationCharter({ ...charter, stopConditions: [] })).toThrow(/stop condition/i);
+    expect(() => assertExplorationCharter({ ...charter, actions: [{ ...charter.actions[0], safetyRuleId: "missing" }] })).toThrow(/safety/i);
   });
 
   it("records unexpected non-authoritative behavior as a finding, not coverage", () => {

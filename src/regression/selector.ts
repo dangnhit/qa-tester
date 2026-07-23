@@ -2,7 +2,7 @@ import type { ChangeScope, RegressionCase } from "./change-scope.js";
 
 export type RegressionSource = "requirement-mapping" | "code-surface-mapping" | "declared-dependency" | "git-diff-heuristic" | "user-scope";
 export const regressionMappingSources = ["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"] as const satisfies readonly RegressionSource[];
-export type RegressionDecision = Readonly<{ testCaseId: string; revisionId: string; source: RegressionSource; rationale: string; confidence: number }>;
+export type RegressionDecision = Readonly<{ testCaseId: string; revisionId: string; instanceId: string; source: RegressionSource; rationale: string; confidence: number }>;
 export type UnmappedChangeRisk = Readonly<{ changeId: string; rationale: string; confidence: number }>;
 export type RegressionSelection = Readonly<{ selected: readonly RegressionDecision[]; excluded: readonly RegressionDecision[]; unmappedChangeRisks: readonly UnmappedChangeRisk[]; complete: boolean }>;
 
@@ -23,15 +23,15 @@ export function selectRegressionCases(input: Readonly<{ changes: readonly Change
   const selected = new Map<string, RegressionDecision>();
   const mappedChanges = new Set<string>();
   const changes = [...input.changes].sort((left, right) => left.id.localeCompare(right.id));
-  const testCases = [...input.testCases].sort((left, right) => `${left.testCaseId}:${left.revisionId}`.localeCompare(`${right.testCaseId}:${right.revisionId}`));
+  const testCases = [...input.testCases].sort((left, right) => `${left.testCaseId}:${left.revisionId}:${left.instanceId}`.localeCompare(`${right.testCaseId}:${right.revisionId}:${right.instanceId}`));
   for (const testCase of testCases) for (const priority of priorities) {
     const match = changes.map((change) => ({ change, match: intersects(change[priority.change] as readonly string[], testCase[priority.test] as readonly string[]) })).find((candidate) => candidate.match !== undefined);
     if (!match || match.match === undefined) continue;
-    const key = `${testCase.testCaseId}:${testCase.revisionId}`;
-    selected.set(key, { testCaseId: testCase.testCaseId, revisionId: testCase.revisionId, source: priority.source, rationale: `${priority.source} matched ${match.match} for ${match.change.id}`, confidence: priority.confidence });
+    const key = `${testCase.testCaseId}:${testCase.revisionId}:${testCase.instanceId}`;
+    selected.set(key, { testCaseId: testCase.testCaseId, revisionId: testCase.revisionId, instanceId: testCase.instanceId, source: priority.source, rationale: `${priority.source} matched ${match.match} for ${match.change.id}`, confidence: priority.confidence });
     mappedChanges.add(match.change.id); break;
   }
-  const excluded = testCases.filter((testCase) => !selected.has(`${testCase.testCaseId}:${testCase.revisionId}`)).map((testCase) => ({ testCaseId: testCase.testCaseId, revisionId: testCase.revisionId, source: "user-scope" as const, rationale: "No declared change mapping selected this revision.", confidence: 1 }));
+  const excluded = testCases.filter((testCase) => !selected.has(`${testCase.testCaseId}:${testCase.revisionId}:${testCase.instanceId}`)).map((testCase) => ({ testCaseId: testCase.testCaseId, revisionId: testCase.revisionId, instanceId: testCase.instanceId, source: "user-scope" as const, rationale: "No declared change mapping selected this exact instance.", confidence: 1 }));
   const unmappedChangeRisks = changes.filter((change) => !mappedChanges.has(change.id)).map((change) => ({ changeId: change.id, rationale: "No registered testcase revision maps to this declared change scope.", confidence: 0 }));
-  return { selected: [...selected.values()].sort((left, right) => (sourcePriority.get(left.source) ?? 0) - (sourcePriority.get(right.source) ?? 0) || `${left.testCaseId}:${left.revisionId}`.localeCompare(`${right.testCaseId}:${right.revisionId}`)), excluded, unmappedChangeRisks, complete: unmappedChangeRisks.length === 0 };
+  return { selected: [...selected.values()].sort((left, right) => (sourcePriority.get(left.source) ?? 0) - (sourcePriority.get(right.source) ?? 0) || `${left.testCaseId}:${left.revisionId}:${left.instanceId}`.localeCompare(`${right.testCaseId}:${right.revisionId}:${right.instanceId}`)), excluded, unmappedChangeRisks, complete: unmappedChangeRisks.length === 0 };
 }

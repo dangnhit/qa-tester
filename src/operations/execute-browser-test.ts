@@ -24,9 +24,13 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
   if (!plan || !object(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== true) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
   const cases: unknown = plan.value.testCases;
   const planCases: readonly unknown[] = Array.isArray(cases) ? cases as unknown[] : [];
-  const planCase = planCases.find((candidate) => object(candidate) && candidate.testCaseId === artifact.value.testCaseId);
+  const planCase = planCases.find((candidate) => object(candidate)
+    && candidate.testCaseId === artifact.value.testCaseId
+    && candidate.browserExecution !== null && object(candidate.browserExecution)
+    && candidate.browserExecution.revisionId === artifact.value.revisionId
+    && candidate.browserExecution.instanceId === artifact.value.instanceId);
   if (!object(planCase)) {
-    throw new QaSkillsError("Test case does not match its approved registered plan", "ARTIFACT_BINDING");
+    throw new QaSkillsError("Test case revision or instance does not match its approved registered plan binding", "ARTIFACT_BINDING");
   }
   const execution = planCase.browserExecution;
   if (!object(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !object(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") {

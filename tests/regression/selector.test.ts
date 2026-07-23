@@ -8,9 +8,9 @@ describe("regression selection", () => {
     const result = selectRegressionCases({
       changes: [{ id: "change-login", requirementIds: ["REQ-LOGIN"], codeSurfaces: ["auth.ts"], declaredDependencies: [], gitPaths: [], userScope: [] }],
       testCases: [
-        { testCaseId: "TC-REQ", revisionId: "REV-1", requirementIds: ["REQ-LOGIN"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
-        { testCaseId: "TC-CODE", revisionId: "REV-1", requirementIds: [], codeSurfaces: ["auth.ts"], declaredDependencies: [], gitPaths: [], userScope: [] },
-        { testCaseId: "TC-NONE", revisionId: "REV-1", requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
+        { testCaseId: "TC-REQ", revisionId: "REV-1", instanceId: "REQ-A", requirementIds: ["REQ-LOGIN"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
+        { testCaseId: "TC-CODE", revisionId: "REV-1", instanceId: "CODE-A", requirementIds: [], codeSurfaces: ["auth.ts"], declaredDependencies: [], gitPaths: [], userScope: [] },
+        { testCaseId: "TC-NONE", revisionId: "REV-1", instanceId: "NONE-A", requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
       ],
     });
     expect(result.selected.map((entry) => [entry.testCaseId, entry.source])).toEqual([["TC-REQ", "requirement-mapping"], ["TC-CODE", "code-surface-mapping"]]);
@@ -26,7 +26,7 @@ describe("regression selection", () => {
     expect(regressionMappingSources).toEqual(["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"]);
     const result = selectRegressionCases({
       changes: [{ id: "priority", requirementIds: ["req"], codeSurfaces: ["surface"], declaredDependencies: ["dependency"], gitPaths: ["path"], userScope: ["scope"] }],
-      testCases: [{ testCaseId: "TC-ALL", revisionId: "REV-ALL", requirementIds: ["req"], codeSurfaces: ["surface"], declaredDependencies: ["dependency"], gitPaths: ["path"], userScope: ["scope"] }],
+      testCases: [{ testCaseId: "TC-ALL", revisionId: "REV-ALL", instanceId: "ALL-A", requirementIds: ["req"], codeSurfaces: ["surface"], declaredDependencies: ["dependency"], gitPaths: ["path"], userScope: ["scope"] }],
     });
     expect(result.selected).toEqual([expect.objectContaining({ source: "requirement-mapping" })]);
   });

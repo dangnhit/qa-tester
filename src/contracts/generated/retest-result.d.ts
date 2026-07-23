@@ -19,11 +19,15 @@ export interface RetestResult {
   reproductionScenarios: [
     {
       scenarioId: string;
+      sourceAttemptArtifactId: string;
+      sourceTestCaseArtifactId: string;
       attemptId: string;
       status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
     },
     ...{
       scenarioId: string;
+      sourceAttemptArtifactId: string;
+      sourceTestCaseArtifactId: string;
       attemptId: string;
       status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
     }[]

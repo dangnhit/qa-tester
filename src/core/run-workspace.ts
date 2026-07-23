@@ -98,6 +98,9 @@ function stableJson(value: unknown): string {
   if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
   return JSON.stringify(value);
 }
+function sameStringOccurrences(left: readonly string[], right: readonly string[]): boolean {
+  return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+}
 
 function sameResourceIdentity(left: unknown, right: unknown): boolean {
   return isRecord(left) && isRecord(right)
@@ -524,7 +527,9 @@ async function inspectWorkspaceState(
             const sourceBug = sourceArtifacts.find((candidate) => candidate.record.id === value.sourceBugArtifactId && candidate.record.type === "bug-report");
             const original = sourceBug === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value.attemptId === sourceBug.value.attemptId);
             sourceBugValid = sourceRecord.type === "bug-report" && sourceRecord.sha256 === value.sourceBugArtifactSha256 && sourceBug?.value.bugId === value.bugId;
-            reproductionMatchesSource = original !== undefined && attempts.every((attempt) => attempt?.value?.testCaseId === original.value.testCaseId && attempt?.value?.testCaseRevisionId === original.value.testCaseRevisionId && attempt?.value?.testCaseInstanceId === original.value.testCaseInstanceId) && scenarios.every((scenario) => isRecord(scenario) && scenario.scenarioId === sourceScenarioId({ testCaseId: String(original.value.testCaseId), revisionId: String(original.value.testCaseRevisionId), instanceId: String(original.value.testCaseInstanceId) }));
+            const sourceScenarios = original === undefined ? [] : sourceArtifacts.filter((candidate) => candidate.record.type === "test-result" && candidate.value?.testCaseId === original.value.testCaseId && candidate.value?.testCaseRevisionId === original.value.testCaseRevisionId && candidate.value?.failureClassification === "PRODUCT_DEFECT").map((candidate) => sourceScenarioId({ testCaseId: String(candidate.value.testCaseId), revisionId: String(candidate.value.testCaseRevisionId), instanceId: String(candidate.value.testCaseInstanceId) }));
+            const reproducedScenarios = attempts.map((attempt) => attempt?.value === undefined ? "" : sourceScenarioId({ testCaseId: String(attempt.value.testCaseId), revisionId: String(attempt.value.testCaseRevisionId), instanceId: String(attempt.value.testCaseInstanceId) }));
+            reproductionMatchesSource = sourceScenarios.length > 0 && sameStringOccurrences(reproducedScenarios, sourceScenarios) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
           } finally { await source.close(); }
         } catch { sourceBugValid = false; }
         if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || regressionAttempts.some((attempt) => !attempt) || !scenarioValid || value.regressionOutcome !== derivedOutcome || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
@@ -1308,13 +1313,13 @@ export class RunWorkspace {
       const expectedRelationships = decisions.map((decision) => isRecord(decision) ? caseRecords.find((candidate) => {
         const index = caseRecords.findIndex((record) => record.id === candidate.id);
         const testCase = cases[index];
-        return testCase?.testCaseId === decision.testCaseId && testCase?.revisionId === decision.revisionId;
+        return testCase?.testCaseId === decision.testCaseId && testCase?.revisionId === decision.revisionId && testCase?.instanceId === decision.instanceId;
       })?.id : undefined);
       const scope = manifest.artifacts.find((artifact) => artifact.id === value.changeScopeArtifactId && artifact.type === "change-scope");
       const scopeValue = scope === undefined ? undefined : (await this.readRegisteredValues(manifest, "change-scope"))[manifest.artifacts.filter((artifact) => artifact.type === "change-scope").findIndex((artifact) => artifact.id === scope.id)];
       const recomputed = scopeValue && Array.isArray(scopeValue.changes) ? selectRegressionCases({ changes: scopeValue.changes as never, testCases: cases.map((testCase) => regressionCaseFromCanonical(testCase)) }) : undefined;
       const stored = { selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete };
-      if (!scope || scope.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== sha256Text(JSON.stringify(stored)) || recomputed === undefined || stableJson(stored) !== stableJson(recomputed) || !decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify([scope.id, ...expectedRelationships.filter((id): id is string => id !== undefined)].sort())) {
+      if (!scope || scope.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== sha256Text(JSON.stringify(stored)) || recomputed === undefined || stableJson(stored) !== stableJson(recomputed) || !decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId && testCase.instanceId === decision.instanceId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify([scope.id, ...expectedRelationships.filter((id): id is string => id !== undefined)].sort())) {
         throw new QaSkillsError("Regression selection decisions must bind registered canonical test case revisions", "ARTIFACT_BINDING");
       }
       if (value.complete === true && Array.isArray(value.unmappedChangeRisks) && value.unmappedChangeRisks.length > 0) {
@@ -1333,13 +1338,14 @@ export class RunWorkspace {
         const attempts = await this.readRegisteredValues(manifest, "test-result");
         const ids = Array.isArray(value.reproductionAttemptIds) ? value.reproductionAttemptIds : [];
         const reproduced = ids.map((id) => attempts.find((attempt) => attempt.attemptId === id));
-        if (!original || reproduced.length === 0 || reproduced.some((attempt) => !attempt || attempt.testCaseId !== original.value.testCaseId || attempt.testCaseRevisionId !== original.value.testCaseRevisionId || attempt.testCaseInstanceId !== original.value.testCaseInstanceId)) {
+        const sourceScenarios = original === undefined ? [] : sourceArtifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.testCaseId === original.value.testCaseId && artifact.value.testCaseRevisionId === original.value.testCaseRevisionId && artifact.value.failureClassification === "PRODUCT_DEFECT").map((artifact) => sourceScenarioId({ testCaseId: String(artifact.value.testCaseId), revisionId: String(artifact.value.testCaseRevisionId), instanceId: String(artifact.value.testCaseInstanceId) }));
+        if (!original || sourceScenarios.length === 0 || reproduced.length === 0 || !sameStringOccurrences(reproduced.filter((attempt): attempt is NonNullable<typeof attempt> => attempt !== undefined).map((attempt) => sourceScenarioId({ testCaseId: String(attempt.testCaseId), revisionId: String(attempt.testCaseRevisionId), instanceId: String(attempt.testCaseInstanceId) })), sourceScenarios)) {
           throw new QaSkillsError("Retest result must use exact registered reproduction attempts", "ARTIFACT_BINDING");
         }
         const regressionIds = Array.isArray(value.regressionAttemptIds) ? value.regressionAttemptIds : [];
         const regression = regressionIds.map((id) => attempts.find((attempt) => attempt?.attemptId === id));
         const scenarios = Array.isArray(value.reproductionScenarios) ? value.reproductionScenarios : [];
-        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && scenario.scenarioId === sourceScenarioId({ testCaseId: String(original.value.testCaseId), revisionId: String(original.value.testCaseRevisionId), instanceId: String(original.value.testCaseInstanceId) }));
+        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
         const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => String(attempt?.status)));
         const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), regressionOutcome });
         const resultRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-result");

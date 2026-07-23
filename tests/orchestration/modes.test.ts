@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
-import { createQaTester, createUnsafeWorkflowRunnerForTests } from "../../src/operations/run-workflow.js";
+import { operationNames, operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
+import { createQaTester, createUnsafeWorkflowRunnerForTests, workflowOperationAdaptersForTests } from "../../src/operations/run-workflow.js";
 
 describe("workflow mode operation plans", () => {
   it("uses the minimal dependency-ordered operations for plan and execute", () => {
@@ -28,6 +28,12 @@ describe("workflow mode operation plans", () => {
     expect(() => resolveOperationOrder(["a"], { a: { dependsOn: ["b"] }, b: { dependsOn: ["a"] } })).toThrow(/cycle/i);
   });
 
+  it("keeps a closed adapter/postcondition for every declared operation", () => {
+    const adapters = workflowOperationAdaptersForTests();
+    expect(Object.keys(adapters).sort()).toEqual([...operationNames].sort());
+    for (const operation of operationNames) expect(adapters[operation].name).toBe(operation);
+  });
+
   it("makes a retest reproduce its target before selecting regression", () => {
     expect(operationsForMode("retest")).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
   });
@@ -39,7 +45,7 @@ describe("workflow mode operation plans", () => {
       const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); }, "generate-qa-report": () => Promise.resolve() })({
         root, mode: "exploratory",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
-        charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
+        charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actions: [{ actionId: "open", target: "/login", kind: "navigate", sideEffect: "none", safetyRuleId: "test account" }], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
       });
       expect(result.operationOrder).toEqual(["register-exploration-charter", "collect-evidence", "generate-qa-report"]);
       expect(calls).toEqual(["collect-evidence"]);

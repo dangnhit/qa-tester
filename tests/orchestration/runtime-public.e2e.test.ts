@@ -4,9 +4,10 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
 
 import { RunWorkspace } from "../../src/core/run-workspace.js";
-import { createQaTester, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
+import { createQaTester, createQaTesterWithTraceForTests, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
 import { generateBugReport } from "../../src/operations/generate-bug-report.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { TestDataHookRegistry } from "../../src/test-data/hooks.js";
@@ -37,7 +38,7 @@ function dsl() {
   ] } as const;
 }
 
-async function sourceBundle(root: string, options: { sourceBug?: boolean; includeExcluded?: boolean } = {}): Promise<CanonicalPlanBundleRef & { sourceBug?: { artifactId: string; sha256: string; bugId: string } }> {
+async function sourceBundle(root: string, options: { sourceBug?: boolean | "intermittent"; includeExcluded?: boolean } = {}): Promise<CanonicalPlanBundleRef & { sourceBug?: { artifactId: string; sha256: string; bugId: string } }> {
   const source = await RunWorkspace.create({ root, mode: options.sourceBug ? "execute" : "plan", environmentProfile: environment });
   const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-RUNTIME",
@@ -63,6 +64,7 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean; includ
   let sourceBug: { artifactId: string; sha256: string; bugId: string } | undefined;
   if (options.sourceBug) {
     await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
+    if (options.sourceBug === "intermittent") await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-REPEAT", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
     await source.registerEvidenceBundle({ binaries: [{ filename: "source-bug.txt", contents: Buffer.from("source browser failure"), mediaType: "text/plain", captureType: "log" }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: source.runId, attemptId: "ATT-SOURCE-BUG", kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "source browser failure" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: baseUrl, viewport: { width: 1, height: 1 }, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" } }) });
     const generated = await generateBugReport({ workspace: source, attemptId: "ATT-SOURCE-BUG", unsafeRerunReason: "Source fixture preserves a single captured production defect observation." });
     if (generated.kind !== "BUG") throw new Error("Expected source product bug");
@@ -72,6 +74,18 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean; includ
   const records = await Promise.all([requirement, plan, testcase, coverage, ...(excluded === undefined ? [] : [excluded])].map((artifact) => source.readArtifactRecord(artifact.id)));
   await source.close();
   return { sourceRunId: source.runId, artifacts: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })), ...(sourceBug === undefined ? {} : { sourceBug }) };
+}
+
+async function alternatingFixture(): Promise<{ baseUrl: string; close(): Promise<void> }> {
+  let visits = 0;
+  const server = createServer((_request, response) => {
+    visits += 1;
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<!doctype html><label>Email <input aria-label="Email" /></label><button>Save</button><output data-testid="result"></output><script>document.querySelector('button').onclick=()=>document.querySelector('output').textContent='${visits % 2 === 1 ? "Saved" : "Broken"}'</script>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); if (address === null || typeof address === "string") throw new Error("fixture address unavailable");
+  return { baseUrl: `http://127.0.0.1:${address.port}`, close: () => new Promise((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error))) };
 }
 
 async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId: string, mutate: (value: Record<string, unknown>) => void): Promise<void> {
@@ -150,6 +164,32 @@ describe("public runtime QA Tester", () => {
     await workspace.close();
   });
 
+  it("iterates the exact operation plan once, invokes each closed postcondition once, and resumes after a failed postcondition at the same operation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-adapter-loop-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const firstTrace: string[] = [];
+    const first = createQaTesterWithTraceForTests({ browserManagers: { chromium: { browser } }, testDataRegistries: { trusted: new TestDataHookRegistry([], {}) }, evidencePolicies: { none: { safety: { screenshot: "off", console: "off", network: "off", logs: "off" } } } }, (event) => firstTrace.push(event));
+    await expect(first({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "none" } })).rejects.toThrow(/evidence/i);
+    expect(firstTrace).toEqual([
+      "ingest-requirement-analysis:adapter", "ingest-requirement-analysis:postcondition",
+      "ingest-testcases:adapter", "ingest-testcases:postcondition",
+      "ingest-coverage-obligation:adapter", "ingest-coverage-obligation:postcondition",
+      "prepare-test-data:adapter", "prepare-test-data:postcondition",
+      "execute-browser-test:adapter", "execute-browser-test:postcondition",
+    ]);
+    const runId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
+    const resumedTrace: string[] = [];
+    const resumed = createQaTesterWithTraceForTests({ browserManagers: { chromium: { browser } }, testDataRegistries: { trusted: new TestDataHookRegistry([], {}) }, evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "off" } } } }, (event) => resumedTrace.push(event));
+    const result = await resumed({ root, mode: "full", resumeRunId: runId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
+    expect(result.operationOrder).toEqual(["ingest-requirement-analysis", "ingest-testcases", "ingest-coverage-obligation", "prepare-test-data", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"]);
+    expect(resumedTrace).toEqual([
+      "execute-browser-test:adapter", "execute-browser-test:postcondition",
+      "collect-evidence:adapter", "collect-evidence:postcondition",
+      "generate-bug-report:adapter", "generate-bug-report:postcondition",
+      "generate-qa-report:adapter", "generate-qa-report:postcondition",
+    ]);
+  });
+
   it("derives protected screenshot redaction from the registered environment and records a gap instead of pixels when it cannot verify it", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-protected-")); roots.push(root);
     const bundle = await sourceBundle(root);
@@ -222,6 +262,24 @@ describe("public runtime QA Tester", () => {
     await workspace.close();
   });
 
+  it("replays repeated source occurrences in real Chromium and durably derives INTERMITTENT", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-intermittent-")); roots.push(root);
+    const alternating = await alternatingFixture();
+    const savedBaseUrl = baseUrl; baseUrl = alternating.baseUrl;
+    try {
+      const bundle = await sourceBundle(root, { sourceBug: "intermittent" });
+      if (!bundle.sourceBug) throw new Error("Expected source bug");
+      const tester = createQaTester({ browserManagers: { chromium: { browser } }, evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "off" } } }, changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "intermittent" } } } });
+      const result = await tester({ root, mode: "retest", linkedRunId: bundle.sourceRunId, environmentProfile: { ...environment, baseUrl }, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" }, retest: { sourceBug: bundle.sourceBug } });
+      const workspace = await RunWorkspace.open(root, result.runId);
+      const retest = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "retest-result");
+      expect(retest?.value).toMatchObject({ verdict: "INTERMITTENT" });
+      expect((retest?.value.reproductionScenarios as unknown[])).toHaveLength(2);
+      await workspace.close();
+      const reopened = await RunWorkspace.open(root, result.runId); expect((await reopened.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "retest-result")?.value.verdict).toBe("INTERMITTENT"); await reopened.close();
+    } finally { baseUrl = savedBaseUrl; await alternating.close(); }
+  });
+
   it("rejects rechecksummed charter, regression-selection, and retest-verdict tampering on reopen", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-tamper-")); roots.push(root);
     const bundle = await sourceBundle(root, { sourceBug: true });
@@ -233,7 +291,7 @@ describe("public runtime QA Tester", () => {
     } as const;
     const tester = createQaTester(runtime);
 
-    const exploratory = await tester({ root, mode: "exploratory", environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" }, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } });
+    const exploratory = await tester({ root, mode: "exploratory", environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" }, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actions: [{ actionId: "open", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } });
     expect(exploratory.validation.valid).toBe(true);
     const charterRunId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
     const charterWorkspace = await RunWorkspace.open(root, charterRunId);
@@ -256,5 +314,22 @@ describe("public runtime QA Tester", () => {
     await rechecksumRegisteredArtifact(retestWorkspace, retestResult.record.id, (value) => { value.verdict = "NOT_FIXED"; });
     await retestWorkspace.close();
     await expect(RunWorkspace.open(root, retest.runId)).rejects.toThrow(/verdict|retest|binding/i);
+  });
+
+  it("enforces exploratory URL scope, side-effect safety, declared budgets, and stop conditions through the public Chromium adapter", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-exploration-contract-")); roots.push(root);
+    const tester = createQaTester({ browserManagers: { chromium: { browser } }, evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "off" } } } });
+    const base = { charterId: "CHAR-CONTRACT", mission: "Explore fixture", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["stop"] } as const;
+    const input = { root, mode: "exploratory" as const, environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } };
+
+    await expect(tester({ ...input, charter: { ...base, actions: [{ actionId: "outside", target: "/outside", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } })).rejects.toThrow(/outside.*scope/i);
+    await expect(tester({ ...input, charter: { ...base, charterId: "CHAR-UNSAFE", actions: [{ actionId: "write", target: "/", kind: "navigate", sideEffect: "write", safetyRuleId: "fixture" }] } })).rejects.toThrow(/unsafe.*side effect/i);
+    await expect(tester({ ...input, charter: { ...base, charterId: "CHAR-BUDGET", actions: [{ actionId: "one", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }, { actionId: "two", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } })).rejects.toThrow(/action list exceeds.*budget/i);
+
+    const stopped = await tester({ ...input, charter: { ...base, charterId: "CHAR-STOP", actionBudget: 2, actions: [{ actionId: "first", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture", stopCondition: "stop" }, { actionId: "second", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } });
+    const workspace = await RunWorkspace.open(root, stopped.runId);
+    const finding = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "exploratory-finding");
+    expect(finding?.value.observation).toMatch(/Navigation telemetry/);
+    await workspace.close();
   });
 });

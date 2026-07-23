@@ -21,6 +21,7 @@ export interface RegressionSelection {
 export interface Decision {
   testCaseId: string;
   revisionId: string;
+  instanceId: string;
   source: "requirement-mapping" | "code-surface-mapping" | "declared-dependency" | "git-diff-heuristic" | "user-scope";
   rationale: string;
   confidence: number;

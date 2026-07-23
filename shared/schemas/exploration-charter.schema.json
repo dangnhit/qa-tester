@@ -4,12 +4,13 @@
   "title": "Exploration Charter",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "charterId", "runId", "mission", "scope", "roles", "heuristics", "safetyRules", "actionBudget", "timeBudgetMinutes", "stopConditions"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "charterId", "runId", "mission", "scope", "roles", "heuristics", "safetyRules", "actions", "actionBudget", "timeBudgetMinutes", "stopConditions"],
   "properties": {
     "artifactType": { "const": "exploration-charter" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 },
     "charterId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "mission": { "type": "string", "minLength": 1 },
     "scope": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "roles": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "heuristics": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "safetyRules": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "actions": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["actionId", "target", "kind", "sideEffect", "safetyRuleId"], "properties": { "actionId": { "type": "string", "minLength": 1 }, "target": { "type": "string", "minLength": 1 }, "kind": { "const": "navigate" }, "sideEffect": { "enum": ["none", "read", "write"] }, "safetyRuleId": { "type": "string", "minLength": 1 }, "stopCondition": { "type": "string", "minLength": 1 } } } },
     "actionBudget": { "type": "integer", "minimum": 1 }, "timeBudgetMinutes": { "type": "integer", "minimum": 1 }, "stopConditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
   }
 }

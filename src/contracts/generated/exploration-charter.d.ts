@@ -23,6 +23,27 @@ export interface ExplorationCharter {
    * @minItems 1
    */
   safetyRules: [string, ...string[]];
+  /**
+   * @minItems 1
+   */
+  actions: [
+    {
+      actionId: string;
+      target: string;
+      kind: "navigate";
+      sideEffect: "none" | "read" | "write";
+      safetyRuleId: string;
+      stopCondition?: string;
+    },
+    ...{
+      actionId: string;
+      target: string;
+      kind: "navigate";
+      sideEffect: "none" | "read" | "write";
+      safetyRuleId: string;
+      stopCondition?: string;
+    }[]
+  ];
   actionBudget: number;
   timeBudgetMinutes: number;
   /**
