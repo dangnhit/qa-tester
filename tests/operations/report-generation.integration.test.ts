@@ -36,13 +36,18 @@ describe("report generation operations", () => {
 
     const bug = await generateBugReport({ workspace, attemptId: "ATTEMPT-1", reproductionAttemptIds: ["ATTEMPT-1", "ATTEMPT-2"] });
     expect(bug).toMatchObject({ kind: "BUG" });
+    const revision = await generateBugReport({ workspace, attemptId: "ATTEMPT-2", reproductionAttemptIds: ["ATTEMPT-2", "ATTEMPT-1"] });
+    expect(revision).toMatchObject({ kind: "BUG" });
+    const revisions = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "bug-report");
+    expect(revisions).toHaveLength(2);
+    expect(revisions[1]?.value).toMatchObject({ bugId: revisions[0]?.value.bugId, revision: 2, supersedesArtifactId: revisions[0]?.record.id });
     const report = await generateQaReport({ workspace, locale: "vi" });
     const registered = await workspace.readRegisteredArtifacts();
 
     expect(report.json).toContain("NOT_READY");
     expect(report.json).toContain("scrubbed telemetry");
     expect(report.markdown).toContain("# Báo cáo QA");
-    expect(registered.filter((artifact) => artifact.record.type === "bug-report")).toHaveLength(1);
+    expect(registered.filter((artifact) => artifact.record.type === "bug-report")).toHaveLength(2);
     expect(registered.filter((artifact) => artifact.record.type === "release-gate")).toHaveLength(1);
     expect(registered.filter((artifact) => artifact.record.type === "qa-execution-report")).toHaveLength(1);
     await workspace.close();

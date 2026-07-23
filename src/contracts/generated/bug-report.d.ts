@@ -34,11 +34,14 @@ export type ProductBug = {
     evidenceArtifactIds: string[];
   };
   fingerprint: string;
+  revision?: number;
+  supersedesArtifactId?: string;
   possibleDuplicateSources?: {
     runId: string;
     artifactId: string;
     bugId: string;
     fingerprint: string;
+    sha256: string;
   }[];
   open: boolean;
 };

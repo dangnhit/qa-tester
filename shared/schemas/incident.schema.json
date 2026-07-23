@@ -4,7 +4,7 @@
   "title": "QA Incident or Investigation Finding",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "incidentId", "runId", "attemptId", "kind", "summary", "environment", "evidenceIds", "affectedAreas", "openQuestions", "provenance"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "incidentId", "runId", "attemptId", "kind", "summary", "environment", "affectedAreas", "openQuestions", "provenance"],
   "properties": {
     "artifactType": { "const": "incident" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 },
     "incidentId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "attemptId": { "type": "string", "minLength": 1 },

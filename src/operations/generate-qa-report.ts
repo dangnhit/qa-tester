@@ -1,5 +1,5 @@
+import { deriveReleaseGateFromWorkspaceArtifacts, type GateBug } from "../reporting/release-gate.js";
 import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
-import { deriveReleaseGateFromArtifacts, type GateBug } from "../reporting/release-gate.js";
 import { toQaExecutionReport, type QaReportModel } from "../reporting/report-model.js";
 import { renderCanonicalJson } from "../reporting/render-json.js";
 import { renderMarkdown } from "../reporting/render-markdown.js";
@@ -47,8 +47,9 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const coverage = coverageFrom(artifacts);
   const bugs = artifacts.filter((artifact) => artifact.record.type === "bug-report").map((artifact) => artifact.value);
   const gateBugs = bugs.map(asGateBug).filter((bug): bug is GateBug => bug !== undefined);
-  const sharedBlockers = artifacts.filter((artifact) => artifact.record.type === "incident" && artifact.value.kind === "ENVIRONMENT_INCIDENT").map((artifact) => `Environment incident ${String(artifact.value.incidentId)}`);
-  const gateResult = deriveReleaseGateFromArtifacts({ artifactRecords: artifacts.map((artifact) => ({ id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type })), artifactsValid: true, coverage: { requiredMissing: coverage.evaluation.missing, optionalGaps: coverage.optionalGaps, requiredHighRisk: coverage.highRisk }, bugs: gateBugs, incidents: artifacts.filter((artifact) => artifact.record.type === "incident").map((artifact) => artifact.value), evidenceGaps: artifacts.filter((artifact) => artifact.record.type === "evidence-gap").map((artifact) => artifact.value), cleanupLeaks: [], sharedBlockers });
+  const gateResult = deriveReleaseGateFromWorkspaceArtifacts(artifacts.map((artifact) => ({
+    record: { id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type }, value: artifact.value,
+  })));
   const gateValue = { artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, ...gateResult };
   const gate = await input.workspace.registerArtifactValue({ type: "release-gate", value: gateValue, relationships: artifacts.map((artifact) => artifact.record.id), provenance: "runtime" });
   const evidence = artifacts.filter((artifact) => artifact.record.type === "evidence");

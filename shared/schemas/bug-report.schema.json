@@ -24,7 +24,9 @@
     "affectedAreas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "provenance": { "type": "object", "additionalProperties": false, "required": ["sourceAttemptIds", "evidenceArtifactIds"], "properties": { "sourceAttemptIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "evidenceArtifactIds": { "type": "array", "items": { "type": "string", "minLength": 1 } } } },
-    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "possibleDuplicateSources": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["runId", "artifactId", "bugId", "fingerprint"], "properties": { "runId": { "type": "string", "minLength": 1 }, "artifactId": { "type": "string", "minLength": 1 }, "bugId": { "type": "string", "minLength": 1 }, "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } },
+    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "revision": { "type": "integer", "minimum": 1 }, "supersedesArtifactId": { "type": "string", "minLength": 1 },
+    "possibleDuplicateSources": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["runId", "artifactId", "bugId", "fingerprint", "sha256"], "properties": { "runId": { "type": "string", "minLength": 1 }, "artifactId": { "type": "string", "minLength": 1 }, "bugId": { "type": "string", "minLength": 1 }, "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } },
     "open": { "type": "boolean" }
   },
   "allOf": [

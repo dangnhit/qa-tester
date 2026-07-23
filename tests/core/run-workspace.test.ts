@@ -797,12 +797,12 @@ describe("RunWorkspace", () => {
       runId: workspace.runId,
       attemptId: "ATTEMPT-1",
       triageStatus: "NEEDS_TRIAGE",
-      expected: "Login succeeds",
-      actual: "Login fails",
+      expected: "test outcome",
+      actual: "Unknown observed actual (no registered step, error, or telemetry observation).",
       environment: { environmentProfileId: environmentProfile.environmentProfileId, name: environmentProfile.name, classification: environmentProfile.classification, baseUrl: environmentProfile.baseUrl },
       reproduction: { attemptIds: ["ATTEMPT-1"], attempted: 1, total: 2, rate: "1/2", outcome: "RERUN_OMITTED_UNSAFE", unsafeRerunReason: "Unsafe to retry" },
       evidenceIds: [evidence.evidenceId],
-      affectedAreas: ["TC-1"], openQuestions: [], provenance: { sourceAttemptIds: ["ATTEMPT-1"], evidenceArtifactIds: [evidenceRecord.id] }, fingerprint: createBugFingerprint({ feature: "TC-1", expected: "Login succeeds", actual: "Login fails", affectedAreas: ["TC-1"] }), testPriority: "medium", open: true,
+      affectedAreas: ["TC-1"], openQuestions: ["No registered observable actual was available."], provenance: { sourceAttemptIds: ["ATTEMPT-1"], evidenceArtifactIds: [evidenceRecord.id] }, fingerprint: createBugFingerprint({ feature: "TC-1", expected: "test outcome", actual: "Unknown observed actual (no registered step, error, or telemetry observation).", affectedAreas: ["TC-1"] }), testPriority: "medium", open: true,
     };
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-attempt.json", { ...bug, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-evidence.json", { ...bug, evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXY0"] })).rejects.toThrow(/evidence|reference|binding/i);

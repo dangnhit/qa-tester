@@ -27,7 +27,7 @@ export type QAIncidentOrInvestigationFinding = (
   /**
    * @minItems 1
    */
-  evidenceIds: [string, ...string[]];
+  evidenceIds?: [string, ...string[]];
   /**
    * @minItems 1
    */
