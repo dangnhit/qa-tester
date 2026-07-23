@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 
 import artifactManifestSchema from "../../shared/schemas/artifact-manifest.schema.json" with { type: "json" };
 import bugReportSchema from "../../shared/schemas/bug-report.schema.json" with { type: "json" };
+import browserTestDslSchema from "../../shared/schemas/browser-test-dsl.schema.json" with { type: "json" };
 import environmentProfileSchema from "../../shared/schemas/environment-profile.schema.json" with { type: "json" };
 import evidenceGapSchema from "../../shared/schemas/evidence-gap.schema.json" with { type: "json" };
 import evidenceSchema from "../../shared/schemas/evidence.schema.json" with { type: "json" };
@@ -42,9 +43,11 @@ const Ajv2020 = (require("ajv/dist/2020.js") as { default: typeof Ajv2020Instanc
 const addFormats = (require("ajv-formats") as { default: FormatsPlugin }).default;
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
+ajv.addSchema(browserTestDslSchema);
 ajv.addSchema(planningActionSchema);
 
 export const planningActionValidator = ajv.getSchema(planningActionSchema.$id) as ValidateFunction;
+export const browserTestDslValidator = ajv.getSchema(browserTestDslSchema.$id) as ValidateFunction;
 
 export const artifactValidators: Readonly<Record<ArtifactType, ValidateFunction>> = Object.fromEntries(
   Object.entries(schemas).map(([type, schema]) => [type, ajv.compile(schema)]),
