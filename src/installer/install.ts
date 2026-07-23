@@ -58,7 +58,7 @@ export async function fsyncTree(root: string, options: DirectorySyncOptions = {}
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (error: unknown) {
     const code = error instanceof Error && "code" in error ? error.code : undefined;
-    if ((options.platform ?? process.platform) !== "win32" || !["EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
+    if ((options.platform ?? process.platform) !== "win32" || !["EISDIR", "EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
   }
 }
 

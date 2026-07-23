@@ -20,5 +20,8 @@ describe("agent install roots", () => {
     const unsupported = Object.assign(new Error("unsupported"), { code: "EPERM" });
     await expect(fsyncTree(process.cwd(), { platform: "win32", openDirectory: async () => { await Promise.resolve(); throw unsupported; } })).resolves.toBeUndefined();
     await expect(fsyncTree(process.cwd(), { platform: "linux", openDirectory: async () => { await Promise.resolve(); throw unsupported; } })).rejects.toThrow("unsupported");
+    const isDirectory = Object.assign(new Error("directory"), { code: "EISDIR" });
+    await expect(fsyncTree(process.cwd(), { platform: "win32", openDirectory: async () => { await Promise.resolve(); throw isDirectory; } })).resolves.toBeUndefined();
+    await expect(fsyncTree(process.cwd(), { platform: "linux", openDirectory: async () => { await Promise.resolve(); throw isDirectory; } })).rejects.toThrow("directory");
   });
 });
