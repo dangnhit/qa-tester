@@ -15,14 +15,9 @@ import { resolveEvidencePolicy, type EvidencePolicyLayers } from "../evidence/po
 import { prepareTestData } from "./prepare-test-data.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { registerChangeScope } from "../regression/change-scope.js";
-import { evaluateWorkspaceCoverage } from "./evaluate-workspace-coverage.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createEntityId } from "../core/ids.js";
-import type { CoverageEvaluation } from "../planning/coverage.js";
-import type { TestDataManifest } from "./prepare-test-data.js";
-import type { generateQaReport } from "./generate-qa-report.js";
-import type { generateBugReport } from "./generate-bug-report.js";
 
 /** Closed operation contracts: the public adapter cannot inject callbacks or untyped objects. */
 export type WorkflowOperationInputMap = {
@@ -42,20 +37,21 @@ export type WorkflowOperationInputMap = {
 export type WorkflowOperationOutputMap = {
   "ingest-requirement-analysis": readonly ArtifactRecord[];
   "ingest-testcases": readonly ArtifactRecord[];
-  "ingest-coverage-obligation": CoverageEvaluation;
-  "prepare-test-data": TestDataManifest;
-  "execute-browser-test": readonly string[];
-  "collect-evidence": readonly string[];
-  "generate-bug-report": Awaited<ReturnType<typeof generateBugReport>> | void;
-  "generate-qa-report": Awaited<ReturnType<typeof generateQaReport>>;
+  "ingest-coverage-obligation": readonly ArtifactRecord[];
+  "prepare-test-data": ArtifactRecord;
+  "execute-browser-test": readonly ArtifactRecord[];
+  "collect-evidence": readonly ArtifactRecord[];
+  "generate-bug-report": readonly ArtifactRecord[];
+  "generate-qa-report": readonly ArtifactRecord[];
   "register-exploration-charter": ArtifactRecord;
-  "reproduce-bug": readonly string[];
+  "reproduce-bug": readonly ArtifactRecord[];
   "select-regression": ArtifactRecord;
   "derive-retest-verdict": ArtifactRecord;
 };
 /** Outputs are a closed discriminated union of declared operation results. */
 export type WorkflowOutput = WorkflowOperationOutputMap[WorkflowOperationName];
-export type WorkflowOperation = (context: Readonly<{ name: WorkflowOperationName; workspace: RunWorkspace; input: WorkflowInput; outputs: ReadonlyMap<WorkflowOperationName, WorkflowOutput> }>) => Promise<WorkflowOutput>;
+export type CorrelatedWorkflowOutputs = Partial<{ [Name in WorkflowOperationName]: WorkflowOperationOutputMap[Name] }>;
+export type WorkflowOperation = (context: Readonly<{ name: WorkflowOperationName; workspace: RunWorkspace; input: WorkflowInput; outputs: Readonly<CorrelatedWorkflowOutputs> }>) => Promise<WorkflowOutput | void>;
 export type WorkflowInput = Readonly<{
   root: string;
   mode: PublicWorkflowMode;
@@ -68,7 +64,8 @@ export type WorkflowInput = Readonly<{
   regression?: Readonly<{ changes: readonly ChangeScope[]; testCases: readonly RegressionCase[]; sourceRunId?: string }>;
   retest?: Readonly<{ sourceBugArtifactId: string; reproductionAttemptIds: readonly string[]; regressionOutcome?: RegressionOutcome }>;
 }>;
-export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | "COMPLETED"; operationOrder: readonly WorkflowOperationName[]; outputs: ReadonlyMap<WorkflowOperationName, WorkflowOutput>; validation: WorkspaceValidation }>;
+export type WorkflowTerminalStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
+export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation }>;
 
 /** A checksum-bound immutable source record.  Public workflows never accept a raw draft. */
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
@@ -114,26 +111,39 @@ function workflowInputChecksum(input: QaWorkflowInput): string {
   return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, charter: input.charter, retest: input.retest }));
 }
 
-type WorkflowCheckpoint = Readonly<{ record: ArtifactRecord; completedOperations: readonly WorkflowOperationName[]; operationOutputs: Readonly<Record<string, readonly RegisteredArtifactRef[]>> }>;
+type WorkflowStateSnapshot = Readonly<{
+  importedArtifacts: readonly RegisteredArtifactRef[];
+  executionCases: readonly RegisteredArtifactRef[];
+  selection?: RegisteredArtifactRef;
+  retestSource?: Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
+  reproductionAttempts: readonly RegisteredArtifactRef[];
+  regressionAttempts: readonly RegisteredArtifactRef[];
+  charter?: RegisteredArtifactRef;
+  exploratoryFindings: readonly RegisteredArtifactRef[];
+}>;
+type WorkflowCheckpoint = Readonly<{ record: ArtifactRecord; completedOperations: readonly WorkflowOperationName[]; operationOutputs: Readonly<Record<string, readonly RegisteredArtifactRef[]>>; state: WorkflowStateSnapshot }>;
 
 /** Mutable only for the duration of one runtime-owned workflow iteration. */
 type WorkflowExecutionState = {
   readonly workspace: RunWorkspace;
   readonly input: QaWorkflowInput;
   readonly runtime: QaRuntimeRegistry;
-  readonly outputs: Map<WorkflowOperationName, WorkflowOutput>;
+  readonly outputs: CorrelatedWorkflowOutputs;
   checkpoint: WorkflowCheckpoint;
   executionCaseIds: string[];
+  importedArtifactIds: string[];
   retestSource?: RetestSource;
   reproductionAttemptIds: string[];
   regressionAttemptIds: string[];
   selection?: RegressionSelection;
+  charterArtifactId?: string;
+  exploratoryFindingIds: string[];
 };
 
 type ClosedOperationAdapter<Name extends WorkflowOperationName> = Readonly<{
   name: Name;
   execute: (state: WorkflowExecutionState) => Promise<WorkflowOperationOutputMap[Name]>;
-  assertPostcondition: (workspace: RunWorkspace, output: WorkflowOperationOutputMap[Name] | readonly ArtifactRecord[]) => Promise<void>;
+  assertPostcondition: (workspace: RunWorkspace, output: WorkflowOperationOutputMap[Name]) => Promise<void>;
 }>;
 
 async function assertRegisteredArtifacts(workspace: RunWorkspace, output: WorkflowOutput | readonly ArtifactRecord[]): Promise<void> {
@@ -142,15 +152,29 @@ async function assertRegisteredArtifacts(workspace: RunWorkspace, output: Workfl
   if (records.some((item) => !artifacts.some((artifact) => artifact.record.id === item.id && artifact.record.sha256 === item.sha256))) throw new QaSkillsError("Workflow operation output is not a registered immutable artifact", "ARTIFACT_BINDING");
 }
 
-async function assertEvidencePostcondition(workspace: RunWorkspace, output: readonly string[] | readonly ArtifactRecord[]): Promise<void> {
+async function assertEvidencePostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
   await assertRegisteredArtifacts(workspace, output);
-  const descriptors = await workspace.readRegisteredArtifacts();
   if (output.length === 0) throw new QaSkillsError("Runtime execution postcondition requires result evidence or an evidence gap", "ARTIFACT_BINDING");
-  if (output.every(artifactRecord)) {
-    if (!output.some((artifact) => artifact.type === "evidence" || artifact.type === "evidence-gap")) throw new QaSkillsError("Evidence operation must register evidence or an evidence gap", "ARTIFACT_BINDING");
-    return;
+  if (!output.some((artifact) => artifact.type === "evidence" || artifact.type === "evidence-gap")) throw new QaSkillsError("Evidence operation must register evidence or an evidence gap", "ARTIFACT_BINDING");
+}
+
+async function assertResultPostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
+  await assertRegisteredArtifacts(workspace, output);
+  if (output.length === 0 || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
+  const artifacts = await workspace.readRegisteredArtifacts();
+  for (const result of output) {
+    const attempt = artifacts.find((item) => item.record.id === result.id);
+    const attemptId = attempt === undefined ? undefined : String(attempt.value.attemptId);
+    if (!attemptId || !artifacts.some((item) => (item.record.type === "evidence" || item.record.type === "evidence-gap") && String(item.value.attemptId) === attemptId)) throw new QaSkillsError("Execution result lacks registered evidence or evidence gap", "ARTIFACT_BINDING");
   }
-  if (output.some((id) => !descriptors.some((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && (artifact.record.id === id || artifact.value.evidenceId === id || artifact.value.evidenceGapId === id)))) throw new QaSkillsError("Evidence operation must produce registered evidence or evidence gaps", "ARTIFACT_BINDING");
+}
+
+async function assertFailureDispositionPostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
+  await assertRegisteredArtifacts(workspace, output);
+  const artifacts = await workspace.readRegisteredArtifacts();
+  const failed = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "FAILED");
+  const unresolved = failed.filter((attempt) => !artifacts.some((artifact) => (artifact.record.type === "bug-report" || artifact.record.type === "incident") && artifact.value.attemptId === attempt.value.attemptId));
+  if (unresolved.length > 0) throw new QaSkillsError("Every failed attempt must have an eligible bug or typed incident disposition", "ARTIFACT_BINDING");
 }
 
 /** The production adapter is closed: every public operation has one declared postcondition. */
@@ -159,17 +183,47 @@ const closedOperationAdapters: { readonly [Name in WorkflowOperationName]: Close
   "ingest-testcases": { name: "ingest-testcases", execute: (state) => runClosedOperation(state, "ingest-testcases"), assertPostcondition: assertRegisteredArtifacts },
   "ingest-coverage-obligation": { name: "ingest-coverage-obligation", execute: (state) => runClosedOperation(state, "ingest-coverage-obligation"), assertPostcondition: async () => {} },
   "prepare-test-data": { name: "prepare-test-data", execute: (state) => runClosedOperation(state, "prepare-test-data"), assertPostcondition: async (workspace) => { if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-data-manifest")) throw new QaSkillsError("Test-data operation must register its manifest", "ARTIFACT_BINDING"); } },
-  "execute-browser-test": { name: "execute-browser-test", execute: (state) => runClosedOperation(state, "execute-browser-test"), assertPostcondition: assertEvidencePostcondition },
+  "execute-browser-test": { name: "execute-browser-test", execute: (state) => runClosedOperation(state, "execute-browser-test"), assertPostcondition: assertResultPostcondition },
   "collect-evidence": { name: "collect-evidence", execute: (state) => runClosedOperation(state, "collect-evidence"), assertPostcondition: assertEvidencePostcondition },
-  "generate-bug-report": { name: "generate-bug-report", execute: (state) => runClosedOperation(state, "generate-bug-report"), assertPostcondition: assertRegisteredArtifacts },
+  "generate-bug-report": { name: "generate-bug-report", execute: (state) => runClosedOperation(state, "generate-bug-report"), assertPostcondition: assertFailureDispositionPostcondition },
   "generate-qa-report": { name: "generate-qa-report", execute: (state) => runClosedOperation(state, "generate-qa-report"), assertPostcondition: async (workspace) => { if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "qa-execution-report")) throw new QaSkillsError("QA report operation must register its report", "ARTIFACT_BINDING"); } },
   "register-exploration-charter": { name: "register-exploration-charter", execute: (state) => runClosedOperation(state, "register-exploration-charter"), assertPostcondition: assertRegisteredArtifacts },
-  "reproduce-bug": { name: "reproduce-bug", execute: (state) => runClosedOperation(state, "reproduce-bug"), assertPostcondition: assertEvidencePostcondition },
+  "reproduce-bug": { name: "reproduce-bug", execute: (state) => runClosedOperation(state, "reproduce-bug"), assertPostcondition: assertResultPostcondition },
   "select-regression": { name: "select-regression", execute: (state) => runClosedOperation(state, "select-regression"), assertPostcondition: assertRegisteredArtifacts },
   "derive-retest-verdict": { name: "derive-retest-verdict", execute: (state) => runClosedOperation(state, "derive-retest-verdict"), assertPostcondition: assertRegisteredArtifacts },
 };
 
 export function workflowOperationAdaptersForTests(): typeof closedOperationAdapters { return closedOperationAdapters; }
+
+function emptyWorkflowState(): WorkflowStateSnapshot {
+  return { importedArtifacts: [], executionCases: [], reproductionAttempts: [], regressionAttempts: [], exploratoryFindings: [] };
+}
+
+function registeredRef(artifacts: readonly RegisteredWorkspaceArtifact[], id: string | undefined): RegisteredArtifactRef | undefined {
+  const artifact = id === undefined ? undefined : artifacts.find((item) => item.record.id === id);
+  return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
+}
+
+async function snapshotWorkflowState(state: WorkflowExecutionState): Promise<WorkflowStateSnapshot> {
+  const artifacts = await state.workspace.readRegisteredArtifacts();
+  const refs = (ids: readonly string[]) => ids.map((id) => registeredRef(artifacts, id)).filter((item): item is RegisteredArtifactRef => item !== undefined);
+  return {
+    importedArtifacts: refs(state.importedArtifactIds), executionCases: refs(state.executionCaseIds),
+    reproductionAttempts: refs(state.reproductionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
+    regressionAttempts: refs(state.regressionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
+    exploratoryFindings: refs(state.exploratoryFindingIds),
+    ...(state.selection === undefined ? {} : { selection: registeredRef(artifacts, artifacts.find((item) => item.record.type === "regression-selection")?.record.id)! }),
+    ...(state.retestSource === undefined ? {} : { retestSource: state.retestSource }),
+    ...(state.charterArtifactId === undefined ? {} : { charter: registeredRef(artifacts, state.charterArtifactId)! }),
+  };
+}
+
+function checkpointState(value: unknown): WorkflowStateSnapshot {
+  if (!record(value)) throw new QaSkillsError("Workflow checkpoint state is invalid", "ARTIFACT_BINDING");
+  const refs = (key: string): readonly RegisteredArtifactRef[] => Array.isArray(value[key]) && value[key].every((item) => record(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string") ? value[key] as RegisteredArtifactRef[] : (() => { throw new QaSkillsError("Workflow checkpoint state references are invalid", "ARTIFACT_BINDING"); })();
+  const ref = (key: string): RegisteredArtifactRef | undefined => value[key] === undefined ? undefined : record(value[key]) && typeof value[key].artifactId === "string" && typeof value[key].sha256 === "string" ? value[key] as RegisteredArtifactRef : (() => { throw new QaSkillsError("Workflow checkpoint state reference is invalid", "ARTIFACT_BINDING"); })();
+  return { importedArtifacts: refs("importedArtifacts"), executionCases: refs("executionCases"), reproductionAttempts: refs("reproductionAttempts"), regressionAttempts: refs("regressionAttempts"), exploratoryFindings: refs("exploratoryFindings"), ...(ref("selection") === undefined ? {} : { selection: ref("selection")! }), ...(ref("charter") === undefined ? {} : { charter: ref("charter")! }), ...(value.retestSource === undefined ? {} : { retestSource: value.retestSource as RetestSource }) };
+}
 
 async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInput): Promise<WorkflowCheckpoint> {
   const checkpoints = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "workflow-checkpoint");
@@ -177,26 +231,25 @@ async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInpu
   if (checkpoints.length > 0) {
     const latest = [...checkpoints].sort((left, right) => Number(right.value.revision) - Number(left.value.revision))[0];
     if (!latest || latest.value.inputChecksum !== checksum) throw new QaSkillsError("Resume input does not match its durable workflow checkpoint", "ARTIFACT_BINDING");
-    return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: record(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {} };
+    return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: record(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {}, state: checkpointState(latest.value.state) };
   }
   const created = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
-    inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
+    inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState(), ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [], provenance: "runtime" });
-  return { record: created, completedOperations: [], operationOutputs: {} };
+  return { record: created, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState() };
 }
 
-async function advanceCheckpoint(workspace: RunWorkspace, input: QaWorkflowInput, previous: WorkflowCheckpoint, operation: WorkflowOperationName, output: WorkflowOutput | readonly ArtifactRecord[]): Promise<WorkflowCheckpoint> {
+async function advanceCheckpoint(workspace: RunWorkspace, input: QaWorkflowInput, previous: WorkflowCheckpoint, operation: WorkflowOperationName, output: WorkflowOutput | readonly ArtifactRecord[], state: WorkflowExecutionState): Promise<WorkflowCheckpoint> {
   if (previous.completedOperations.includes(operation)) return previous;
-  await closedOperationAdapters[operation].assertPostcondition(workspace, output as never);
   const records: readonly ArtifactRecord[] = Array.isArray(output) ? output.filter(artifactRecord) : artifactRecord(output) ? [output] : [];
   const operationOutputs: Record<string, readonly RegisteredArtifactRef[]> = { ...previous.operationOutputs, [operation]: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
   const registered = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode, inputChecksum: workflowInputChecksum(input), revision: Number((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === previous.record.id)?.value.revision) + 1,
-    supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs,
+    supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: await snapshotWorkflowState(state),
     ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [previous.record.id, ...records.map((artifact) => artifact.id)], provenance: "runtime" });
-  return { record: registered, completedOperations: [...previous.completedOperations, operation], operationOutputs };
+  return { record: registered, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: await snapshotWorkflowState(state) };
 }
 
 function missingRuntimeLabel(runtime: QaRuntimeRegistry, input: QaWorkflowInput): string | undefined {
@@ -281,7 +334,7 @@ function capturePolicyForEnvironment(environment: Record<string, unknown>, host:
   };
 }
 
-async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, caseArtifactIds: readonly string[]): Promise<readonly string[]> {
+async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, caseArtifactIds: readonly string[]): Promise<readonly ArtifactRecord[]> {
   const manager = resolveRuntime(runtime.browserManagers, ids.browserManagerId, "browser manager");
   const resolver = ids.secretResolverId === undefined ? undefined : resolveRuntime(runtime.secretResolvers, ids.secretResolverId, "secret resolver");
   const policy = resolveEvidencePolicy(ids.evidencePolicyId === undefined ? {} : resolveRuntime(runtime.evidencePolicies, ids.evidencePolicyId, "evidence policy"));
@@ -289,24 +342,33 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
   if (!record(environment)) throw new QaSkillsError("Runtime execution requires a registered environment profile", "ARTIFACT_BINDING");
   const capturePolicy = capturePolicyForEnvironment(environment, policyLayers);
-  const evidenceIds: string[] = [];
-  for (const testCaseArtifactId of caseArtifactIds) {
+  const results: ArtifactRecord[] = [];
+  for (const [caseIndex, testCaseArtifactId] of caseArtifactIds.entries()) {
     const artifacts = await workspace.readRegisteredArtifacts();
     const testCase = artifacts.find((artifact) => artifact.record.id === testCaseArtifactId && artifact.record.type === "test-case");
     if (!testCase) throw new QaSkillsError("Runtime execution case is not registered", "ARTIFACT_BINDING");
+    const occurrence = caseArtifactIds.slice(0, caseIndex + 1).filter((id) => id === testCaseArtifactId).length - 1;
+    const alreadyRegistered = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.record.relationships.includes(testCaseArtifactId));
+    if (alreadyRegistered[occurrence]) {
+      const registered = alreadyRegistered[occurrence];
+      const attemptId = asString(registered.value.attemptId, "registered retry attempt ID");
+      if (!artifacts.some((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && artifact.value.attemptId === attemptId)) {
+        await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry: "log", protectedEnvironment: false, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
+      }
+      results.push(registered.record); continue;
+    }
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
     await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), onBeforeSessionClose: async ({ attempt }) => {
       const attachment = async (telemetry: "console" | "network" | "log") => {
         const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
-        if (evidence.kind === "evidence") evidenceIds.push(evidence.descriptorArtifactId);
-        else evidenceIds.push(evidence.descriptorArtifactId);
+        void evidence;
       };
       if (policy.logs !== "forbidden" && policy.logs !== "off") await attachment("log");
       if (policy.console !== "forbidden" && policy.console !== "off") await attachment("console");
       if (policy.network !== "forbidden" && policy.network !== "off") await attachment("network");
       if (policy.screenshot === "always" || policy.screenshot === "required" || (policy.screenshot === "on-failure" && attempt.status !== "PASSED")) {
         const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
-        evidenceIds.push(evidence.descriptorArtifactId);
+        void evidence;
       }
     } });
     const after = await workspace.readRegisteredArtifacts();
@@ -314,12 +376,20 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
     if (result.length !== 1) {
       throw new QaSkillsError("Runtime execution must register one immutable result per exact testcase instance", "ARTIFACT_BINDING");
     }
+    results.push(result[0]!.record);
   }
-  return evidenceIds;
+  return results;
 }
 
-type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string }>;
+type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string; parameters: Readonly<Record<string, unknown>> }>;
 type RetestSource = Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
+
+function scenarioIdForRegisteredAttempt(artifacts: readonly RegisteredWorkspaceArtifact[], attempt: RegisteredWorkspaceArtifact): string {
+  const testCase = artifacts.find((artifact) => artifact.record.type === "test-case" && attempt.record.relationships.includes(artifact.record.id));
+  if (!testCase) throw new QaSkillsError("Retest attempt lacks its exact testcase artifact binding", "ARTIFACT_BINDING");
+  if (testCase.value.testCaseId !== attempt.value.testCaseId || testCase.value.revisionId !== attempt.value.testCaseRevisionId || testCase.value.instanceId !== attempt.value.testCaseInstanceId) throw new QaSkillsError("Retest attempt testcase identity binding is invalid", "ARTIFACT_BINDING");
+  return sourceScenarioId({ testCaseId: asString(attempt.value.testCaseId, "retest testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "retest testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "retest testcase instance ID"), parameters: record(testCase.value.parameters) ? testCase.value.parameters : {} });
+}
 
 async function sourceBugFromReference(workspace: RunWorkspace, reference: RegisteredArtifactRef): Promise<RetestSource> {
   if (!workspace.linkedRunId) throw new QaSkillsError("Retest requires a linked immutable source run", "ARTIFACT_BINDING");
@@ -329,17 +399,19 @@ async function sourceBugFromReference(workspace: RunWorkspace, reference: Regist
     if (sourceRecord.type !== "bug-report" || sourceRecord.sha256 !== reference.sha256) throw new QaSkillsError("Retest source bug reference checksum is invalid", "ARTIFACT_BINDING");
     const artifacts = await source.readRegisteredArtifacts();
     const bug = artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.type === "bug-report");
-    const attempt = bug === undefined ? undefined : artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === bug.value.attemptId);
-    if (!bug || !attempt) throw new QaSkillsError("Retest source bug lacks its immutable original attempt", "ARTIFACT_BINDING");
-    const primary = { sourceAttemptArtifactId: attempt.record.id, sourceTestCaseArtifactId: asString(attempt.record.relationships.find((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-case")), "source testcase artifact ID"), testCaseId: asString(attempt.value.testCaseId, "source testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "source testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "source testcase instance ID") };
-    // A source run can have recorded the same defect across multiple exact
-    // testcase instances. The source manifest, rather than a caller label,
-    // is the reproduction-set authority.
-    const scenarios = artifacts.filter((candidate) => candidate.record.type === "test-result" && candidate.value.testCaseId === primary.testCaseId && candidate.value.testCaseRevisionId === primary.revisionId && candidate.value.failureClassification === "PRODUCT_DEFECT")
-      .map((candidate) => ({ sourceAttemptArtifactId: candidate.record.id, sourceTestCaseArtifactId: asString(candidate.record.relationships.find((id) => artifacts.some((item) => item.record.id === id && item.record.type === "test-case")), "source testcase artifact ID"), testCaseId: primary.testCaseId, revisionId: primary.revisionId, instanceId: asString(candidate.value.testCaseInstanceId, "source testcase instance ID") }));
-    // Do not de-duplicate: separate failed source attempts of the same
-    // canonical scenario are a reproduction-set occurrence contract.
-    return { bugId: asString(bug.value.bugId, "source bug ID"), scenarios: scenarios.length > 0 ? scenarios : [primary] };
+    if (!bug) throw new QaSkillsError("Retest source bug is not registered", "ARTIFACT_BINDING");
+    const provenance = record(bug.value.provenance) ? bug.value.provenance : {};
+    const sourceAttemptIds = Array.isArray(provenance.sourceAttemptIds) && provenance.sourceAttemptIds.every((id) => typeof id === "string") ? provenance.sourceAttemptIds : [asString(bug.value.attemptId, "source bug attempt ID")];
+    if (sourceAttemptIds.length === 0 || new Set(sourceAttemptIds).size !== sourceAttemptIds.length) throw new QaSkillsError("Selected bug revision has invalid exact reproduction references", "ARTIFACT_BINDING");
+    const scenarios = sourceAttemptIds.map((attemptId) => {
+      const attempt = artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+      if (!attempt || attempt.value.failureClassification !== "PRODUCT_DEFECT") throw new QaSkillsError("Selected bug revision references an invalid product reproduction", "ARTIFACT_BINDING");
+      const caseId = attempt.record.relationships.find((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-case"));
+      const testCase = caseId === undefined ? undefined : artifacts.find((candidate) => candidate.record.id === caseId && candidate.record.type === "test-case");
+      if (!testCase || testCase.value.testCaseId !== attempt.value.testCaseId || testCase.value.revisionId !== attempt.value.testCaseRevisionId || testCase.value.instanceId !== attempt.value.testCaseInstanceId) throw new QaSkillsError("Source attempt is not bound to its exact canonical testcase instance", "ARTIFACT_BINDING");
+      return { sourceAttemptArtifactId: attempt.record.id, sourceTestCaseArtifactId: testCase.record.id, testCaseId: asString(attempt.value.testCaseId, "source testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "source testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "source testcase instance ID"), parameters: record(testCase.value.parameters) ? testCase.value.parameters : {} };
+    });
+    return { bugId: asString(bug.value.bugId, "source bug ID"), scenarios };
   } finally { await source.close(); }
 }
 
@@ -347,11 +419,11 @@ async function registerRuntimeRetestResult(workspace: RunWorkspace, reference: R
   const artifacts = await workspace.readRegisteredArtifacts();
   const reproduction = reproductionAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId));
   const expectedOccurrences = source.scenarios.map(sourceScenarioId).sort();
-  const actualOccurrences = reproduction.map((attempt) => attempt === undefined ? "" : sourceScenarioId({ testCaseId: String(attempt.value.testCaseId), revisionId: String(attempt.value.testCaseRevisionId), instanceId: String(attempt.value.testCaseInstanceId) })).sort();
+  const actualOccurrences = reproduction.map((attempt) => attempt === undefined ? "" : scenarioIdForRegisteredAttempt(artifacts, attempt)).sort();
   if (reproduction.length === 0 || reproduction.some((attempt) => !attempt) || JSON.stringify(actualOccurrences) !== JSON.stringify(expectedOccurrences)) throw new QaSkillsError("Retest reproduction did not execute every exact immutable source scenario occurrence", "ARTIFACT_BINDING");
   const regression = regressionAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId)).filter((attempt): attempt is NonNullable<typeof attempt> => attempt !== undefined);
   const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => asString(attempt.value.status, "regression execution status")));
-  const reproductionScenarios = reproduction.map((attempt, index) => ({ scenarioId: sourceScenarioId({ testCaseId: asString(attempt?.value.testCaseId, "reproduction testcase ID"), revisionId: asString(attempt?.value.testCaseRevisionId, "reproduction testcase revision ID"), instanceId: asString(attempt?.value.testCaseInstanceId, "reproduction testcase instance ID") }), sourceAttemptArtifactId: source.scenarios[index]!.sourceAttemptArtifactId, sourceTestCaseArtifactId: source.scenarios[index]!.sourceTestCaseArtifactId, attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
+  const reproductionScenarios = reproduction.map((attempt, index) => ({ scenarioId: attempt === undefined ? "" : scenarioIdForRegisteredAttempt(artifacts, attempt), sourceAttemptArtifactId: source.scenarios[index]!.sourceAttemptArtifactId, sourceTestCaseArtifactId: source.scenarios[index]!.sourceTestCaseArtifactId, attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
   const verdict = deriveRetestVerdict({ originalBugId: source.bugId, reproductionStatuses: reproductionScenarios.map((scenario) => scenario.status), scenarioIds: reproductionScenarios.map((scenario) => scenario.scenarioId), regressionOutcome });
   return workspace.registerArtifactValue({ type: "retest-result", value: { artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: workspace.linkedRunId, sourceBugArtifactId: reference.artifactId, sourceBugArtifactSha256: reference.sha256, bugId: source.bugId, reproductionAttemptIds: [...reproductionAttemptIds], reproductionScenarios, regressionAttemptIds: [...regressionAttemptIds], verdict: verdict.verdict, regressionOutcome }, relationships: [...reproduction, ...regression].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined), provenance: "runtime" });
 }
@@ -393,7 +465,7 @@ async function registerCharter(workspace: RunWorkspace, charter: ExplorationChar
 }
 
 /** Bounded exploration uses a runtime-owned browser context, never an agent callback or arbitrary script. */
-async function executeExploration(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, charter: ExplorationCharter): Promise<readonly string[]> {
+async function executeExploration(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, charter: ExplorationCharter): Promise<readonly ArtifactRecord[]> {
   const manager = resolveRuntime(runtime.browserManagers, ids.browserManagerId, "browser manager");
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
   if (!record(environment) || typeof environment.baseUrl !== "string") throw new QaSkillsError("Exploration requires its registered environment", "ARTIFACT_BINDING");
@@ -420,11 +492,11 @@ async function executeExploration(workspace: RunWorkspace, runtime: QaRuntimeReg
     const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: `EXP-${charter.charterId}` });
     const charterRecord = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "exploration-charter");
     if (!charterRecord) throw new QaSkillsError("Exploration finding requires its registered charter", "ARTIFACT_BINDING");
-    await workspace.registerArtifactValue({ type: "exploratory-finding", value: {
+    const finding = await workspace.registerArtifactValue({ type: "exploratory-finding", value: {
       artifactType: "exploratory-finding", schemaVersion: "1.0.0", producerVersion: "0.1.0", findingId: `EXP-FIND-${createEntityId()}`, runId: workspace.runId, charterId: charter.charterId,
       observation: observations.join(" "), authority: "EXPLORATORY", satisfiesCoverage: false,
     }, relationships: [charterRecord.record.id, evidence.descriptorArtifactId], provenance: "runtime" });
-    return [evidence.descriptorArtifactId];
+    return [await workspace.readArtifactRecord(evidence.descriptorArtifactId), finding];
   } finally {
     activeBrowserSessions.delete(attemptId);
     session.secrets.clear();
@@ -521,20 +593,62 @@ async function outputRecords(workspace: RunWorkspace, output: WorkflowOutput): P
   return artifacts.filter((artifact) => output.includes(artifact.record.id) || output.includes(String(artifact.value.evidenceId)) || output.includes(String(artifact.value.evidenceGapId))).map((artifact) => artifact.record);
 }
 
+function outputFromRecords<Name extends WorkflowOperationName>(operation: Name, records: readonly ArtifactRecord[]): WorkflowOperationOutputMap[Name] {
+  if (operation === "prepare-test-data" || operation === "register-exploration-charter" || operation === "select-regression" || operation === "derive-retest-verdict") {
+    if (records.length !== 1) throw new QaSkillsError(`Workflow checkpoint output for ${operation} is not canonical`, "ARTIFACT_BINDING");
+    return records[0] as WorkflowOperationOutputMap[Name];
+  }
+  return records as WorkflowOperationOutputMap[Name];
+}
+
+async function validateCheckpointRefs(workspace: RunWorkspace, refs: readonly RegisteredArtifactRef[]): Promise<readonly RegisteredWorkspaceArtifact[]> {
+  const artifacts = await workspace.readRegisteredArtifacts();
+  const resolved = refs.map((reference) => artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256));
+  if (resolved.some((artifact) => artifact === undefined)) throw new QaSkillsError("Workflow checkpoint state is not immutable", "ARTIFACT_BINDING");
+  return resolved.filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
+}
+
+async function hydrateCheckpointState(state: WorkflowExecutionState): Promise<void> {
+  const snapshot = state.checkpoint.state;
+  const imported = await validateCheckpointRefs(state.workspace, snapshot.importedArtifacts);
+  const execution = await validateCheckpointRefs(state.workspace, snapshot.executionCases);
+  const reproduction = await validateCheckpointRefs(state.workspace, snapshot.reproductionAttempts);
+  const regression = await validateCheckpointRefs(state.workspace, snapshot.regressionAttempts);
+  const findings = await validateCheckpointRefs(state.workspace, snapshot.exploratoryFindings);
+  if (execution.some((artifact) => artifact.record.type !== "test-case") || reproduction.some((artifact) => artifact.record.type !== "test-result") || regression.some((artifact) => artifact.record.type !== "test-result") || findings.some((artifact) => artifact.record.type !== "exploratory-finding")) throw new QaSkillsError("Workflow checkpoint state type binding is invalid", "ARTIFACT_BINDING");
+  state.importedArtifactIds = imported.map((artifact) => artifact.record.id);
+  state.executionCaseIds = execution.map((artifact) => artifact.record.id);
+  state.reproductionAttemptIds = reproduction.map((artifact) => asString(artifact.value.attemptId, "reproduction attempt ID"));
+  state.regressionAttemptIds = regression.map((artifact) => asString(artifact.value.attemptId, "regression attempt ID"));
+  state.exploratoryFindingIds = findings.map((artifact) => artifact.record.id);
+  if (snapshot.selection) {
+    const [selection] = await validateCheckpointRefs(state.workspace, [snapshot.selection]);
+    if (selection?.record.type !== "regression-selection") throw new QaSkillsError("Workflow checkpoint regression selection is invalid", "ARTIFACT_BINDING");
+    state.selection = selection.value as RegressionSelection;
+  }
+  if (snapshot.charter) {
+    const [charter] = await validateCheckpointRefs(state.workspace, [snapshot.charter]);
+    if (charter?.record.type !== "exploration-charter") throw new QaSkillsError("Workflow checkpoint charter is invalid", "ARTIFACT_BINDING");
+    state.charterArtifactId = charter.record.id;
+  }
+  if (snapshot.retestSource) state.retestSource = snapshot.retestSource;
+}
+
 async function hydrateCheckpointOutput(state: WorkflowExecutionState, operation: WorkflowOperationName): Promise<void> {
   const references = state.checkpoint.operationOutputs[operation] ?? [];
-  const artifacts = await state.workspace.readRegisteredArtifacts();
-  const records = references.map((reference) => artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256)?.record);
-  if (records.some((record) => record === undefined)) throw new QaSkillsError(`Workflow checkpoint output for ${operation} is not immutable`, "ARTIFACT_BINDING");
-  state.outputs.set(operation, records.filter((record): record is ArtifactRecord => record !== undefined));
+  const records = (await validateCheckpointRefs(state.workspace, references)).map((artifact) => artifact.record);
+  state.outputs[operation] = outputFromRecords(operation, records) as never;
 }
 
 async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<void> {
   const needsBundle = ["plan", "execute", "full", "regression", "retest"].includes(state.input.mode);
   if (!needsBundle) return;
   if (!state.input.bundle) throw new QaSkillsError("Workflow requires a checksum-bound canonical plan bundle", "ARTIFACT_BINDING");
-  if (!(await state.workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) await importCanonicalPlanBundle(state.workspace, state.input.bundle);
-  state.executionCaseIds = (await state.workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-case").map((artifact) => artifact.record.id);
+  if (!(await state.workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) {
+    const imported = await importCanonicalPlanBundle(state.workspace, state.input.bundle);
+    state.importedArtifactIds = [...imported.values()].map((artifact) => artifact.id);
+  }
+  if (state.executionCaseIds.length === 0) state.executionCaseIds = (await state.workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-case").map((artifact) => artifact.record.id);
 }
 
 async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWorkflowInput, adapters: typeof closedOperationAdapters): Promise<WorkflowResult> {
@@ -542,11 +656,13 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
     ? await RunWorkspace.create({ root: input.root, mode: input.mode, environmentProfile: input.environmentProfile, ...(input.linkedRunId === undefined ? {} : { linkedRunId: input.linkedRunId }) })
     : await RunWorkspace.open(input.root, input.resumeRunId);
   const order = operationsForMode(input.mode);
-  const outputs = new Map<WorkflowOperationName, WorkflowOutput>();
+  const outputs: CorrelatedWorkflowOutputs = {};
   try {
     if (workspace.mode !== input.mode || workspace.linkedRunId !== input.linkedRunId) throw new QaSkillsError("Resume workspace does not match the requested immutable workflow identity", "ARTIFACT_BINDING");
     const checkpoint = await checkpointWorkflow(workspace, input);
-    const state: WorkflowExecutionState = { workspace, input, runtime, outputs, checkpoint, executionCaseIds: [], reproductionAttemptIds: [], regressionAttemptIds: [] };
+    const state: WorkflowExecutionState = { workspace, input, runtime, outputs, checkpoint, executionCaseIds: [], importedArtifactIds: [], reproductionAttemptIds: [], regressionAttemptIds: [], exploratoryFindingIds: [] };
+    await hydrateCheckpointState(state);
+    if (input.retest && checkpoint.completedOperations.includes("reproduce-bug")) state.retestSource = await sourceBugFromReference(workspace, input.retest.sourceBug);
     const missing = missingRuntimeLabel(runtime, input);
     if (missing !== undefined) return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_RUNTIME", operationOrder: order, outputs, validation: await workspace.validate(input.mode) };
     if (input.mode === "retest") {
@@ -561,11 +677,11 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
       if (state.checkpoint.completedOperations.includes(name)) { await hydrateCheckpointOutput(state, name); continue; }
       const output = await adapter.execute(state);
       await adapter.assertPostcondition(workspace, output as never);
-      state.outputs.set(name, output);
-      state.checkpoint = await advanceCheckpoint(workspace, input, state.checkpoint, name, await outputRecords(workspace, output));
+      state.outputs[name] = output as never;
+      state.checkpoint = await advanceCheckpoint(workspace, input, state.checkpoint, name, await outputRecords(workspace, output), state);
     }
     const validation = await workspace.finalize(input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome: "COMPLETED", operationOrder: order, outputs, validation };
+    return { runId: workspace.runId, mode: input.mode, outcome: validation.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES", operationOrder: order, outputs, validation };
   } finally { await workspace.close(); }
 }
 
@@ -577,17 +693,20 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
   if (name === "ingest-requirement-analysis") return (await artifacts()).filter((artifact) => artifact.record.type === "requirement-analysis").map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   if (name === "ingest-testcases") return (await cases()).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   if (name === "ingest-coverage-obligation") {
-    // Importing obligations is the named operation. Full-mode evaluation is
-    // deliberately deferred until the report can observe execution results.
-    return { complete: false, satisfied: [], missing: [], blocked: [] } as unknown as WorkflowOperationOutputMap[Name];
+    return (await artifacts()).filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   }
   if (name === "prepare-test-data") {
     const hooks = resolveRuntime(runtime.testDataRegistries, input.runtime?.testDataRegistryId, "test-data registry");
-    return prepareTestData({ workspace, hooks, hookIds: [] }) as Promise<WorkflowOperationOutputMap[Name]>;
+    await prepareTestData({ workspace, hooks, hookIds: [] });
+    const manifest = (await artifacts()).find((artifact) => artifact.record.type === "test-data-manifest");
+    if (!manifest) throw new QaSkillsError("Test-data operation did not register its manifest", "ARTIFACT_BINDING");
+    return manifest.record as WorkflowOperationOutputMap[Name];
   }
   if (name === "register-exploration-charter") {
     if (!input.charter) throw new QaSkillsError("Exploratory workflow requires exactly one charter", "INVALID_ARTIFACT");
-    return registerCharter(workspace, input.charter) as Promise<WorkflowOperationOutputMap[Name]>;
+    const charter = await registerCharter(workspace, input.charter);
+    state.charterArtifactId = charter.id;
+    return charter as WorkflowOperationOutputMap[Name];
   }
   if (name === "reproduce-bug") {
     if (!input.retest) throw new QaSkillsError("Retest requires a checksum-bound source bug reference", "ARTIFACT_BINDING");
@@ -598,13 +717,14 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     if (exact.some((artifact) => artifact === undefined)) throw new QaSkillsError("Retest bundle must import every exact original testcase revision and instance", "ARTIFACT_BINDING");
     // Keep duplicate source occurrences: each one is a real reproduction
     // attempt, while sourceScenarioId remains the canonical scenario identity.
-    const evidence = await executeWithRuntime(workspace, runtime, input.runtime ?? {}, exact.map((artifact) => artifact!.record.id));
+    await executeWithRuntime(workspace, runtime, input.runtime ?? {}, exact.map((artifact) => artifact!.record.id));
     const required = source.scenarios.map(sourceScenarioId).sort();
-    const results = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && required.includes(sourceScenarioId({ testCaseId: String(artifact.value.testCaseId), revisionId: String(artifact.value.testCaseRevisionId), instanceId: String(artifact.value.testCaseInstanceId) }))).map((artifact) => asString(artifact.value.attemptId, "reproduction attempt ID"));
-    const actual = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && results.includes(String(artifact.value.attemptId))).map((artifact) => sourceScenarioId({ testCaseId: String(artifact.value.testCaseId), revisionId: String(artifact.value.testCaseRevisionId), instanceId: String(artifact.value.testCaseInstanceId) })).sort();
+    const all = await artifacts();
+    const results = all.filter((artifact) => artifact.record.type === "test-result" && required.includes(scenarioIdForRegisteredAttempt(all, artifact))).map((artifact) => asString(artifact.value.attemptId, "reproduction attempt ID"));
+    const actual = all.filter((artifact) => artifact.record.type === "test-result" && results.includes(String(artifact.value.attemptId))).map((artifact) => scenarioIdForRegisteredAttempt(all, artifact)).sort();
     if (JSON.stringify(actual) !== JSON.stringify(required)) throw new QaSkillsError("Retest reproduction did not retain every source occurrence", "ARTIFACT_BINDING");
     state.reproductionAttemptIds = results;
-    return evidence as unknown as WorkflowOperationOutputMap[Name];
+    return (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && results.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   }
   if (name === "select-regression") {
     const source = resolveRuntime(runtime.changeScopeSources, input.runtime?.changeScopeSourceId, "change-scope source");
@@ -624,12 +744,12 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
   }
   if (name === "execute-browser-test") {
     if (input.mode === "retest") {
-      const evidence = state.executionCaseIds.length === 0
-        ? (await artifacts()).filter((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && state.reproductionAttemptIds.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record.id)
+      const results = state.executionCaseIds.length === 0
+        ? (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && state.reproductionAttemptIds.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record)
         : await executeWithRuntime(workspace, runtime, input.runtime ?? {}, state.executionCaseIds);
       const reproduced = new Set(state.reproductionAttemptIds);
       state.regressionAttemptIds = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && !reproduced.has(String(artifact.value.attemptId))).map((artifact) => asString(artifact.value.attemptId, "regression attempt ID"));
-      return evidence as unknown as WorkflowOperationOutputMap[Name];
+      return results as WorkflowOperationOutputMap[Name];
     }
     if (state.executionCaseIds.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
     return executeWithRuntime(workspace, runtime, input.runtime ?? {}, state.executionCaseIds) as Promise<WorkflowOperationOutputMap[Name]>;
@@ -637,28 +757,37 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
   if (name === "collect-evidence") {
     if (input.mode === "exploratory") {
       if (!input.charter) throw new QaSkillsError("Exploratory workflow requires exactly one charter", "INVALID_ARTIFACT");
-      return executeExploration(workspace, runtime, input.runtime ?? {}, input.charter) as Promise<WorkflowOperationOutputMap[Name]>;
+      const records = await executeExploration(workspace, runtime, input.runtime ?? {}, input.charter);
+      state.exploratoryFindingIds = records.filter((item) => item.type === "exploratory-finding").map((item) => item.id);
+      return records as WorkflowOperationOutputMap[Name];
     }
     if (input.mode === "retest") {
       const reproduced = new Set(state.reproductionAttemptIds);
-      return (await artifacts()).filter((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && (reproduced.has(String(artifact.value.attemptId)) || state.regressionAttemptIds.includes(String(artifact.value.attemptId)))).map((artifact) => artifact.record.id) as unknown as WorkflowOperationOutputMap[Name];
+      return (await artifacts()).filter((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && (reproduced.has(String(artifact.value.attemptId)) || state.regressionAttemptIds.includes(String(artifact.value.attemptId)))).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
     }
     // Browser execution captures evidence while its session is active; this
     // adapter exposes exactly those immutable records as the collection step.
-    return (await artifacts()).filter((artifact) => artifact.record.type === "evidence" || artifact.record.type === "evidence-gap").map((artifact) => artifact.record.id) as unknown as WorkflowOperationOutputMap[Name];
+    return (await artifacts()).filter((artifact) => artifact.record.type === "evidence" || artifact.record.type === "evidence-gap").map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   }
   if (name === "generate-bug-report") {
     const failed = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "FAILED");
-    if (failed.length === 0) return undefined as WorkflowOperationOutputMap[Name];
-    return (await import("./generate-bug-report.js")).generateBugReport({ workspace, attemptId: asString(failed[0]!.value.attemptId, "attempt ID") }) as unknown as WorkflowOperationOutputMap[Name];
+    const generated: ArtifactRecord[] = [];
+    for (const attempt of failed) {
+      const id = asString(attempt.value.attemptId, "attempt ID");
+      const existing = (await artifacts()).find((artifact) => (artifact.record.type === "bug-report" || artifact.record.type === "incident") && artifact.value.attemptId === id);
+      if (existing) { generated.push(existing.record); continue; }
+      const defect = await (await import("./generate-bug-report.js")).generateBugReport({ workspace, attemptId: id });
+      generated.push(defect.record);
+    }
+    return generated as unknown as WorkflowOperationOutputMap[Name];
   }
   if (name === "derive-retest-verdict") {
     if (!input.retest || !state.retestSource) throw new QaSkillsError("Retest source was not resolved", "ARTIFACT_BINDING");
     return registerRuntimeRetestResult(workspace, input.retest.sourceBug, state.retestSource, state.reproductionAttemptIds, state.regressionAttemptIds) as Promise<WorkflowOperationOutputMap[Name]>;
   }
   if (name === "generate-qa-report") {
-    if (input.mode === "full") state.outputs.set("ingest-coverage-obligation", await evaluateWorkspaceCoverage({ root: workspace.root, runId: workspace.runId, workspace }));
-    return (await import("./generate-qa-report.js")).generateQaReport({ workspace }) as Promise<WorkflowOperationOutputMap[Name]>;
+    const report = await (await import("./generate-qa-report.js")).generateQaReport({ workspace });
+    return [report.gate, report.report] as unknown as WorkflowOperationOutputMap[Name];
   }
   throw new QaSkillsError(`Unknown closed workflow operation ${name}`, "ARTIFACT_BINDING");
 }
@@ -671,12 +800,12 @@ async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowR
   const workspace = input.workspace ?? await RunWorkspace.create({ root: input.root, mode: input.mode, environmentProfile: input.environmentProfile, ...(input.linkedRunId === undefined ? {} : { linkedRunId: input.linkedRunId }) });
   if (workspace.mode !== input.mode) throw new QaSkillsError("Workflow mode must match its runtime-owned workspace", "ARTIFACT_BINDING");
   if (input.linkedRunId !== undefined && workspace.linkedRunId !== input.linkedRunId) throw new QaSkillsError("Workflow linked source must match its runtime-owned workspace", "ARTIFACT_BINDING");
-  const outputs = new Map<WorkflowOperationName, WorkflowOutput>();
+  const outputs: CorrelatedWorkflowOutputs = {};
   try {
     for (const name of order) {
       if (name === "register-exploration-charter") {
         if (!input.charter) throw new QaSkillsError("Exploratory workflow requires exactly one charter", "INVALID_ARTIFACT");
-        outputs.set(name, await registerCharter(workspace, input.charter));
+        outputs[name] = await registerCharter(workspace, input.charter);
         continue;
       }
       if (name === "select-regression") {
@@ -684,24 +813,25 @@ async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowR
         if (input.regression.sourceRunId) await importRegressionCases(workspace, input.regression.sourceRunId);
         const selection = selectRegressionCases(input.regression);
         const scope = await registerChangeScope({ workspace, changes: input.regression.changes, provenance: { kind: "declared-change", reference: "unsafe-test-seam" } });
-        outputs.set(name, await registerSelection(workspace, selection, scope));
+        outputs[name] = await registerSelection(workspace, selection, scope);
         continue;
       }
       if (name === "execute-browser-test") await assertApprovedCanonicalRevisions(workspace, input.approvedRevisionArtifactIds);
       if (name === "derive-retest-verdict") {
         if (!input.retest) throw new QaSkillsError("Retest workflow requires a source bug and reproduction", "ARTIFACT_BINDING");
-        outputs.set(name, await registerRetestResult(workspace, input.retest));
+        outputs[name] = await registerRetestResult(workspace, input.retest);
         continue;
       }
       const operation = registry[name];
       if (!operation) throw new QaSkillsError(`Workflow operation ${name} requires its typed runtime input`, "ARTIFACT_BINDING");
-      outputs.set(name, await operation({ name, workspace, input, outputs }));
+      const output = await operation({ name, workspace, input, outputs });
+      if (output !== undefined) outputs[name] = output as never;
       if (name === "reproduce-bug") {
         if (!input.retest) throw new QaSkillsError("Retest workflow requires a source bug and reproduction", "ARTIFACT_BINDING");
         await exactRetestReproduction(workspace, input.retest);
       }
     }
     const validation = await workspace.finalize(input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome: "COMPLETED", operationOrder: order, outputs, validation };
+    return { runId: workspace.runId, mode: input.mode, outcome: validation.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES", operationOrder: order, outputs, validation };
   } finally { if (ownsWorkspace) await workspace.close(); }
 }

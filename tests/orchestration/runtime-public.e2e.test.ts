@@ -147,7 +147,7 @@ describe("public runtime QA Tester", () => {
     expect(artifacts.filter((item) => item.record.type === "test-result").map((item) => item.value.status)).toEqual(["PASSED"]);
     expect(artifacts.some((item) => item.record.type === "evidence" && item.value.provenance && (item.value.provenance as { testcaseId?: string }).testcaseId === "TC-RUNTIME")).toBe(true);
     expect(artifacts.some((item) => item.record.type === "test-data-manifest")).toBe(true);
-    expect(result.outputs.get("ingest-coverage-obligation")).toMatchObject({ complete: true, satisfied: ["COV-RUNTIME"] });
+    expect(result.outputs["ingest-coverage-obligation"]).toEqual([expect.objectContaining({ type: "coverage-obligation" })]);
     expect(artifacts.some((item) => item.record.type === "release-gate")).toBe(true);
     expect(artifacts.some((item) => item.record.type === "qa-execution-report")).toBe(true);
     await workspace.close();

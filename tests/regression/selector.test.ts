@@ -22,6 +22,18 @@ describe("regression selection", () => {
     expect(result).toMatchObject({ complete: false, unmappedChangeRisks: [expect.objectContaining({ changeId: "unknown" })] });
   });
 
+  it("lets one testcase cover every matching change and retains deterministic combined rationale", () => {
+    const result = selectRegressionCases({
+      changes: [
+        { id: "change-a", requirementIds: ["REQ-A"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
+        { id: "change-b", requirementIds: ["REQ-B"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] },
+      ],
+      testCases: [{ testCaseId: "TC-SHARED", revisionId: "REV-1", instanceId: "WEB", requirementIds: ["REQ-A", "REQ-B"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }],
+    });
+    expect(result).toMatchObject({ complete: true, unmappedChangeRisks: [] });
+    expect(result.selected).toEqual([expect.objectContaining({ testCaseId: "TC-SHARED", source: "requirement-mapping", rationale: "requirement-mapping matched REQ-A for change-a; requirement-mapping matched REQ-B for change-b" })]);
+  });
+
   it("exposes every canonical mapping source from the public QA Tester surface and preserves its priority", () => {
     expect(regressionMappingSources).toEqual(["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"]);
     const result = selectRegressionCases({
