@@ -493,7 +493,7 @@ async function inspectWorkspaceState(
         }
       } else if (artifact.record.type === "regression-selection") {
         const decisions = [...array(value.selected), ...array(value.excluded)];
-        const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? valuesOf("test-case").filter((testCase) => testCase.value?.testCaseId === decision.testCaseId && testCase.value?.revisionId === decision.revisionId) : []);
+        const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? valuesOf("test-case").filter((testCase) => testCase.value?.testCaseId === decision.testCaseId && testCase.value?.revisionId === decision.revisionId && testCase.value?.instanceId === decision.instanceId) : []);
         const relationshipIds = [...artifact.record.relationships].sort();
         const expectedIds = decisionCases.map((testCase) => testCase.record.id).sort();
         const scope = artifacts.find((candidate) => candidate.valid && candidate.record.id === value.changeScopeArtifactId && candidate.record.type === "change-scope");
@@ -528,8 +528,9 @@ async function inspectWorkspaceState(
             const original = sourceBug === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value.attemptId === sourceBug.value.attemptId);
             sourceBugValid = sourceRecord.type === "bug-report" && sourceRecord.sha256 === value.sourceBugArtifactSha256 && sourceBug?.value.bugId === value.bugId;
             const sourceScenarios = original === undefined ? [] : sourceArtifacts.filter((candidate) => candidate.record.type === "test-result" && candidate.value?.testCaseId === original.value.testCaseId && candidate.value?.testCaseRevisionId === original.value.testCaseRevisionId && candidate.value?.failureClassification === "PRODUCT_DEFECT").map((candidate) => sourceScenarioId({ testCaseId: String(candidate.value.testCaseId), revisionId: String(candidate.value.testCaseRevisionId), instanceId: String(candidate.value.testCaseInstanceId) }));
+            const sourceIdentityMatches = scenarios.every((scenario) => isRecord(scenario) && sourceArtifacts.some((candidate) => candidate.record.id === scenario.sourceAttemptArtifactId && candidate.record.type === "test-result" && candidate.record.relationships.includes(String(scenario.sourceTestCaseArtifactId))));
             const reproducedScenarios = attempts.map((attempt) => attempt?.value === undefined ? "" : sourceScenarioId({ testCaseId: String(attempt.value.testCaseId), revisionId: String(attempt.value.testCaseRevisionId), instanceId: String(attempt.value.testCaseInstanceId) }));
-            reproductionMatchesSource = sourceScenarios.length > 0 && sameStringOccurrences(reproducedScenarios, sourceScenarios) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
+            reproductionMatchesSource = sourceScenarios.length > 0 && sourceIdentityMatches && sameStringOccurrences(reproducedScenarios, sourceScenarios) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
           } finally { await source.close(); }
         } catch { sourceBugValid = false; }
         if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || regressionAttempts.some((attempt) => !attempt) || !scenarioValid || value.regressionOutcome !== derivedOutcome || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
@@ -1345,7 +1346,7 @@ export class RunWorkspace {
         const regressionIds = Array.isArray(value.regressionAttemptIds) ? value.regressionAttemptIds : [];
         const regression = regressionIds.map((id) => attempts.find((attempt) => attempt?.attemptId === id));
         const scenarios = Array.isArray(value.reproductionScenarios) ? value.reproductionScenarios : [];
-        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
+        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && sourceArtifacts.some((artifact) => artifact.record.id === scenario.sourceAttemptArtifactId && artifact.record.type === "test-result" && artifact.record.relationships.includes(String(scenario.sourceTestCaseArtifactId)))) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
         const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => String(attempt?.status)));
         const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), regressionOutcome });
         const resultRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-result");
