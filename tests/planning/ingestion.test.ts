@@ -295,4 +295,30 @@ describe("planning ingestion", () => {
 
     await expect(ingestCoverageObligation({ ...fixture, sourcePath })).rejects.toThrow(/orphan|requirement/i);
   });
+
+  it("rejects a checksum-rewritten persisted coverage obligation that no longer binds its requirement", async () => {
+    const fixture = await setup();
+    const requirementPath = join(fixture.root, "requirements.json");
+    await writeFile(requirementPath, JSON.stringify(requirementAnalysis()));
+    const requirement = await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
+    const coveragePath = join(fixture.root, "coverage.json");
+    await writeFile(coveragePath, JSON.stringify({
+      artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+      obligationId: "COV-1", requirementId: "REQ-LOGIN", requirementAnalysisArtifactId: requirement.id,
+      role: "member", behavior: "sign in", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+    }));
+    const coverage = await ingestCoverageObligation({ ...fixture, sourcePath: coveragePath });
+    const tampered = JSON.parse(await readFile(coverage.absolutePath, "utf8")) as Record<string, unknown>;
+    tampered.requirementId = "REQ-ORPHAN";
+    const contents = `${JSON.stringify(tampered, null, 2)}\n`;
+    await writeFile(coverage.absolutePath, contents);
+    const manifestPath = join(fixture.workspacePath, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; sha256: string }[] };
+    const record = manifest.artifacts.find((artifact) => artifact.id === coverage.id);
+    if (!record) throw new Error("Expected registered coverage");
+    record.sha256 = sha256Text(contents);
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(RunWorkspace.open(fixture.root, fixture.runId)).rejects.toThrow(/coverage.*orphan|orphan.*requirement/i);
+  });
 });

@@ -117,6 +117,19 @@ function assertPersistedPlanningSemantics(artifact: LoadedArtifact, artifacts: r
     assertRequirementAuthorities(value);
     return;
   }
+  if (artifact.record.type === "coverage-obligation") {
+    if (typeof value.requirementId !== "string" || typeof value.requirementAnalysisArtifactId !== "string") {
+      throw new Error("Coverage obligation requirement binding is invalid");
+    }
+    const source = artifacts.find((candidate) => candidate.valid
+      && candidate.record.id === value.requirementAnalysisArtifactId
+      && candidate.record.type === "requirement-analysis");
+    const statements = source?.value?.statements;
+    if (!Array.isArray(statements) || statements.filter((statement) => isRecord(statement) && statement.requirementId === value.requirementId).length !== 1) {
+      throw new Error("Coverage obligation references an orphan or ambiguous requirement");
+    }
+    return;
+  }
   if (artifact.record.type !== "test-plan") return;
   const testCases = value.testCases;
   const approvalPolicy = value.approvalPolicy;
