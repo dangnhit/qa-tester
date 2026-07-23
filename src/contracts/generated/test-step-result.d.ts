@@ -8,4 +8,6 @@ export interface TestStepResult {
   stepId: string;
   status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
   durationMs: number;
+  observedActual?: string;
+  error?: string;
 }

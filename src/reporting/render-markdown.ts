@@ -1,22 +1,23 @@
 import type { QaReportModel } from "./report-model.js";
 
 const labels = {
-  en: { title: "QA Report", build: "Build", summary: "Summary", coverage: "Coverage methods", incidents: "Incidents", bugs: "Bugs", telemetry: "Telemetry findings", gaps: "Evidence Gaps", cleanup: "Cleanup leaks", critical: "Critical findings", risks: "Remaining risks", excluded: "Excluded / not run", release: "Release recommendation" },
-  vi: { title: "Báo cáo QA", build: "Bản dựng", summary: "Tóm tắt", coverage: "Phương pháp bao phủ", incidents: "Sự cố", bugs: "Lỗi", telemetry: "Phát hiện telemetry", gaps: "Khoảng trống bằng chứng", cleanup: "Rò rỉ dọn dẹp", critical: "Phát hiện nghiêm trọng", risks: "Rủi ro còn lại", excluded: "Loại trừ / chưa chạy", release: "Khuyến nghị phát hành" },
+  en: { title: "QA Report", build: "Build", summary: "Summary", coverage: "Coverage methods", incidents: "Incidents", bugs: "Bugs", telemetry: "Telemetry findings", gaps: "Evidence Gaps", cleanup: "Cleanup leaks", critical: "Critical findings", risks: "Remaining risks", excluded: "Excluded / not run", release: "Release recommendation", none: "None" },
+  vi: { title: "Báo cáo QA", build: "Bản dựng", summary: "Tóm tắt", coverage: "Phương pháp bao phủ", incidents: "Sự cố", bugs: "Lỗi", telemetry: "Phát hiện telemetry", gaps: "Khoảng trống bằng chứng", cleanup: "Rò rỉ dọn dẹp", critical: "Phát hiện nghiêm trọng", risks: "Rủi ro còn lại", excluded: "Loại trừ / chưa chạy", release: "Khuyến nghị phát hành", none: "Không có" },
 } as const;
 type Locale = keyof typeof labels;
 
 function item(value: unknown): string { return `- ${typeof value === "string" ? value : JSON.stringify(value)}`; }
-function section(heading: string, values: readonly unknown[]): string { return `## ${heading}\n${values.length === 0 ? "- None" : values.map(item).join("\n")}`; }
+function section(values: readonly unknown[], none: string): string { return values.length === 0 ? `- ${none}` : values.map(item).join("\n"); }
 
 /** Markdown changes headings and labels only; canonical values are never translated. */
 export function renderMarkdown(model: QaReportModel, locale: Locale): string {
   const l = labels[locale];
-  return [
-    `# ${l.title}`, `## ${l.build}\n${model.build.identifier}`, `## ${l.summary}\n${model.summary}`,
-    section(l.coverage, model.coverageMethods), section(l.incidents, model.incidents), section(l.bugs, model.bugs),
-    section(l.telemetry, model.telemetryFindings), section(l.gaps, model.evidenceGaps), section(l.cleanup, model.cleanupLeaks),
-    section(l.critical, model.criticalFindings), section(l.risks, model.remainingRisks), section(l.excluded, model.excludedNotRun),
-    `## ${l.release}\n${model.releaseGate.recommendation}`,
-  ].join("\n\n") + "\n";
+  const template = readFileSync(fileURLToPath(new URL(`../../shared/templates/report.${locale}.md`, import.meta.url)), "utf8");
+  const values: Record<string, string> = {
+    title: l.title, build_label: l.build, summary_label: l.summary, coverage_label: l.coverage, incidents_label: l.incidents, bugs_label: l.bugs, telemetry_label: l.telemetry, gaps_label: l.gaps, cleanup_label: l.cleanup, critical_label: l.critical, risks_label: l.risks, excluded_label: l.excluded, release_label: l.release,
+    build: model.build.identifier, summary: model.summary, coverage: section(model.coverageMethods, l.none), incidents: section(model.incidents, l.none), bugs: section(model.bugs, l.none), telemetry: section(model.telemetryFindings, l.none), gaps: section(model.evidenceGaps, l.none), cleanup: section(model.cleanupLeaks, l.none), critical: section(model.criticalFindings, l.none), risks: section(model.remainingRisks, l.none), excluded: section(model.excludedNotRun, l.none), release: model.releaseGate.recommendation,
+  };
+  return `${template.replace(/{{([a-z_]+)}}/g, (_token, key: string) => values[key] ?? "")}`.replace(/\n?$/, "\n");
 }
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";

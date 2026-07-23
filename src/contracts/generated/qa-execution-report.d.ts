@@ -30,6 +30,9 @@ export interface QAExecutionReport {
   remainingRisks: string[];
   excludedNotRun: string[];
   releaseGate: {
+    sourceArtifacts: {
+      [k: string]: unknown | undefined;
+    }[];
     recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
     ruleInputs: {
       [k: string]: unknown | undefined;

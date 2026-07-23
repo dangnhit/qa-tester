@@ -9,6 +9,8 @@ export type ReleaseGateInput = Readonly<{
 }>;
 export type RuleVerdict = Readonly<{ rule: string; passed: boolean; reason: string }>;
 export type ReleaseGateResult = Readonly<{ recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY"; ruleInputs: ReleaseGateInput; verdicts: readonly RuleVerdict[] }>;
+export type GateSourceArtifact = Readonly<{ id: string; sha256: string; type: string }>;
+export type DerivedReleaseGate = ReleaseGateResult & Readonly<{ sourceArtifacts: readonly GateSourceArtifact[] }>;
 
 /** Deterministic policy only: narrative code may describe this result but cannot alter it. */
 export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult {
@@ -34,4 +36,20 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateResult 
     reason: open.length === 0 ? "No open product defect remains." : `Open non-critical product bugs: ${nonCritical.map((bug) => bug.bugId).join(", ")}.`,
   };
   return { recommendation: hasRisks ? "READY_WITH_RISKS" : "READY", ruleInputs: input, verdicts: [...verdicts, completion] };
+}
+
+/** Binds the gate to the exact immutable source artifact records used to evaluate it. */
+export function deriveReleaseGateFromArtifacts(input: Readonly<{
+  artifactRecords: readonly GateSourceArtifact[];
+  coverage: ReleaseGateInput["coverage"];
+  bugs: readonly GateBug[];
+  incidents: readonly unknown[];
+  evidenceGaps: readonly unknown[];
+  cleanupLeaks: readonly unknown[];
+  sharedBlockers: readonly string[];
+  artifactsValid: boolean;
+}>): DerivedReleaseGate {
+  const sourceArtifacts = [...input.artifactRecords].sort((left, right) => left.id.localeCompare(right.id));
+  const result = evaluateReleaseGate({ artifactsValid: input.artifactsValid, coverage: input.coverage, bugs: input.bugs, sharedBlockers: input.sharedBlockers });
+  return { ...result, sourceArtifacts };
 }

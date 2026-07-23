@@ -1,6 +1,15 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export interface QAIncidentOrInvestigationFinding {
+export type QAIncidentOrInvestigationFinding = (
+  | {
+      evidenceIds: unknown;
+      [k: string]: unknown | undefined;
+    }
+  | {
+      evidenceGapIds: unknown;
+      [k: string]: unknown | undefined;
+    }
+) & {
   artifactType: "incident";
   schemaVersion: "1.0.0";
   producerVersion: string;
@@ -15,7 +24,14 @@ export interface QAIncidentOrInvestigationFinding {
     classification: "local" | "test" | "staging" | "production";
     baseUrl: string;
   };
-  evidenceIds: string[];
+  /**
+   * @minItems 1
+   */
+  evidenceIds: [string, ...string[]];
+  /**
+   * @minItems 1
+   */
+  evidenceGapIds?: [string, ...string[]];
   /**
    * @minItems 1
    */
@@ -24,4 +40,4 @@ export interface QAIncidentOrInvestigationFinding {
   provenance: {
     sourceAttemptId: string;
   };
-}
+};

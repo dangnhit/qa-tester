@@ -5,6 +5,11 @@ export interface ReleaseGate {
   schemaVersion: "1.0.0";
   producerVersion: string;
   runId: string;
+  sourceArtifacts: {
+    id: string;
+    sha256: string;
+    type: string;
+  }[];
   recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
   ruleInputs: {
     [k: string]: unknown | undefined;

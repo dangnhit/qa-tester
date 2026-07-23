@@ -34,6 +34,11 @@ export interface EvidenceItem {
     }[]
   ];
   pendingAttempt?: boolean;
+  telemetryFindings?: {
+    kind: "console" | "network";
+    level: string;
+    message: string;
+  }[];
   provenance: {
     captureType: "screenshot" | "trace" | "console" | "network" | "log";
     dimensions: Viewport;

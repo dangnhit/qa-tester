@@ -21,7 +21,7 @@ function result(runId: string, attemptId: string, classification: "PRODUCT_DEFEC
 async function evidence(workspace: RunWorkspace, attemptId: string) {
   return workspace.registerEvidenceBundle({
     binaries: [{ filename: "failure.txt", contents: Buffer.from("failure"), mediaType: "text/plain", captureType: "log" }],
-    descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId, kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "https://example.test", viewport: { width: 1, height: 1 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:01:00.000Z" } }),
+    descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId, kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "scrubbed telemetry" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "https://example.test", viewport: { width: 1, height: 1 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:01:00.000Z" } }),
   });
 }
 
@@ -40,6 +40,7 @@ describe("report generation operations", () => {
     const registered = await workspace.readRegisteredArtifacts();
 
     expect(report.json).toContain("NOT_READY");
+    expect(report.json).toContain("scrubbed telemetry");
     expect(report.markdown).toContain("# Báo cáo QA");
     expect(registered.filter((artifact) => artifact.record.type === "bug-report")).toHaveLength(1);
     expect(registered.filter((artifact) => artifact.record.type === "release-gate")).toHaveLength(1);
@@ -53,7 +54,7 @@ describe("report generation operations", () => {
     await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
     await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-TEST", "TEST_DEFECT"), relationships: [] });
 
-    await expect(generateBugReport({ workspace, attemptId: "ATTEMPT-TEST", triage: { status: "TRIAGED", severity: "Blocker", priorityRecommendation: "P0", testPriority: "critical", openQuestions: [] } })).resolves.toMatchObject({ kind: "INCIDENT" });
+    await expect(generateBugReport({ workspace, attemptId: "ATTEMPT-TEST", triage: { status: "TRIAGED", severity: "Blocker", priorityRecommendation: "P0", testPriority: "critical", openQuestions: [] } })).rejects.toThrow(/evidence|gap/i);
     expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "bug-report")).toBe(false);
     await workspace.close();
   });

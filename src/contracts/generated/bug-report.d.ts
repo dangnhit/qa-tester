@@ -34,6 +34,12 @@ export type ProductBug = {
     evidenceArtifactIds: string[];
   };
   fingerprint: string;
+  possibleDuplicateSources?: {
+    runId: string;
+    artifactId: string;
+    bugId: string;
+    fingerprint: string;
+  }[];
   open: boolean;
 };
 

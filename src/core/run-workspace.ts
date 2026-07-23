@@ -6,6 +6,7 @@ import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/t
 import { validateArtifact } from "../contracts/validator.js";
 import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
+import { evaluateReleaseGate } from "../reporting/release-gate.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
 import {
@@ -1065,11 +1066,24 @@ export class RunWorkspace {
           : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
       if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind) throw new QaSkillsError("Incident kind must derive from a registered non-product attempt", "ARTIFACT_BINDING");
       const evidenceItems = await this.readRegisteredValues(manifest, "evidence");
-      if (!Array.isArray(value.evidenceIds) || !value.evidenceIds.every((id) => evidenceItems.some((evidence) => evidence.evidenceId === id && evidence.attemptId === value.attemptId))) {
-        throw new QaSkillsError("Incident references unregistered evidence for its attempt", "ARTIFACT_BINDING");
+      const gaps = await this.readRegisteredValues(manifest, "evidence-gap");
+      const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => evidenceItems.some((evidence) => evidence.evidenceId === id && evidence.attemptId === value.attemptId && evidence.runId === this.runId));
+      const validGap = Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0 && value.evidenceGapIds.every((id) => gaps.some((gap) => gap.attemptId === value.attemptId && gap.runId === this.runId && gap.evidenceGapId === id));
+      if (!validEvidence && !validGap) {
+        throw new QaSkillsError("Incident requires registered evidence or an evidence gap for its exact attempt", "ARTIFACT_BINDING");
       }
     } else if (type === "release-gate") {
-      if (value.runId !== this.runId) throw new QaSkillsError("Release gate run does not match workspace", "ARTIFACT_BINDING");
+      const sources = Array.isArray(value.sourceArtifacts) ? value.sourceArtifacts : [];
+      const expectedSources = manifest.artifacts.filter((artifact) => artifact.mediaType === undefined).map((artifact) => ({ id: artifact.id, sha256: artifact.sha256, type: artifact.type })).sort((left, right) => left.id.localeCompare(right.id));
+      const sameSources = sources.length === expectedSources.length && sources.every((source, index) => isRecord(source) && source.id === expectedSources[index]?.id && source.sha256 === expectedSources[index]?.sha256 && source.type === expectedSources[index]?.type);
+      if (value.runId !== this.runId || !sameSources || !isRecord(value.ruleInputs)) {
+        throw new QaSkillsError("Release gate source snapshot is not bound to registered artifacts", "ARTIFACT_BINDING");
+      }
+      let recomputed: ReturnType<typeof evaluateReleaseGate>;
+      try { recomputed = evaluateReleaseGate(value.ruleInputs as Parameters<typeof evaluateReleaseGate>[0]); } catch { throw new QaSkillsError("Release gate inputs are invalid", "ARTIFACT_BINDING"); }
+      if (value.recommendation !== recomputed.recommendation || JSON.stringify(value.verdicts) !== JSON.stringify(recomputed.verdicts) || JSON.stringify(value.ruleInputs) !== JSON.stringify(recomputed.ruleInputs)) {
+        throw new QaSkillsError("Release gate verdict is not derived from its canonical input snapshot", "ARTIFACT_BINDING");
+      }
     } else if (type === "qa-execution-report") {
       const gates = await this.readRegisteredValues(manifest, "release-gate");
       if (gates.length !== 1 || !isRecord(value.releaseGate) || value.releaseRecommendation !== value.releaseGate.recommendation

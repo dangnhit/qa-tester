@@ -150,7 +150,7 @@ const otherArtifactContracts = [
       generatedAt: "2026-07-23T12:34:56.000Z",
       releaseRecommendation: "READY",
       summary: "All planned checks completed.",
-      build: { identifier: "build-1" }, coverageMethods: [], incidents: [], bugs: [], telemetryFindings: [], evidenceGaps: [], cleanupLeaks: [], criticalFindings: [], remainingRisks: [], excludedNotRun: [], releaseGate: { recommendation: "READY", ruleInputs: {}, verdicts: [] },
+      build: { identifier: "build-1" }, coverageMethods: [], incidents: [], bugs: [], telemetryFindings: [], evidenceGaps: [], cleanupLeaks: [], criticalFindings: [], remainingRisks: [], excludedNotRun: [], releaseGate: { sourceArtifacts: [], recommendation: "READY", ruleInputs: {}, verdicts: [] },
     },
   },
   {
@@ -160,7 +160,7 @@ const otherArtifactContracts = [
       artifactType: "evidence-gap",
       schemaVersion: "1.0.0",
       producerVersion: "1.0.0",
-      runId: "20260723T123456Z-a1b2c3",
+      evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       reason: "The upstream system redacted the response.",
       affectedClaim: "The order was persisted successfully.",
     },
@@ -228,10 +228,10 @@ describe("validateArtifact", () => {
   it("validates typed non-product incidents and deterministic release-gate envelopes", () => {
     expect(validateArtifact("incident", {
       artifactType: "incident", schemaVersion: "1.0.0", producerVersion: "1.0.0", incidentId: "INC-1", runId: validRun.runId, attemptId: "ATTEMPT-1", kind: "TEST_INCIDENT", summary: "A test fixture failed.",
-      environment: { environmentProfileId: "env-staging", name: "Staging", classification: "staging", baseUrl: "https://staging.example.test" }, evidenceIds: [], affectedAreas: ["TC-1"], openQuestions: [], provenance: { sourceAttemptId: "ATTEMPT-1" },
+      environment: { environmentProfileId: "env-staging", name: "Staging", classification: "staging", baseUrl: "https://staging.example.test" }, evidenceIds: ["EVIDENCE-1"], affectedAreas: ["TC-1"], openQuestions: [], provenance: { sourceAttemptId: "ATTEMPT-1" },
     }).valid).toBe(true);
     expect(validateArtifact("release-gate", {
-      artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "1.0.0", runId: validRun.runId, recommendation: "READY", ruleInputs: {}, verdicts: [{ rule: "VALID_ARTIFACTS", passed: true, reason: "All registered artifacts are valid." }],
+      artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "1.0.0", runId: validRun.runId, sourceArtifacts: [], recommendation: "READY", ruleInputs: {}, verdicts: [{ rule: "VALID_ARTIFACTS", passed: true, reason: "All registered artifacts are valid." }],
     }).valid).toBe(true);
   });
 

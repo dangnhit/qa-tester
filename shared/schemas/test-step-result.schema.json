@@ -12,6 +12,6 @@
     "attemptId": { "type": "string", "minLength": 1 },
     "stepId": { "type": "string", "minLength": 1 },
     "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
-    "durationMs": { "type": "integer", "minimum": 0 }
+    "durationMs": { "type": "integer", "minimum": 0 }, "observedActual": { "type": "string", "minLength": 1 }, "error": { "type": "string", "minLength": 1 }
   }
 }

@@ -1,5 +1,5 @@
 import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
-import { evaluateReleaseGate, type GateBug } from "../reporting/release-gate.js";
+import { deriveReleaseGateFromArtifacts, type GateBug } from "../reporting/release-gate.js";
 import { toQaExecutionReport, type QaReportModel } from "../reporting/report-model.js";
 import { renderCanonicalJson } from "../reporting/render-json.js";
 import { renderMarkdown } from "../reporting/render-markdown.js";
@@ -48,7 +48,7 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const bugs = artifacts.filter((artifact) => artifact.record.type === "bug-report").map((artifact) => artifact.value);
   const gateBugs = bugs.map(asGateBug).filter((bug): bug is GateBug => bug !== undefined);
   const sharedBlockers = artifacts.filter((artifact) => artifact.record.type === "incident" && artifact.value.kind === "ENVIRONMENT_INCIDENT").map((artifact) => `Environment incident ${String(artifact.value.incidentId)}`);
-  const gateResult = evaluateReleaseGate({ artifactsValid: true, coverage: { requiredMissing: coverage.evaluation.missing, optionalGaps: coverage.optionalGaps, requiredHighRisk: coverage.highRisk }, bugs: gateBugs, sharedBlockers });
+  const gateResult = deriveReleaseGateFromArtifacts({ artifactRecords: artifacts.map((artifact) => ({ id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type })), artifactsValid: true, coverage: { requiredMissing: coverage.evaluation.missing, optionalGaps: coverage.optionalGaps, requiredHighRisk: coverage.highRisk }, bugs: gateBugs, incidents: artifacts.filter((artifact) => artifact.record.type === "incident").map((artifact) => artifact.value), evidenceGaps: artifacts.filter((artifact) => artifact.record.type === "evidence-gap").map((artifact) => artifact.value), cleanupLeaks: [], sharedBlockers });
   const gateValue = { artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, ...gateResult };
   const gate = await input.workspace.registerArtifactValue({ type: "release-gate", value: gateValue, relationships: artifacts.map((artifact) => artifact.record.id), provenance: "runtime" });
   const evidence = artifacts.filter((artifact) => artifact.record.type === "evidence");
@@ -59,7 +59,8 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const excludedNotRun = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "NOT_RUN").map((artifact) => str(artifact.value.testCaseId) ?? artifact.record.id);
   const criticalFindings = gateBugs.filter((bug) => bug.open && (bug.severity === "Blocker" || bug.severity === "Critical")).map((bug) => bug.bugId);
   const remainingRisks = [...coverage.optionalGaps, ...gateBugs.filter((bug) => bug.open && bug.severity !== "Blocker" && bug.severity !== "Critical").map((bug) => bug.bugId), ...evidenceGaps.map((gap) => str(gap.reason) ?? "Evidence gap")];
-  const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${artifacts.filter((artifact) => artifact.record.type === "test-result").length} registered attempts evaluated.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings: [], evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, releaseGate: gateResult };
+  const telemetryFindings = evidence.flatMap((artifact) => array(artifact.value.telemetryFindings).filter(record).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, attemptId: artifact.value.attemptId })));
+  const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${artifacts.filter((artifact) => artifact.record.type === "test-result").length} registered attempts evaluated.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, releaseGate: gateResult };
   const value = toQaExecutionReport(model);
   const report = await input.workspace.registerArtifactValue({ type: "qa-execution-report", value, relationships: [gate.id, ...artifacts.map((artifact) => artifact.record.id)], provenance: "runtime" });
   return { gate, report, json: renderCanonicalJson(model), markdown: renderMarkdown(model, input.locale ?? "en") };
