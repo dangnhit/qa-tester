@@ -70,4 +70,35 @@ describe("test-data operations", () => {
     await expect(prepareTestData({ workspace, hooks, hookIds: ["seed"] })).rejects.toThrow(/production/i);
     await workspace.close();
   });
+
+  it("marks a linked cleanup run completed with failures while retaining reverse-order results", async () => {
+    const root = await mkdtemp("/tmp/qa-data-");
+    const source = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment("test") });
+    const hooks = new TestDataHookRegistry([{ id: "seed", kind: "api", fixture: "seed" }], { api: () => Promise.resolve([{ id: "first", cleanupAction: "delete" }, { id: "last", cleanupAction: "delete" }]) });
+    const sourceManifest = await prepareTestData({ workspace: source, hooks, hookIds: ["seed"] });
+    await source.finalize("execute", "ABORTED");
+    await source.close();
+    const calls: string[] = [];
+    const outcome = await executeCleanupRun({ root, sourceRunId: sourceManifest.runId, execute: (resource) => {
+      calls.push(resource.id);
+      return resource.id === "last" ? Promise.reject(new Error("delete failed")) : Promise.resolve({ status: "already-absent" as const });
+    } });
+    expect(calls).toEqual(["last", "first"]);
+    expect(outcome.resources.map((resource) => resource.status)).toEqual(["failed", "cleaned"]);
+    expect(JSON.parse(await readFile(`${root}/qa-results/${outcome.cleanupRunId}/run-metadata.json`, "utf8"))).toMatchObject({ status: "COMPLETED_WITH_FAILURES", linkedRunId: sourceManifest.runId });
+  });
+
+  it("resolves secrets only in operation memory and scrubs hook outputs and errors", async () => {
+    const root = await mkdtemp("/tmp/qa-data-");
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment("test") });
+    const config = { configDirectory: root, snapshot: { version: 1, headers: { Authorization: "${ENV:DISTINCT_QA_SECRET}" } } };
+    const success = new TestDataHookRegistry([{ id: "seed", kind: "api", fixture: "seed" }], { api: (_descriptor, operation) => Promise.resolve([{ id: "resource", cleanupAction: `delete-${String((operation?.headers as Record<string, string>).Authorization)}` }]) });
+    const manifest = await prepareTestData({ workspace, hooks: success, hookIds: ["seed"], config, secretEnvironment: { DISTINCT_QA_SECRET: "distinctive-secret-value" } });
+    expect(JSON.stringify(config.snapshot)).toContain("${ENV:DISTINCT_QA_SECRET}");
+    expect(JSON.stringify(manifest)).not.toContain("distinctive-secret-value");
+    expect(JSON.stringify(await workspace.readRegisteredArtifacts())).not.toContain("distinctive-secret-value");
+    const failure = new TestDataHookRegistry([{ id: "fail", kind: "api", fixture: "fail" }], { api: (_descriptor, operation) => Promise.reject(new Error(`failed ${String((operation?.headers as Record<string, string>).Authorization)}`)) });
+    await expect(prepareTestData({ workspace, hooks: failure, hookIds: ["fail"], config, secretEnvironment: { DISTINCT_QA_SECRET: "distinctive-secret-value" } })).rejects.toThrow(/\[REDACTED\]/);
+    await workspace.close();
+  });
 });

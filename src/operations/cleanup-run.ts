@@ -27,7 +27,7 @@ export async function executeCleanupRun(input: Readonly<{
         sourceTestDataManifest: JSON.parse(JSON.stringify(data.value)) as Record<string, unknown>, resources: outcome.resources,
       };
       await cleanup.registerArtifactValue({ type: "cleanup-run", value, relationships: [], provenance: "runtime" });
-      await cleanup.finalize("cleanup");
+      await cleanup.finalize("cleanup", outcome.resources.some((resource) => resource.status === "failed") ? "COMPLETED_WITH_FAILURES" : undefined);
       return { cleanupRunId: cleanup.runId, sourceRunId: input.sourceRunId, resources: outcome.resources };
     } finally { await cleanup.close(); }
   } finally { await source.close(); }

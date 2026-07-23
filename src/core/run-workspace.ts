@@ -65,7 +65,7 @@ export type RegisteredWorkspaceArtifact = Readonly<{ record: ArtifactRecord; val
 export type WorkspacePersistence = {
   writeAtomic(root: string, path: string, contents: string | Uint8Array): Promise<void>;
 };
-export type ExplicitTerminalOutcome = Extract<RunStatus, "BLOCKED" | "ABORTED">;
+export type ExplicitTerminalOutcome = Extract<RunStatus, "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED">;
 
 const defaultPersistence: WorkspacePersistence = { writeAtomic: atomicWriteFile };
 const terminalStatuses = new Set<RunStatus>(["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"]);
@@ -781,7 +781,7 @@ export class RunWorkspace {
       if (profile !== this.mode) {
         throw new QaSkillsError(`Finalization profile ${profile} does not match run mode ${this.mode}`, "INVALID_PROFILE");
       }
-      if (outcome !== undefined && outcome !== "BLOCKED" && outcome !== "ABORTED") {
+      if (outcome !== undefined && outcome !== "COMPLETED_WITH_FAILURES" && outcome !== "BLOCKED" && outcome !== "ABORTED") {
         throw new QaSkillsError(`Unsupported terminal outcome ${String(outcome)}`, "ILLEGAL_TRANSITION");
       }
       if (this.exclusive) throw new QaSkillsError("Workspace is already finalizing", "ILLEGAL_TRANSITION");

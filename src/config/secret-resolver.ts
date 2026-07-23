@@ -30,3 +30,21 @@ function scrub(value: unknown, secrets: readonly string[]): unknown {
 export function scrubResolvedSecrets<T>(value: T, secrets: readonly string[]): T {
   return scrub(value, secrets) as T;
 }
+
+/** Runs one operation with ephemeral resolved values and guarantees returned data and thrown diagnostics are scrubbed. */
+export type ResolvedSecretOperation = Readonly<{ value: unknown; scrub: <T>(value: T) => T }>;
+
+export async function withResolvedSecrets<T>(
+  snapshot: unknown,
+  environment: Readonly<Record<string, string | undefined>>,
+  operation: (context: ResolvedSecretOperation) => Promise<T>,
+): Promise<T> {
+  const resolved = resolveSecretReferences(snapshot, environment);
+  try {
+    const scrub = <U>(value: U): U => scrubResolvedSecrets(value, resolved.values);
+    return scrub(await operation({ value: resolved.value, scrub }));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(scrubResolvedSecrets(message, resolved.values));
+  }
+}
