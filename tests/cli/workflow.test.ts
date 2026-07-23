@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/program.js";
-import { runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
+import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 
 const roots: string[] = [];
@@ -12,6 +12,44 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "env", name: "Fixture", classification: "test", baseUrl: "https://fixture.test", productionReadOnly: false } as const;
 
 describe("workflow scaffold", () => {
+  it("bootstraps the first complete terminal planning bundle from explicit canonical files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-workflow-bootstrap-")); roots.push(root);
+    const paths = {
+      environment: join(root, "environment.json"),
+      requirement: join(root, "requirement.json"),
+      plan: join(root, "plan.json"),
+      testcase: join(root, "testcase.json"),
+      coverage: join(root, "coverage.json"),
+    };
+    const requirement = { artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA", statements: [{ requirementId: "REQ", sourceProvenance: { kind: "user", reference: "fixture" }, normalizedText: "User must save", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }] };
+    const plan = { artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN", approvalPolicy: { mode: "human-review" }, testCases: [{ testCaseId: "TC", title: "Save", expectedResults: [{ id: "ER", requirementId: "REQ", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }] };
+    const testcase = { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC", revisionId: "REV", instanceId: "INSTANCE", title: "Save", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } };
+    const coverage = { artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV", requirementAnalysisArtifactId: "replaced-atomically", requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true };
+    await Promise.all([
+      writeFile(paths.environment, JSON.stringify(environment)),
+      writeFile(paths.requirement, JSON.stringify(requirement)),
+      writeFile(paths.plan, JSON.stringify(plan)),
+      writeFile(paths.testcase, JSON.stringify(testcase)),
+      writeFile(paths.coverage, JSON.stringify(coverage)),
+    ]);
+
+    const bootstrapped = await bootstrapPlanningBundle({
+      root,
+      environmentPath: paths.environment,
+      requirementPath: paths.requirement,
+      planPath: paths.plan,
+      testCasePaths: [paths.testcase],
+      coveragePaths: [paths.coverage],
+    });
+    expect(bootstrapped.bundle.artifacts).toHaveLength(4);
+    const source = await RunWorkspace.open(root, bootstrapped.runId);
+    const metadata = JSON.parse(await readFile(join(source.path, "run-metadata.json"), "utf8")) as { status: string };
+    expect(metadata.status).toBe("COMPLETED");
+    expect((await source.readRegisteredArtifacts()).map((artifact) => artifact.record.type).sort())
+      .toEqual(["coverage-obligation", "environment-profile", "requirement-analysis", "test-case", "test-plan"]);
+    await source.close();
+  });
+
   it("creates parseable plan and source-bound inputs without scanning for a latest run", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-scaffold-")); roots.push(root);
     const envPath = join(root, "environment.json"); const planPath = join(root, "plan.json");

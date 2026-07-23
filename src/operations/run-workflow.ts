@@ -10,7 +10,7 @@ import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
 import { activeBrowserSessions, executeTestInstance } from "./execute-browser-test.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
-import { attachEvidence, captureEvidence, recordEvidenceGap } from "../evidence/collector.js";
+import { attachEvidence, captureEvidence, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
 import { normalizeGeometry } from "../evidence/geometry.js";
 import { redactText } from "../evidence/redaction.js";
@@ -24,6 +24,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEntityId } from "../core/ids.js";
 import { validateArtifact } from "../contracts/validator.js";
+import type { ExternalPermitRegistry } from "../safety/external-permits.js";
+import { evaluatePublicTerminalProfile } from "../core/artifact-profiles.js";
 
 /** Closed operation contracts: the public adapter cannot inject callbacks or untyped objects. */
 export type WorkflowOperationInputMap = {
@@ -81,6 +83,8 @@ export type QaRuntimeRegistry = Readonly<{
   secretResolvers?: Readonly<Record<string, SecretResolver>>;
   testDataRegistries?: Readonly<Record<string, TestDataHookRegistry>>;
   evidencePolicies?: Readonly<Record<string, EvidencePolicyLayers>>;
+  telemetryScrubbers?: Readonly<Record<string, TelemetryScrubber>>;
+  externalPermitRegistries?: Readonly<Record<string, ExternalPermitRegistry>>;
   changeScopeSources?: Readonly<Record<string, Readonly<{ changes: readonly ChangeScope[]; provenance: { kind: "git-diff" | "user-change" | "declared-change"; reference: string } }>>>;
 }>;
 
@@ -97,12 +101,13 @@ export type QaWorkflowInput = Readonly<{
   /** Reopens the same nonterminal run after its checkpointed runtime becomes available. */
   resumeRunId?: string;
   linkedRunId?: string;
-  runtime?: Readonly<{ browserManagerId?: string; secretResolverId?: string; testDataRegistryId?: string; testDataHookIds?: readonly string[]; evidencePolicyId?: string; changeScopeSourceId?: string }>;
+  runtime?: Readonly<{ browserManagerId?: string; secretResolverId?: string; testDataRegistryId?: string; testDataHookIds?: readonly string[]; evidencePolicyId?: string; externalPermitRegistryId?: string; changeScopeSourceId?: string }>;
   charter?: ExplorationCharter;
   retest?: Readonly<{ sourceBug: RegisteredArtifactRef }>;
 }>;
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value as unknown[] : []; }
 
 function artifactRecord(value: unknown): value is ArtifactRecord {
   return record(value) && typeof value.id === "string" && typeof value.sha256 === "string" && typeof value.type === "string" && typeof value.relativePath === "string";
@@ -296,16 +301,38 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
     if (selected.length !== requested.size) throw new QaSkillsError("Canonical plan bundle references an unknown source record", "ARTIFACT_BINDING");
     const accepted = new Set(["requirement-analysis", "test-plan", "test-case", "coverage-obligation"]);
     if (selected.some((item) => !accepted.has(item.record.type))) throw new QaSkillsError("Canonical plan bundle contains a non-planning artifact", "ARTIFACT_BINDING");
-    const imported = new Map<string, ArtifactRecord>();
+    for (const type of accepted) if (!selected.some((item) => item.record.type === type)) throw new QaSkillsError(`Canonical plan bundle is incomplete: missing ${type}`, "ARTIFACT_BINDING");
+    const selectedIds = new Set(selected.map((item) => item.record.id));
+    const sourcePlanningIds = new Set(loaded.filter((item) => accepted.has(item.record.type)).map((item) => item.record.id));
+    if (selected.some((item) => item.record.relationships.some((id) => sourcePlanningIds.has(id) && !selectedIds.has(id)))) {
+      throw new QaSkillsError("Canonical plan bundle omits a planning dependency", "ARTIFACT_BINDING");
+    }
+    const cases = selected.filter((item) => item.record.type === "test-case");
+    const plans = selected.filter((item) => item.record.type === "test-plan");
+    for (const plan of plans) {
+      const entries = Array.isArray(plan.value.testCases) ? plan.value.testCases : [];
+      for (const entry of entries) {
+        if (!record(entry) || !record(entry.browserExecution)) continue;
+        const execution = entry.browserExecution;
+        const matches = cases.filter((item) => item.value.testCaseId === entry.testCaseId && item.value.revisionId === execution.revisionId && item.value.instanceId === execution.instanceId);
+        if (matches.length !== 1) throw new QaSkillsError("Canonical plan bundle must contain every exact executable testcase revision and instance", "ARTIFACT_BINDING");
+      }
+    }
+    const obligations = selected.filter((item) => item.record.type === "coverage-obligation");
+    const requiredRequirementIds = new Set(plans.flatMap((plan) => array(plan.value.testCases)).flatMap((entry) => record(entry) ? array(entry.expectedResults) : []).flatMap((expected) => record(expected) && typeof expected.requirementId === "string" ? [expected.requirementId] : []));
+    for (const requirementId of requiredRequirementIds) if (!obligations.some((item) => item.value.requirementId === requirementId)) throw new QaSkillsError("Canonical plan bundle omits a coverage obligation for a planned expected result", "ARTIFACT_BINDING");
     const environment = (await workspace.readRegisteredArtifacts()).find((item) => item.record.type === "environment-profile")?.value;
     if (typeof environment?.classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
-    const copy = async (type: "requirement-analysis" | "test-plan" | "test-case" | "coverage-obligation", item: (typeof selected)[number]): Promise<void> => {
+    const batch = [...selected].sort((left, right) => {
+      const order = ["requirement-analysis", "test-plan", "test-case", "coverage-obligation"];
+      return order.indexOf(left.record.type) - order.indexOf(right.record.type) || left.record.id.localeCompare(right.record.id);
+    }).map((item) => {
+      const type = item.record.type as "requirement-analysis" | "test-plan" | "test-case" | "coverage-obligation";
       const value = JSON.parse(JSON.stringify(item.value)) as Record<string, unknown>;
+      let referenceFields: Record<string, string> | undefined;
       if (type === "coverage-obligation") {
         const sourceAnalysis = asString(value.requirementAnalysisArtifactId, "coverage obligation requirement analysis ID");
-        const localAnalysis = imported.get(sourceAnalysis);
-        if (!localAnalysis) throw new QaSkillsError("Canonical coverage obligation precedes its requirement analysis", "ARTIFACT_BINDING");
-        value.requirementAnalysisArtifactId = localAnalysis.id;
+        referenceFields = { requirementAnalysisArtifactId: sourceAnalysis };
       }
       if (type === "test-plan") {
         // A plan's approval is always re-derived in the target workspace from
@@ -314,12 +341,16 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
         // self-asserted value and is rejected by workspace registration.
         delete value.approvalDecision;
       }
-      const relationships = item.record.relationships.map((id) => imported.get(id)?.id).filter((id): id is string => id !== undefined);
-      const registered = await workspace.registerArtifactValue({ type, value, relationships, provenance: `runtime-import:${bundle.sourceRunId}:${item.record.id}` });
-      imported.set(item.record.id, registered);
-    };
-    for (const type of ["requirement-analysis", "test-plan", "test-case", "coverage-obligation"] as const) for (const item of selected.filter((candidate) => candidate.record.type === type)) await copy(type, item);
-    return imported;
+      return {
+        key: item.record.id,
+        type,
+        value,
+        relationshipKeys: item.record.relationships.filter((id) => selectedIds.has(id)),
+        ...(referenceFields === undefined ? {} : { referenceFields }),
+        provenance: `runtime-import:${bundle.sourceRunId}:${item.record.id}`,
+      };
+    });
+    return workspace.registerArtifactValueBatch(batch);
   } finally { await source.close(); }
 }
 
@@ -343,7 +374,7 @@ function capturePolicyForEnvironment(environment: Record<string, unknown>, host:
   const runtime = host.protection ?? {};
   return {
     protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true,
-    deterministicTelemetryScrubber: runtime.deterministicTelemetryScrubber === true,
+    telemetryScrubberId: runtime.telemetryScrubberId,
     redaction: {
       domSelectors: [...new Set([...stringArray(profile.domSelectors), ...stringArray(runtime.domSelectors)])],
       regions: [...redactionRegions(profile.regions), ...redactionRegions(runtime.regions)],
@@ -359,6 +390,16 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
   if (!record(environment)) throw new QaSkillsError("Runtime execution requires a registered environment profile", "ARTIFACT_BINDING");
   const capturePolicy = capturePolicyForEnvironment(environment, policyLayers);
+  const telemetryScrubber = capturePolicy.telemetryScrubberId === undefined
+    ? undefined
+    : resolveRuntime(runtime.telemetryScrubbers, capturePolicy.telemetryScrubberId, "telemetry scrubber");
+  const externalPermitRegistry = ids.externalPermitRegistryId === undefined
+    ? undefined
+    : resolveRuntime(runtime.externalPermitRegistries, ids.externalPermitRegistryId, "external permit registry");
+  const executionEnvironment = {
+    classification: environment.classification as "local" | "test" | "staging" | "production",
+    productionReadOnly: environment.productionReadOnly === true,
+  };
   const results: ArtifactRecord[] = [];
   for (const [caseIndex, testCaseArtifactId] of caseArtifactIds.entries()) {
     const artifacts = await workspace.readRegisteredArtifacts();
@@ -376,7 +417,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
     }
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
     const traceActive = policy.trace === "on-failure" || policy.trace === "always" || policy.trace === "required";
-    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(traceActive ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
+    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, environment: executionEnvironment, ...(externalPermitRegistry === undefined ? {} : { externalPermitRegistry }), ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(traceActive ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
       const retainTrace = policy.trace === "always" || policy.trace === "required" || (policy.trace === "on-failure" && attempt.status !== "PASSED");
       if (traceActive) {
         const unsafeTraceReason = capturePolicy.protectedEnvironment
@@ -421,7 +462,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
         }
       }
       const attachment = async (telemetry: "console" | "network" | "log") => {
-        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, deterministicScrubberRegistered: capturePolicy.deterministicTelemetryScrubber, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
+        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, ...(telemetryScrubber === undefined ? {} : { telemetryScrubber }), testcaseId: asString(testCase.value.testCaseId, "test case ID") });
         void evidence;
       };
       if (policy.logs !== "forbidden" && policy.logs !== "off") await attachment("log");
@@ -454,6 +495,9 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
             }
           }
         }
+      }
+      if (policy.video === "required") {
+        await recordEvidenceGap({ workspace, attemptId, reason: "Required video capture is unsupported by the active browser manager", affectedClaim: "video capture" });
       }
     } });
     const after = await workspace.readRegisteredArtifacts();
@@ -672,8 +716,11 @@ export function createQaTesterWithTraceForTests(runtime: QaRuntimeRegistry, trac
 
 /** Finalizes once and derives the returned outcome from the same facts persisted in run metadata. */
 export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: PublicWorkflowMode): Promise<{ outcome: Extract<WorkflowTerminalStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">; validation: WorkspaceValidation }> {
-  const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
-  const validation = await workspace.finalize(mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+  const artifacts = await workspace.readRegisteredArtifacts();
+  const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
+  const terminal = evaluatePublicTerminalProfile(mode, artifacts.map((artifact) => artifact.record.type));
+  const structural = await workspace.finalize(mode, hasExecutionFailures || !terminal.valid ? "COMPLETED_WITH_FAILURES" : undefined);
+  const validation = { valid: structural.valid && terminal.valid, diagnostics: [...structural.diagnostics, ...terminal.diagnostics] };
   return { outcome: hasExecutionFailures || !validation.valid ? "COMPLETED_WITH_FAILURES" : "COMPLETED", validation };
 }
 
@@ -752,11 +799,22 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
   const needsBundle = ["plan", "execute", "full", "regression", "retest"].includes(state.input.mode);
   if (!needsBundle) return;
   if (!state.input.bundle) throw new QaSkillsError("Workflow requires a checksum-bound canonical plan bundle", "ARTIFACT_BINDING");
-  if (!(await state.workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) {
+  const all = await state.workspace.readRegisteredArtifacts();
+  if (state.importedArtifactIds.length === 0) {
+    if (all.some((artifact) => artifact.record.provenance.startsWith(`runtime-import:${state.input.bundle!.sourceRunId}:`))) {
+      throw new QaSkillsError("Workflow checkpoint omits already-imported canonical bundle artifacts", "ARTIFACT_BINDING");
+    }
     const imported = await importCanonicalPlanBundle(state.workspace, state.input.bundle);
     state.importedArtifactIds = [...imported.values()].map((artifact) => artifact.id);
+  } else {
+    const imported = all.filter((artifact) => state.importedArtifactIds.includes(artifact.record.id));
+    const expected = new Set(state.input.bundle.artifacts.map((artifact) => `runtime-import:${state.input.bundle!.sourceRunId}:${artifact.artifactId}`));
+    if (imported.length !== expected.size || imported.some((artifact) => !expected.has(artifact.record.provenance))
+      || [...expected].some((provenance) => !imported.some((artifact) => artifact.record.provenance === provenance))) {
+      throw new QaSkillsError("Workflow checkpoint canonical bundle mapping is incomplete or does not match the exact source artifacts", "ARTIFACT_BINDING");
+    }
   }
-  if (state.executionCaseIds.length === 0) state.executionCaseIds = (await state.workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-case").map((artifact) => artifact.record.id);
+  if (state.executionCaseIds.length === 0) state.executionCaseIds = (await state.workspace.readRegisteredArtifacts()).filter((artifact) => state.importedArtifactIds.includes(artifact.record.id) && artifact.record.type === "test-case").map((artifact) => artifact.record.id);
 }
 
 async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWorkflowInput, adapters: typeof closedOperationAdapters): Promise<WorkflowResult> {

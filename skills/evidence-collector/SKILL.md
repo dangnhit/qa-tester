@@ -18,6 +18,16 @@ QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(
 "$QA_SKILL" workflow run --input execute-workflow.json
 ```
 
+PowerShell:
+
+```powershell
+$QaSkill = Join-Path $PWD "node_modules/.bin/qa-skill.cmd"
+if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction Stop).Source }
+& $QaSkill runtime verify --range ">=0.1.0 <1.0.0"
+& $QaSkill workflow scaffold --root . --mode execute --output execute-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+& $QaSkill workflow run --input execute-workflow.json
+```
+
 Expected outputs are redacted evidence descriptors/binaries or `evidence-gap` artifacts. Example — full run: scaffold with `--mode full --source-root . --source-run-id SOURCE_RUN_ID`, then run the returned JSON.
 
 Example — full run: retain registered evidence or gaps for runtime defect and report generation after validation.

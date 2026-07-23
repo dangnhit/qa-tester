@@ -7,6 +7,9 @@ export interface EvidenceAnnotation {
   evidenceId: string;
   captureType: "screenshot";
   rawSha256: string;
+  sourceEvidenceArtifactId: string;
+  sourceEvidenceSha256: string;
+  sourceBinaryArtifactId: string;
   annotations: {
     id: string;
     label?: string;

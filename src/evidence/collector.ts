@@ -11,6 +11,8 @@ type GapResult = { kind: "evidence-gap"; gap: EvidenceGap; descriptorArtifactId:
 export type CapturedEvidence = { kind: "evidence"; evidenceId: string; rawPath: string; binaryArtifactId: string; descriptorArtifactId: string };
 export type EvidenceCaptureResult = CapturedEvidence | GapResult;
 export type EvidenceAttachment = { kind: "evidence"; evidenceId: string; binaryArtifactId: string; descriptorArtifactId: string; telemetry: readonly TelemetryFinding[] } | GapResult;
+export type TelemetryPayload = Readonly<{ findings: readonly TelemetryFinding[]; records?: readonly Readonly<Record<string, unknown>>[] }>;
+export type TelemetryScrubber = (payload: TelemetryPayload, context: Readonly<{ attemptId: string; channel: "console" | "network" | "log" }>) => TelemetryPayload | Promise<TelemetryPayload>;
 type PageRuntime = { document: { createElement(tag: string): { id: string; setAttribute(name: string, value: string): void; style: Record<string, string> }; documentElement: { appendChild(node: unknown): void }; getElementById(id: string): { remove(): void } | null }; scrollX: number; scrollY: number; innerWidth: number; innerHeight: number; location: { href: string } };
 
 function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowserSession | undefined {
@@ -100,26 +102,37 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
 }
 
 /** Persists only scrubbed live telemetry into the supplied workspace; closed sessions are never reconstructed. */
-export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; protectedEnvironment?: boolean; deterministicScrubberRegistered?: boolean; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
+export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; protectedEnvironment?: boolean; telemetryScrubber?: TelemetryScrubber; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
   if (!session) return registerGap(input.workspace, input.attemptId, "An active caller-owned browser evidence session is required; closed-session telemetry cannot be reconstructed", `${input.telemetry} telemetry`);
   // Known secret redaction is not a policy capable of deterministically
   // scrubbing arbitrary PII. Protected telemetry is therefore absent unless a
   // registered policy explicitly proves all channels are scrubbed.
-  if (input.protectedEnvironment === true && input.deterministicScrubberRegistered !== true) {
+  if (input.protectedEnvironment === true && input.telemetryScrubber === undefined) {
     return registerGap(input.workspace, input.attemptId, "Protected telemetry is unavailable without a registered deterministic scrubber for every telemetry channel", `${input.telemetry} telemetry`);
   }
   const secrets = [...session.secrets];
   const findings = session.telemetry.findings.filter((finding) => input.telemetry === "log" || finding.kind === input.telemetry).map((finding) => ({ ...finding, message: redactText(finding.message, secrets), ...(finding.url === undefined ? {} : { url: redactText(finding.url, secrets) }) }));
-  const payload = input.telemetry === "network" ? { findings, records: session.telemetry.networkRecords.map((record) => redactNetworkRecord(record, secrets)) } : { findings };
+  const initialPayload: TelemetryPayload = input.telemetry === "network" ? { findings, records: session.telemetry.networkRecords.map((record) => redactNetworkRecord(record, secrets)) } : { findings };
+  let payload = initialPayload;
+  if (input.telemetryScrubber !== undefined) {
+    try {
+      payload = await input.telemetryScrubber(initialPayload, { attemptId: input.attemptId, channel: input.telemetry });
+      if (!payload || !Array.isArray(payload.findings)) throw new Error("scrubber returned an invalid telemetry payload");
+      JSON.stringify(payload);
+    } catch (error) {
+      return registerGap(input.workspace, input.attemptId, `Protected telemetry scrubber failed safely: ${error instanceof Error ? error.message : String(error)}`, `${input.telemetry} telemetry`);
+    }
+  }
+  const scrubbedFindings = payload.findings.map((finding) => ({ ...finding, message: redactText(finding.message, secrets), ...(finding.url === undefined ? {} : { url: redactText(finding.url, secrets) }) }));
   const binding = await attemptBinding(input.workspace, input.attemptId);
   if (!binding) return registerGap(input.workspace, input.attemptId, "The evidence attempt is not a registered canonical test result", `${input.telemetry} telemetry`);
   const evidenceId = createEntityId();
   const bytes = Buffer.from(`${JSON.stringify(payload)}\n`);
   const now = new Date().toISOString();
   const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "playwright", build: "unknown", capturedAt: now, dimensions: { width: 1, height: 1 }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
-  const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance, telemetryFindings: findings }), relationships: [binding.artifactId], provenance: "runtime" });
+  const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance, telemetryFindings: scrubbedFindings }), relationships: [binding.artifactId], provenance: "runtime" });
   const binary = bundle.binaries[0];
   if (!binary) throw new Error("Evidence bundle did not register telemetry");
-  return { kind: "evidence", evidenceId, binaryArtifactId: binary.id, descriptorArtifactId: bundle.descriptor.id, telemetry: findings };
+  return { kind: "evidence", evidenceId, binaryArtifactId: binary.id, descriptorArtifactId: bundle.descriptor.id, telemetry: scrubbedFindings };
 }

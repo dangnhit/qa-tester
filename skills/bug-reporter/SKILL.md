@@ -18,4 +18,14 @@ QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(
 "$QA_SKILL" workflow run --input full-workflow.json
 ```
 
+PowerShell:
+
+```powershell
+$QaSkill = Join-Path $PWD "node_modules/.bin/qa-skill.cmd"
+if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction Stop).Source }
+& $QaSkill runtime verify --range ">=0.1.0 <1.0.0"
+& $QaSkill workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+& $QaSkill workflow run --input full-workflow.json
+```
+
 Expected outputs are runtime-owned incidents and `bug-report` artifacts only for qualifying failures. Example — full run: scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it to derive reports.

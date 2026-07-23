@@ -4,7 +4,7 @@
   "title": "Evidence Annotation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "captureType", "rawSha256", "annotations", "provenance"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "captureType", "sourceEvidenceArtifactId", "sourceEvidenceSha256", "sourceBinaryArtifactId", "rawSha256", "annotations", "provenance"],
   "properties": {
     "artifactType": { "const": "annotation" },
     "schemaVersion": { "const": "1.0.0" },
@@ -12,6 +12,9 @@
     "evidenceId": { "type": "string", "minLength": 1 },
     "captureType": { "const": "screenshot" },
     "rawSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceEvidenceArtifactId": { "type": "string", "minLength": 1 },
+    "sourceEvidenceSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceBinaryArtifactId": { "type": "string", "minLength": 1 },
     "annotations": {
       "type": "array",
       "items": {

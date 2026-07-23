@@ -3,6 +3,7 @@ import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import type { ExecutionStatus, SideEffectClass } from "../contracts/types.js";
 import type { RegisteredWorkspaceArtifact, RunWorkspace } from "../core/run-workspace.js";
 import type { NetworkRecord } from "../evidence/redaction.js";
+import type { ExternalPermitRegistry } from "../safety/external-permits.js";
 
 export type SecretReference = { secretRef: string };
 export type SecretResolver = (reference: SecretReference) => Promise<string> | string;
@@ -122,6 +123,8 @@ export type ExecuteTestInput = {
   attemptId: string;
   testCaseArtifactId: string;
   resolveSecret?: SecretResolver;
+  externalPermitRegistry?: ExternalPermitRegistry;
+  environment?: { classification: "local" | "test" | "staging" | "production"; productionReadOnly: boolean };
   onSessionActive?: (input: { attemptId: string; session: ActiveBrowserSession }) => Promise<void> | void;
   /** Runtime-owned finalization seam: all actions and telemetry are complete, but the browser context is still live. */
   onBeforeSessionClose?: (input: { attempt: TestAttempt; session: ActiveBrowserSession }) => Promise<void> | void;
@@ -136,6 +139,7 @@ export type InternalExecuteTestInput = RawExecuteTestInput & {
   attemptId: string;
   onSessionActive?: ExecuteTestInput["onSessionActive"];
   onBeforeSessionClose?: ExecuteTestInput["onBeforeSessionClose"];
+  authorizeStep?: (step: BrowserTestStep) => Promise<{ allowed: boolean; reasons: readonly string[] }>;
 };
 
 export type ResolvedLocator = Locator;

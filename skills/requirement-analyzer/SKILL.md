@@ -13,7 +13,15 @@ Example — standalone analysis:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" artifact ingest --root qa-results --run-id RUN_ID --type requirement-analysis --file drafts/requirement-analysis.json
+"$QA_SKILL" artifact ingest --root . --run-id RUN_ID --type requirement-analysis --file drafts/requirement-analysis.json
+```
+
+PowerShell:
+
+```powershell
+$QaSkill = Join-Path $PWD "node_modules/.bin/qa-skill.cmd"
+if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction Stop).Source }
+& $QaSkill artifact ingest --root . --run-id RUN_ID --type requirement-analysis --file drafts/requirement-analysis.json
 ```
 
 Example — full run: hand the registered analysis to `testcase-designer`, scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it.

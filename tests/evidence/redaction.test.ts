@@ -29,6 +29,14 @@ describe("evidence redaction", () => {
     expect(redactText("credential=abc123", ["abc123"])).toBe("credential=[REDACTED]");
   });
 
+  it("scrubs percent-encoded and form-normalized browser variants of secrets", () => {
+    const secret = "private email+token@example.test";
+    const encoded = encodeURIComponent(secret);
+    const formEncoded = encoded.replaceAll("%20", "+");
+    expect(redactText(`raw=${secret}&encoded=${encoded}&form=${formEncoded}`, [secret]))
+      .toBe("raw=[REDACTED]&encoded=[REDACTED]&form=[REDACTED]");
+  });
+
   it("scrubs sensitive form-body fields before persistence", () => {
     expect(redactNetworkRecord({ url: "https://example.test", requestBody: "email=ada%40example.test&password=unknown-value" }, []).requestBody)
       .toBe("email=ada%40example.test&password=[REDACTED]");

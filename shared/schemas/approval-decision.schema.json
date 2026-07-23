@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/approval-decision.schema.json",
+  "title": "Human Approval Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "approvalId", "runId", "planArtifactId", "planSha256", "decision", "approvedBy", "approvedAt"],
+  "properties": {
+    "artifactType": { "const": "approval-decision" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "approvalId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "planArtifactId": { "type": "string", "minLength": 1 },
+    "planSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "decision": { "const": "APPROVED" },
+    "approvedBy": { "type": "string", "minLength": 1 },
+    "approvedAt": { "type": "string", "format": "date-time" }
+  }
+}

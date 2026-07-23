@@ -58,6 +58,7 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 
 | Command | Purpose |
 | --- | --- |
+| `qa-skill --version` | Print the installed package version. |
 | `qa-skill init` | Create minimal project config and ignore `qa-results/`; success has no stdout. |
 | `qa-skill skills list` | List the orchestrator and standalone Skill Adapters with execution kinds. |
 | `qa-skill skills install --agent <codex\|claude\|cursor> [--target project\|user]` | Install a checksummed copy of the canonical Skill Bundle. |
@@ -65,9 +66,11 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill skills update --agent ... [--force]` | Refresh an installation; drift is preserved unless force is explicit. |
 | `qa-skill skills uninstall --agent ...` | Remove owned unchanged files and report drift leftovers. |
 | `qa-skill runtime verify [--range <semver>]` | Verify the local runtime binding and compatibility. |
+| `qa-skill workflow bootstrap --root <path> --environment-file <json> --requirement-file <json> --plan-file <json> --test-case-file <json> --coverage-file <json>` | Atomically create the first complete terminal planning run and return its checksum-bound bundle reference; repeat testcase and coverage options as needed. |
 | `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
 | `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact; success has no stdout. |
+| `qa-skill approval record --root <path> --run-id <id> --plan-artifact-id <id> --approved-by <identity>` | Persist an immutable human approval bound to the exact pending plan checksum. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
 
 Public workflow modes are `plan`, `execute`, `full`, `exploratory`, `retest`, and `regression`. `cleanup` is a linked maintenance-run profile created through the cleanup operation; it is not accepted by the public workflow runner.
@@ -182,6 +185,7 @@ npm run lint
 npm test
 npm run demo
 npm run build
+npm run smoke:package
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Licensed under Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

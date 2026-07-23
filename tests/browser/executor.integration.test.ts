@@ -12,6 +12,7 @@ import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { sha256Text } from "../../src/core/checksum.js";
 import { serveBrowserFixture } from "../../fixtures/browser/server.js";
+import { ExternalPermitRegistry } from "../../src/safety/external-permits.js";
 
 const fixture = join(fileURLToPath(new URL(".", import.meta.url)), "../../fixtures/browser/basic.html");
 const roots: string[] = [];
@@ -110,6 +111,18 @@ describe("executeTestInstance", () => {
     await expect(governedWorkspace({ decision: { approved: true, mode: "AUTO_APPROVED", reasons: [] } })).rejects.toThrow(/approval decision|self.*approv|derived/i);
     const humanReview = await governedWorkspace({ policy: "human-review" });
     await expect(executeTestInstance({ workspace: humanReview.workspace, browser, attemptId: "ATTEMPT-HUMAN", testCaseArtifactId: humanReview.registeredCase.id })).rejects.toThrow(/approved|human/i);
+    await humanReview.workspace.registerArtifactValue({
+      type: "approval-decision",
+      relationships: [humanReview.registeredPlan.id],
+      provenance: "human-approval:reviewer@example.test",
+      value: {
+        artifactType: "approval-decision", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+        approvalId: "APPROVAL-HUMAN", runId: humanReview.workspace.runId,
+        planArtifactId: humanReview.registeredPlan.id, planSha256: humanReview.registeredPlan.sha256,
+        decision: "APPROVED", approvedBy: "reviewer@example.test", approvedAt: "2026-07-24T00:00:00.000Z",
+      },
+    });
+    await expect(executeTestInstance({ workspace: humanReview.workspace, browser, attemptId: "ATTEMPT-HUMAN-APPROVED", testCaseArtifactId: humanReview.registeredCase.id, resolveSecret: () => "qa@example.test" })).resolves.toMatchObject({ status: "PASSED" });
 
     const revision = await governedWorkspace({ revisionId: "REV-PLAN", testCaseRevisionId: "REV-CASE" });
     await expect(executeTestInstance({ workspace: revision.workspace, browser, attemptId: "ATTEMPT-REVISION", testCaseArtifactId: revision.registeredCase.id })).rejects.toThrow(/revision|binding/i);
@@ -134,6 +147,23 @@ describe("executeTestInstance", () => {
       first.browserExecution.browserDsl.steps[0]!.action.url = "https://substituted.example.test";
     });
     await expect(executeTestInstance({ workspace: tamperedDsl.workspace, browser, attemptId: "ATTEMPT-DSL-TAMPER", testCaseArtifactId: tamperedDsl.registeredCase.id })).rejects.toThrow(/approval|invalid|binding/i);
+  });
+
+  it("executes external browser actions only through an exact permit and keeps production none-only", async () => {
+    const dsl = { steps: [{ id: "external-open", action: { kind: "open", url: baseUrl }, sideEffect: "external" as const }] } satisfies { steps: readonly BrowserTestStep[] };
+    const approved = await governedWorkspace({ policy: "human-review", dsl });
+    await approved.workspace.registerArtifactValue({
+      type: "approval-decision", relationships: [approved.registeredPlan.id], provenance: "human-approval:reviewer",
+      value: { artifactType: "approval-decision", schemaVersion: "1.0.0", producerVersion: "1.0.0", approvalId: "APPROVAL-EXTERNAL", runId: approved.workspace.runId, planArtifactId: approved.registeredPlan.id, planSha256: approved.registeredPlan.sha256, decision: "APPROVED", approvedBy: "reviewer", approvedAt: "2026-07-24T00:00:00.000Z" },
+    });
+    await expect(executeTestInstance({ workspace: approved.workspace, browser, attemptId: "ATTEMPT-NO-PERMIT", testCaseArtifactId: approved.registeredCase.id, environment })).resolves.toMatchObject({ status: "BLOCKED" });
+    const permits = new ExternalPermitRegistry([{ permitId: "PERMIT-BROWSER", source: "review-123", channel: "browser", action: "open", environment: "test", target: baseUrl, expiresAt: "2030-01-01T00:00:00.000Z", maxUses: 1 }]);
+    await expect(executeTestInstance({ workspace: approved.workspace, browser, attemptId: "ATTEMPT-PERMITTED", testCaseArtifactId: approved.registeredCase.id, environment, externalPermitRegistry: permits })).resolves.toMatchObject({ status: "PASSED" });
+
+    const productionRoot = await mkdtemp(join(tmpdir(), "qa-skills-browser-production-")); roots.push(productionRoot);
+    const production = await RunWorkspace.create({ root: productionRoot, mode: "execute", environmentProfile: { ...environment, environmentProfileId: "env-browser-production", classification: "production", productionReadOnly: true } });
+    await expect(permits.authorizeAndConsume({ sideEffect: "external", action: "open", channel: "browser", target: baseUrl }, { classification: "production" })).resolves.toMatchObject({ allowed: false });
+    await production.close();
   });
 
   it("serializes concurrent calls into distinct fresh contexts, exposes the registry during execution, and recovers after a failure", async () => {

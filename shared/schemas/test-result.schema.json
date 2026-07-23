@@ -4,7 +4,7 @@
   "title": "Test Result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "startedAt", "finishedAt"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "steps", "startedAt", "finishedAt"],
   "properties": {
     "artifactType": { "const": "test-result" },
     "schemaVersion": { "const": "1.0.0" },
@@ -16,6 +16,22 @@
     "testCaseInstanceId": { "type": "string", "minLength": 1 },
     "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
     "failureClassification": { "enum": ["PRODUCT_DEFECT", "TEST_DEFECT", "ENVIRONMENT_DEFECT", "UNDETERMINED", "NONE"] },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stepId", "status", "durationMs"],
+        "properties": {
+          "stepId": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
+          "durationMs": { "type": "number", "minimum": 0 },
+          "failureOrigin": { "enum": ["action", "assertion"] },
+          "expectedResultId": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "startedAt": { "type": "string", "format": "date-time" },
     "finishedAt": { "type": "string", "format": "date-time" }
   }

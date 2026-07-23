@@ -41,6 +41,12 @@ export interface EvidenceItem {
     level: string;
     message: string;
   }[];
+  derivation?: {
+    sourceEvidenceArtifactId: string;
+    sourceEvidenceSha256: string;
+    sourceBinaryArtifactId: string;
+    sourceRawSha256: string;
+  };
   provenance: {
     captureType: "screenshot" | "trace" | "console" | "network" | "log";
     dimensions: Viewport;

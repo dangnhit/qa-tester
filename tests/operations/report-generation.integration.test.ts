@@ -15,7 +15,7 @@ const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0
 const testCase = { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
 
 function result(runId: string, attemptId: string, classification: "PRODUCT_DEFECT" | "TEST_DEFECT" = "PRODUCT_DEFECT") {
-  return { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
+  return { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, steps: [{ stepId: "open", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
 }
 
 async function evidence(workspace: RunWorkspace, attemptId: string) {
@@ -32,9 +32,9 @@ describe("report generation operations", () => {
   it("derives canonical bugs, gates, and reports only from registered attempts and evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-report-")); roots.push(root);
     const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
-    await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
-    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-1"), relationships: [] });
-    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-2"), relationships: [] });
+    const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
+    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-1"), relationships: [registeredCase.id] });
+    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-2"), relationships: [registeredCase.id] });
     await evidence(workspace, "ATTEMPT-1");
 
     const bug = await generateBugReport({ workspace, attemptId: "ATTEMPT-1", reproductionAttemptIds: ["ATTEMPT-1", "ATTEMPT-2"], triage: { status: "TRIAGED", severity: "Critical", priorityRecommendation: "P0", testPriority: "critical", openQuestions: [] } });
@@ -64,8 +64,8 @@ describe("report generation operations", () => {
   it("does not let callers turn a non-product registered attempt into a bug", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-report-")); roots.push(root);
     const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
-    await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
-    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-TEST", "TEST_DEFECT"), relationships: [] });
+    const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
+    await workspace.registerArtifactValue({ type: "test-result", value: result(workspace.runId, "ATTEMPT-TEST", "TEST_DEFECT"), relationships: [registeredCase.id] });
 
     await expect(generateBugReport({ workspace, attemptId: "ATTEMPT-TEST", triage: { status: "TRIAGED", severity: "Blocker", priorityRecommendation: "P0", testPriority: "critical", openQuestions: [] } })).rejects.toThrow(/evidence|gap/i);
     expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "bug-report")).toBe(false);

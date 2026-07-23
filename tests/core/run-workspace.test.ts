@@ -73,6 +73,7 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
     testCaseInstanceId: `${testCaseId}--INSTANCE-1`,
     status: "PASSED",
     failureClassification: "NONE",
+    steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
     startedAt: "2026-07-23T12:34:56.000Z",
     finishedAt: "2026-07-23T12:35:56.000Z",
   };
@@ -186,6 +187,21 @@ describe("RunWorkspace", () => {
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
     expect(manifest.artifacts).toHaveLength(3);
     await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
+    await workspace.close();
+  });
+
+  it("rolls back every staged canonical artifact when an atomic batch manifest commit fails", async () => {
+    const directory = await root();
+    const failure = failNextManifestWrite();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile, persistence: failure.persistence });
+    failure.arm();
+    await expect(workspace.registerArtifactValueBatch([
+      { key: "one", type: "test-case", value: testCase("TC-BATCH-ONE"), relationships: [] },
+      { key: "two", type: "test-case", value: testCase("TC-BATCH-TWO"), relationships: [] },
+    ])).rejects.toThrow(/manifest/i);
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { type: string }[] };
+    expect(manifest.artifacts.map((artifact) => artifact.type)).toEqual(["environment-profile"]);
+    expect((await readdir(join(workspace.path, "inputs"))).filter((name) => name.includes("test-case"))).toEqual([]);
     await workspace.close();
   });
 
@@ -471,13 +487,13 @@ describe("RunWorkspace", () => {
   it("drains an already-started registration and finalizes one stable artifact set", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
-    await registerDocument(workspace, "test-case", "case.json", testCase("TC-STABLE"));
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-STABLE"));
     const sourcePath = join(directory, "result.json");
     await writeFile(sourcePath, JSON.stringify(testResult(workspace, "TC-STABLE")));
     const registration = workspace.registerArtifact({
       type: "test-result",
       sourcePath,
-      relationships: [],
+      relationships: [testcase.id],
     });
     const finalizing = workspace.finalize();
 
@@ -704,8 +720,8 @@ describe("RunWorkspace", () => {
   it("revalidates persisted payload references instead of trusting manifest declarations", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
-    await registerDocument(workspace, "test-case", "case.json", testCase("TC-TAMPER"));
-    const resultRecord = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-TAMPER"));
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-TAMPER"));
+    const resultRecord = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-TAMPER"), [testcase.id]);
     const tampered = { ...testResult(workspace, "TC-MISSING"), attemptId: "ATTEMPT-1" };
     const contents = `${JSON.stringify(tampered, null, 2)}\n`;
     await writeFile(resultRecord.absolutePath, contents);
@@ -740,8 +756,8 @@ describe("RunWorkspace", () => {
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
 
     await expect(registerDocument(workspace, "test-result", "missing-case-result.json", testResult(workspace, "TC-MISSING"))).rejects.toThrow(/test.?case|reference|binding/i);
-    await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
-    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"));
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"), [testcase.id]);
 
     const stepResult = {
       artifactType: "test-step-result",
@@ -760,24 +776,43 @@ describe("RunWorkspace", () => {
   it("rejects ambiguous attempt IDs and testcase revision mismatches", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
-    await registerDocument(workspace, "test-case", "case.json", testCase("TC-REVISION"));
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-REVISION"));
 
     await expect(registerDocument(workspace, "test-result", "wrong-revision.json", {
       ...testResult(workspace, "TC-REVISION"),
       testCaseRevisionId: "REV-WRONG",
-    })).rejects.toThrow(/revision|reference|binding/i);
-    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-REVISION"));
+    }, [testcase.id])).rejects.toThrow(/revision|reference|binding/i);
+    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-REVISION"), [testcase.id]);
     await expect(registerDocument(workspace, "test-result", "duplicate-attempt.json", {
       ...testResult(workspace, "TC-REVISION"),
       finishedAt: "2026-07-23T12:36:56.000Z",
-    })).rejects.toThrow(/attempt|duplicate|ambiguous/i);
+    }, [testcase.id])).rejects.toThrow(/attempt|duplicate|ambiguous/i);
+  });
+
+  it("rejects aggregate results that are not derived from the exact ordered canonical steps", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const testcase = await workspace.registerArtifactValue({ type: "test-case", value: testCase("TC-COHERENT"), relationships: [], provenance: "test" });
+    await expect(workspace.registerArtifactValue({
+      type: "test-result",
+      relationships: [testcase.id],
+      provenance: "runtime-execution",
+      value: { ...testResult(workspace, "TC-COHERENT"), status: "PASSED", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1 }] },
+    })).rejects.toThrow(/aggregate|step|status|coherent/i);
+    await expect(workspace.registerArtifactValue({
+      type: "test-result",
+      relationships: [testcase.id],
+      provenance: "runtime-execution",
+      value: { ...testResult(workspace, "TC-COHERENT"), steps: [{ stepId: "foreign-step", status: "PASSED", durationMs: 1 }] },
+    })).rejects.toThrow(/ordered|step|canonical/i);
+    await workspace.close();
   });
 
   it("validates evidence and bug references by expected type and attempt", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
-    await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
-    const attempt = await registerDocument(workspace, "test-result", "result.json", { ...testResult(workspace, "TC-1"), status: "FAILED", failureClassification: "PRODUCT_DEFECT" });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    const attempt = await registerDocument(workspace, "test-result", "result.json", { ...testResult(workspace, "TC-1"), status: "FAILED", failureClassification: "PRODUCT_DEFECT", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }] }, [testcase.id]);
 
     const evidence = {
       artifactType: "evidence",

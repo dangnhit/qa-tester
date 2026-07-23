@@ -441,6 +441,29 @@ async function inspectWorkspaceState(
         );
         if (matches.length !== 1) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test result must reference exactly one registered test case revision and instance") || changed;
+        } else {
+          const matchedCase = matches[0]!;
+          const plan = valuesOf("test-plan").find((candidate) => matchedCase.record.relationships.includes(candidate.record.id));
+          const planCases = array(plan?.value?.testCases);
+          const planCase = planCases.find((candidate) => isRecord(candidate) && candidate.testCaseId === value.testCaseId);
+          const execution = isRecord(planCase) && isRecord(planCase.browserExecution) ? planCase.browserExecution : undefined;
+          const browserDsl = execution && isRecord(execution.browserDsl) ? execution.browserDsl : undefined;
+          const canonicalSteps = Array.isArray(browserDsl?.steps) ? browserDsl.steps : (Array.isArray(matchedCase.value?.steps) ? matchedCase.value.steps : []);
+          const resultSteps = Array.isArray(value.steps) ? value.steps : [];
+          const canonicalIds = canonicalSteps.map((step) => isRecord(step) ? step.id : undefined);
+          const resultIds = resultSteps.map((step) => isRecord(step) ? step.stepId : undefined);
+          const precedence = ["BLOCKED", "INCONCLUSIVE", "FAILED", "NOT_RUN", "PASSED"];
+          const aggregate = precedence.find((status) => resultSteps.some((step) => isRecord(step) && step.status === status)) ?? "NOT_RUN";
+          if (canonicalIds.length !== resultIds.length || canonicalIds.some((id, index) => id !== resultIds[index]) || aggregate !== value.status) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test result must be derived from the exact ordered canonical steps and aggregate status") || changed;
+          } else if ((value.status === "PASSED") !== (value.failureClassification === "NONE")) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test result failure classification is incoherent with aggregate status") || changed;
+          }
+        }
+      } else if (artifact.record.type === "approval-decision") {
+        const plans = valuesOf("test-plan").filter((candidate) => candidate.record.id === value.planArtifactId && candidate.record.sha256 === value.planSha256);
+        if (plans.length !== 1 || artifact.record.relationships.filter((id) => id === plans[0]?.record.id).length !== 1) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Human approval must bind one exact immutable test plan") || changed;
         }
       } else if (artifact.record.type === "test-step-result") {
         const matchingAttempts = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
@@ -466,6 +489,19 @@ async function inspectWorkspaceState(
         if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
           || value.testCaseId !== match.value?.testCaseId || value.testCaseRevisionId !== match.value?.testCaseRevisionId || value.testCaseInstanceId !== match.value?.testCaseInstanceId) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
+        }
+        const evidenceRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "evidence" && candidate.value));
+        const derivation = isRecord(value.derivation) ? value.derivation : undefined;
+        if (evidenceRelationships.length > 0) {
+          const sourceDescriptor = artifacts.find((candidate) => candidate.record.id === derivation?.sourceEvidenceArtifactId && candidate.record.type === "evidence" && candidate.value);
+          const sourceBinary = artifacts.find((candidate) => candidate.record.id === derivation?.sourceBinaryArtifactId && candidate.record.type === "evidence" && !candidate.value);
+          if (!derivation || !sourceDescriptor || !sourceBinary
+            || derivation.sourceEvidenceSha256 !== sourceDescriptor.record.sha256
+            || derivation.sourceRawSha256 !== sourceBinary.record.sha256
+            || !artifact.record.relationships.includes(sourceDescriptor.record.id)
+            || !artifact.record.relationships.includes(sourceBinary.record.id)) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Derived screenshot must preserve exact source descriptor and raw checksum relationships") || changed;
+          }
         }
       } else if (artifact.record.type === "bug-report") {
         const matchingAttempts = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
@@ -521,7 +557,7 @@ async function inspectWorkspaceState(
       } else if (artifact.record.type === "release-gate") {
         const derived = deriveReleaseGateFromWorkspaceArtifacts(validArtifacts
           .filter((candidate) => candidate.record.type !== "release-gate" && candidate.record.type !== "qa-execution-report" && candidate.value !== undefined)
-          .map((candidate) => ({ record: { id: candidate.record.id, sha256: candidate.record.sha256, type: candidate.record.type }, value: candidate.value as Record<string, unknown> })));
+          .map((candidate) => ({ record: { id: candidate.record.id, sha256: candidate.record.sha256, type: candidate.record.type, provenance: candidate.record.provenance }, value: candidate.value as Record<string, unknown> })));
         if (value.runId !== expectedRunId
           || JSON.stringify(value.sourceArtifacts) !== JSON.stringify(derived.sourceArtifacts)
           || JSON.stringify(value.ruleInputs) !== JSON.stringify(derived.ruleInputs)
@@ -858,6 +894,73 @@ export class RunWorkspace {
       value: snapshot,
       relationships,
       ...(input.provenance ? { provenance: input.provenance } : {}),
+    }));
+  }
+
+  /** Registers an ordered dependency set with one manifest commit; any failure removes every staged artifact. */
+  public registerArtifactValueBatch(inputs: readonly {
+    key: string;
+    type: ArtifactType;
+    value: unknown;
+    relationshipKeys?: readonly string[];
+    referenceFields?: Readonly<Record<string, string>>;
+    relationships?: readonly string[];
+    provenance?: string;
+  }[]): Promise<ReadonlyMap<string, ArtifactRecord & { absolutePath: string }>> {
+    try {
+      this.assertWritable();
+      if (inputs.length === 0 || new Set(inputs.map((input) => input.key)).size !== inputs.length) throw new QaSkillsError("Artifact batch keys must be non-empty and unique", "INVALID_ARTIFACT");
+      for (const input of inputs) {
+        if (input.key.length === 0 || !isArtifactType(input.type) || !validateArtifact(input.type, input.value).valid) throw new QaSkillsError("Artifact batch does not match its contract", "INVALID_ARTIFACT");
+      }
+    } catch (error: unknown) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return this.trackMutation(() => this.withManifestTransaction(async () => {
+      const original = await this.readManifest();
+      let virtual = original;
+      const records = new Map<string, ArtifactRecord & { absolutePath: string }>();
+      const written: string[] = [];
+      try {
+        for (const input of inputs) {
+          const snapshot = JSON.parse(JSON.stringify(input.value)) as unknown;
+          const relationships = [
+            ...(input.relationships ?? []),
+            ...(input.relationshipKeys ?? []).map((key) => {
+              const record = records.get(key);
+              if (!record) throw new QaSkillsError(`Artifact batch dependency ${key} is not registered before ${input.key}`, "ARTIFACT_BINDING");
+              return record.id;
+            }),
+          ];
+          if (input.referenceFields !== undefined) {
+            if (!isRecord(snapshot)) throw new QaSkillsError("Artifact batch reference fields require an object value", "ARTIFACT_BINDING");
+            for (const [field, key] of Object.entries(input.referenceFields)) {
+              const record = records.get(key);
+              if (!record) throw new QaSkillsError(`Artifact batch reference ${key} is not registered before ${input.key}`, "ARTIFACT_BINDING");
+              snapshot[field] = record.id;
+            }
+          }
+          const value = input.type === "test-plan" ? await this.withDerivedTestPlanApproval(snapshot, virtual) : snapshot;
+          await this.assertArtifactBinding(input.type, value, relationships, virtual);
+          const contents = `${JSON.stringify(value, null, 2)}\n`;
+          const checksum = sha256Text(contents);
+          if (virtual.artifacts.some((artifact) => artifact.type === input.type && artifact.sha256 === checksum)) throw new QaSkillsError("Completed artifacts are immutable; duplicate artifact", "DUPLICATE_ARTIFACT");
+          const id = createEntityId();
+          const relativePath = `inputs/${id}-${input.type}.json`;
+          const absolutePath = resolveWithin(this.path, relativePath);
+          written.push(absolutePath);
+          await this.persistence.writeAtomic(this.path, absolutePath, contents);
+          if (await sha256(absolutePath) !== checksum) throw new QaSkillsError("Atomic artifact batch write checksum mismatch", "WRITE_FAILURE");
+          const manifestRecord: ArtifactRecord = { id, type: input.type, relativePath, sha256: checksum, provenance: input.provenance ?? "agent-draft", relationships };
+          records.set(input.key, { ...manifestRecord, absolutePath });
+          virtual = { ...virtual, artifacts: [...virtual.artifacts, manifestRecord] };
+        }
+        await this.writeManifest(virtual);
+        return records;
+      } catch (error) {
+        await Promise.all(written.map((path) => rm(path, { force: true })));
+        throw error;
+      }
     }));
   }
 
@@ -1214,7 +1317,7 @@ export class RunWorkspace {
     }));
   }
 
-  private async readGateWorkspaceArtifacts(manifest: Manifest): Promise<readonly { record: { id: string; sha256: string; type: string }; value: Record<string, unknown> }[]> {
+  private async readGateWorkspaceArtifacts(manifest: Manifest): Promise<readonly { record: { id: string; sha256: string; type: string; provenance: string }; value: Record<string, unknown> }[]> {
     return Promise.all(manifest.artifacts
       .filter((artifact) => artifact.mediaType === undefined && artifact.type !== "release-gate" && artifact.type !== "qa-execution-report")
       .map(async (artifact) => {
@@ -1222,7 +1325,7 @@ export class RunWorkspace {
         if (await sha256(path) !== artifact.sha256) throw new QaSkillsError(`Referenced ${artifact.type} checksum mismatch`, "ARTIFACT_BINDING");
         const value = JSON.parse(await readFile(path, "utf8")) as unknown;
         if (!isRecord(value) || !validateArtifact(artifact.type, value).valid) throw new QaSkillsError(`Referenced ${artifact.type} is invalid`, "ARTIFACT_BINDING");
-        return { record: { id: artifact.id, sha256: artifact.sha256, type: artifact.type }, value };
+        return { record: { id: artifact.id, sha256: artifact.sha256, type: artifact.type, provenance: artifact.provenance }, value };
       }));
   }
 
@@ -1243,17 +1346,51 @@ export class RunWorkspace {
     } else if (type === "coverage-obligation") {
       await this.assertCoverageObligationBinding(value, manifest);
     } else if (type === "test-result") {
-      const testCases = await this.readRegisteredValues(manifest, "test-case");
-      if (testCases.filter((testCase) =>
-        testCase.testCaseId === value.testCaseId
-        && testCase.revisionId === value.testCaseRevisionId
-        && testCase.instanceId === value.testCaseInstanceId
-      ).length !== 1) {
+      const records = await this.readGateWorkspaceArtifacts(manifest);
+      const testCases = records.filter((artifact) => artifact.record.type === "test-case"
+        && artifact.value.testCaseId === value.testCaseId
+        && artifact.value.revisionId === value.testCaseRevisionId
+        && artifact.value.instanceId === value.testCaseInstanceId);
+      const testCase = testCases.length === 1 ? testCases[0] : undefined;
+      if (!testCase || relationships.filter((id) => id === testCase.record.id).length !== 1
+        || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-case")).length !== 1) {
         throw new QaSkillsError("Test result references an unregistered or ambiguous test case revision and instance", "ARTIFACT_BINDING");
+      }
+      const testCaseManifest = manifest.artifacts.find((artifact) => artifact.id === testCase.record.id)!;
+      const plan = records.find((artifact) => artifact.record.type === "test-plan" && testCaseManifest.relationships.includes(artifact.record.id));
+      const planCases = array(plan?.value.testCases);
+      const planCase = planCases.find((candidate) => isRecord(candidate) && candidate.testCaseId === value.testCaseId);
+      const execution = isRecord(planCase) && isRecord(planCase.browserExecution) ? planCase.browserExecution : undefined;
+      const browserDsl = execution && isRecord(execution.browserDsl) ? execution.browserDsl : undefined;
+      const canonicalSteps = Array.isArray(browserDsl?.steps) ? browserDsl.steps : (Array.isArray(testCase.value.steps) ? testCase.value.steps : []);
+      const resultSteps = Array.isArray(value.steps) ? value.steps : [];
+      const canonicalIds = canonicalSteps.map((step) => isRecord(step) ? step.id : undefined);
+      const resultIds = resultSteps.map((step) => isRecord(step) ? step.stepId : undefined);
+      if (canonicalIds.length !== resultIds.length || canonicalIds.some((id, index) => id !== resultIds[index])) {
+        throw new QaSkillsError("Test result must contain the exact ordered canonical test case steps", "ARTIFACT_BINDING");
+      }
+      const precedence = ["BLOCKED", "INCONCLUSIVE", "FAILED", "NOT_RUN", "PASSED"];
+      const aggregate = precedence.find((status) => resultSteps.some((step) => isRecord(step) && step.status === status)) ?? "NOT_RUN";
+      if (value.status !== aggregate) throw new QaSkillsError("Test result aggregate status is not derived from its step results", "ARTIFACT_BINDING");
+      if ((value.status === "PASSED") !== (value.failureClassification === "NONE")) {
+        throw new QaSkillsError("Test result failure classification is incoherent with aggregate status", "ARTIFACT_BINDING");
       }
       const testResults = await this.readRegisteredValues(manifest, "test-result");
       if (testResults.some((result) => result.attemptId === value.attemptId)) {
         throw new QaSkillsError("Test result attempt ID is already registered and would be ambiguous", "ARTIFACT_BINDING");
+      }
+    } else if (type === "approval-decision") {
+      const plan = manifest.artifacts.find((artifact) => artifact.type === "test-plan" && artifact.id === value.planArtifactId && artifact.sha256 === value.planSha256);
+      if (!plan || relationships.filter((id) => id === plan.id).length !== 1
+        || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-plan")).length !== 1) {
+        throw new QaSkillsError("Human approval must bind one exact immutable test plan", "ARTIFACT_BINDING");
+      }
+      const plans = await this.readRegisteredValues(manifest, "test-plan");
+      const planIndex = manifest.artifacts.filter((artifact) => artifact.type === "test-plan").findIndex((artifact) => artifact.id === plan.id);
+      const planValue = plans[planIndex];
+      if (!isRecord(planValue?.approvalPolicy) || planValue.approvalPolicy.mode !== "human-review"
+        || !isRecord(planValue.approvalDecision) || planValue.approvalDecision.approved !== false) {
+        throw new QaSkillsError("Human approval requires a pending human-review test plan", "ARTIFACT_BINDING");
       }
     } else if (type === "test-step-result") {
       const testResults = await this.readRegisteredValues(manifest, "test-result");
@@ -1276,6 +1413,19 @@ export class RunWorkspace {
         || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
         || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
         throw new QaSkillsError("Evidence binding requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
+      }
+      const evidenceRelationships = relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "evidence" && artifact.mediaType === undefined));
+      const derivation = isRecord(value.derivation) ? value.derivation : undefined;
+      if (evidenceRelationships.length > 0) {
+        const sourceDescriptor = manifest.artifacts.find((artifact) => artifact.id === derivation?.sourceEvidenceArtifactId && artifact.type === "evidence" && artifact.mediaType === undefined);
+        const sourceBinary = manifest.artifacts.find((artifact) => artifact.id === derivation?.sourceBinaryArtifactId && artifact.type === "evidence" && artifact.mediaType === "image/png");
+        if (!derivation || !sourceDescriptor || !sourceBinary
+          || derivation.sourceEvidenceSha256 !== sourceDescriptor.sha256
+          || derivation.sourceRawSha256 !== sourceBinary.sha256
+          || !relationships.includes(sourceDescriptor.id)
+          || !relationships.includes(sourceBinary.id)) {
+          throw new QaSkillsError("Derived screenshot must preserve exact source descriptor and raw checksum relationships", "ARTIFACT_BINDING");
+        }
       }
     } else if (type === "evidence-gap") {
       if (value.scope === "operational") {

@@ -21,6 +21,15 @@ afterEach(async () => {
 });
 
 describe("CLI core", () => {
+  it("exposes the package version through the public CLI contract", async () => {
+    const directory = await root();
+    expect(await runCli(["--version"], { cwd: directory })).toEqual({
+      exitCode: ExitCode.SUCCESS,
+      stdout: "0.1.0\n",
+      stderr: "",
+    });
+  });
+
   it("uses the documented exact exit-code map", () => {
     expect(ExitCode).toEqual({ SUCCESS: 0, UNMET_OBLIGATIONS: 1, BLOCKED: 2, INVALID_INPUT: 3, SAFETY_DENIED: 4, ABORTED_OR_INTERNAL: 5 });
   });
@@ -43,7 +52,7 @@ describe("CLI core", () => {
     expect((await runCli(["wat"], { cwd: directory })).exitCode).toBe(ExitCode.INVALID_INPUT);
   });
 
-  it("ingests an artifact and emits machine-readable validate results with real exit outcomes", async () => {
+  it("rejects runtime-owned artifacts at the Agent Draft boundary and emits machine-readable validate results", async () => {
     const directory = await root();
     const environmentProfile = {
       artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "env-test", name: "Test", classification: "test", baseUrl: "https://test.example.test", productionReadOnly: false,
@@ -54,8 +63,8 @@ describe("CLI core", () => {
     await writeFile(sourcePath, JSON.stringify({ artifactType: "run-metadata", schemaVersion: "1.0.0", producerVersion: "1.0.0", runId: workspace.runId, status: "CREATED", createdAt: "2026-07-23T12:34:56.000Z", mode: "plan", environmentProfileId: "env-test" }));
 
     const ingested = await runCli(["artifact", "ingest", "--root", directory, "--run-id", workspace.runId, "--type", "run-metadata", "--file", sourcePath], { cwd: directory });
-    expect(ingested.exitCode).toBe(ExitCode.SUCCESS);
-    expect(ingested.stdout).toBe("");
+    expect(ingested.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(ingested.stderr).toMatch(/runtime-owned|agent draft/i);
     const valid = await runCli(["validate", "--root", directory, "--run-id", workspace.runId], { cwd: directory });
     expect(valid.exitCode).toBe(ExitCode.SUCCESS);
     expect(JSON.parse(valid.stdout)).toMatchObject({ valid: true, diagnostics: [] });

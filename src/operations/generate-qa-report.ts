@@ -15,7 +15,7 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   if (artifacts.some((artifact) => artifact.record.type === "release-gate" || artifact.record.type === "qa-execution-report")) throw new Error("A release gate and QA report are immutable and may be generated once per run");
   const bugs = artifacts.filter((artifact) => artifact.record.type === "bug-report").map((artifact) => artifact.value);
   const gateResult = deriveReleaseGateFromWorkspaceArtifacts(artifacts.map((artifact) => ({
-    record: { id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type }, value: artifact.value,
+    record: { id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type, provenance: artifact.record.provenance }, value: artifact.value,
   })));
   const currentBugs = gateResult.ruleInputs.bugs;
   const currentOpenBugs = currentBugs.filter((bug) => bug.open);

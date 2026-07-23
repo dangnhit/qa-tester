@@ -20,6 +20,7 @@ import testCaseSchema from "../../shared/schemas/test-case.schema.json" with { t
 import testDataManifestSchema from "../../shared/schemas/test-data-manifest.schema.json" with { type: "json" };
 import testResultSchema from "../../shared/schemas/test-result.schema.json" with { type: "json" };
 import testPlanSchema from "../../shared/schemas/test-plan.schema.json" with { type: "json" };
+import approvalDecisionSchema from "../../shared/schemas/approval-decision.schema.json" with { type: "json" };
 import testStepResultSchema from "../../shared/schemas/test-step-result.schema.json" with { type: "json" };
 import explorationCharterSchema from "../../shared/schemas/exploration-charter.schema.json" with { type: "json" };
 import retestResultSchema from "../../shared/schemas/retest-result.schema.json" with { type: "json" };
@@ -50,6 +51,7 @@ const schemas: Record<ArtifactType, object> = {
   "requirement-analysis": requirementAnalysisSchema,
   "coverage-obligation": coverageObligationSchema,
   "test-plan": testPlanSchema,
+  "approval-decision": approvalDecisionSchema,
   "exploration-charter": explorationCharterSchema,
   "retest-result": retestResultSchema,
   "regression-selection": regressionSelectionSchema,

@@ -63,7 +63,9 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
     const artifacts = await workspace.readRegisteredArtifacts();
     const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
     const cases = artifacts.filter((artifact) => artifact.record.type === "test-case");
-    const attempts: CoverageAttempt[] = artifacts.filter((artifact) => artifact.record.type === "test-result").map((result) => {
+    const attempts: CoverageAttempt[] = artifacts
+      .filter((artifact) => artifact.record.type === "test-result" && artifact.record.provenance === "runtime-execution")
+      .map((result) => {
       const testCaseId = requireString(result.value.testCaseId, "test result test case ID");
       const revisionId = requireString(result.value.testCaseRevisionId, "test result test case revision ID");
       const instanceId = requireString(result.value.testCaseInstanceId, "test result test case instance ID");
@@ -75,7 +77,7 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
         attemptId: requireString(result.value.attemptId, "test result attempt ID"), status: requireString(result.value.status, "test result status"),
         ...coverage,
       };
-    });
+      });
     return evaluateCoverage(obligations, attempts);
   } finally {
     if (ownsWorkspace) await workspace.close();

@@ -30,6 +30,9 @@ jobs:
       - name: Full test suite
         run: npm test
       - run: npm run build
+      - name: Pack and install in a clean typed consumer
+        if: matrix.node == 24
+        run: npm run smoke:package
 
   windows:
     name: Windows Node 24

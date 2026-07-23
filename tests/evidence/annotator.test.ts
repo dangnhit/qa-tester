@@ -47,7 +47,7 @@ async function registerRaw(workspace: RunWorkspace, options: { attemptId?: strin
   const result = await workspace.registerArtifactValue({
     type: "test-result",
     relationships: [testCase.id],
-    value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
+    value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
   });
   const bytes = options.bytes ?? await patternedPng();
   return workspace.registerEvidenceBundle({
@@ -81,7 +81,7 @@ afterEach(async () => {
 describe("annotateScreenshot", () => {
   it("validates the annotation contract with full capture provenance", () => {
     expect(validateAnnotation({
-      artifactType: "annotation", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "evidence-1", captureType: "screenshot", rawSha256: "a".repeat(64), annotations: [],
+      artifactType: "annotation", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "evidence-1", captureType: "screenshot", sourceEvidenceArtifactId: "source-evidence", sourceEvidenceSha256: "b".repeat(64), sourceBinaryArtifactId: "source-binary", rawSha256: "a".repeat(64), annotations: [],
       provenance: { runId: "run-1", attemptId: "attempt-1", url: "https://example.test", viewport: { width: 1, height: 1 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:00:00.000Z", dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 } },
     }).valid).toBe(true);
   });
@@ -110,7 +110,12 @@ describe("annotateScreenshot", () => {
     expect(evidence.provenance.normalizedPixelBoxes).toHaveLength(1);
     expect(evidence.provenance.dimensions).toEqual({ width: 120, height: 80 });
     expect(Object.isFrozen(evidence.provenance.normalizedPixelBoxes)).toBe(true);
+    const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === evidence.descriptorArtifactId);
+    expect(descriptor?.value.derivation).toEqual({ sourceEvidenceArtifactId: rawBundle.descriptor.id, sourceEvidenceSha256: rawBundle.descriptor.sha256, sourceBinaryArtifactId: raw.id, sourceRawSha256: checksumBefore });
     await workspace.close();
+    const reopened = await RunWorkspace.open(directory, workspace.runId);
+    await expect(reopened.validate()).resolves.toMatchObject({ valid: true });
+    await reopened.close();
   });
 
   it("changes annotation overlay pixels on a nonblank pattern while preserving the raw bytes and checksum", async () => {

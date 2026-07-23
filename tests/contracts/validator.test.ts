@@ -85,6 +85,7 @@ const otherArtifactContracts = [
       testCaseInstanceId: "TC-1--INSTANCE-1",
       status: "PASSED",
       failureClassification: "NONE",
+      steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
       startedAt: "2026-07-23T12:34:56.000Z",
       finishedAt: "2026-07-23T12:35:56.000Z",
     },

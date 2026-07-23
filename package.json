@@ -1,7 +1,6 @@
 {
   "name": "@vigentix/qa-skills",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "files": [
@@ -9,9 +8,16 @@
     "skills"
   ],
   "exports": {
-    ".": "./dist/src/orchestration/qa-tester.js",
-    "./cli": "./dist/src/cli/index.js"
+    ".": {
+      "types": "./dist/src/orchestration/qa-tester.d.ts",
+      "import": "./dist/src/orchestration/qa-tester.js"
+    },
+    "./cli": {
+      "types": "./dist/src/cli/index.d.ts",
+      "import": "./dist/src/cli/index.js"
+    }
   },
+  "types": "./dist/src/orchestration/qa-tester.d.ts",
   "bin": {
     "qa-skill": "./dist/src/cli/index.js"
   },
@@ -19,7 +25,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -27,7 +33,8 @@
     "demo": "tsx scripts/run-demo.ts",
     "scan:secrets": "tsx scripts/check-secrets.ts",
     "generate:types": "tsx scripts/generate-types.ts",
-    "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated"
+    "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated",
+    "smoke:package": "tsx scripts/smoke-package-consumer.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

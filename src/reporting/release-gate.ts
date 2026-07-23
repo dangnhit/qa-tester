@@ -12,7 +12,10 @@ export type RuleVerdict = Readonly<{ rule: string; passed: boolean; reason: stri
 export type ReleaseGateResult = Readonly<{ recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY"; ruleInputs: ReleaseGateInput; verdicts: readonly RuleVerdict[] }>;
 export type GateSourceArtifact = Readonly<{ id: string; sha256: string; type: string }>;
 export type DerivedReleaseGate = ReleaseGateResult & Readonly<{ sourceArtifacts: readonly GateSourceArtifact[] }>;
-export type GateWorkspaceArtifact = Readonly<{ record: GateSourceArtifact; value: Readonly<Record<string, unknown>> }>;
+export type GateWorkspaceArtifact = Readonly<{
+  record: GateSourceArtifact & Readonly<{ provenance?: string }>;
+  value: Readonly<Record<string, unknown>>;
+}>;
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function string(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
@@ -81,7 +84,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (!fields.every((field) => string(field) !== undefined)) return [];
     return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, role: value.role as string, behavior: value.behavior as string, browser: value.browser as string, viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
   });
-  const attempts: CoverageAttempt[] = valuesOf("test-result").flatMap((artifact) => {
+  const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => artifact.record.provenance === "runtime-execution").flatMap((artifact) => {
     const value = artifact.value;
     const testCase = cases.find((candidate) => candidate.value.testCaseId === value.testCaseId && candidate.value.revisionId === value.testCaseRevisionId && candidate.value.instanceId === value.testCaseInstanceId);
     const dimensions = testCase?.value.coverage;
@@ -114,6 +117,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   const unmappedChangeRisks = canonical(valuesOf("regression-selection").flatMap((artifact) => array(artifact.value.unmappedChangeRisks).filter(record)), (item) => String(item.changeId));
   const sharedBlockers = canonical([
     ...incidents.filter((incident) => incident.kind === "ENVIRONMENT_INCIDENT").map((incident) => `Environment incident ${String(incident.incidentId)}`),
+    ...evidenceGaps.map((gap) => `Evidence gap ${String(gap.evidenceGapId)} affects ${String(gap.affectedClaim)}`),
     ...cleanupLeaks.map((leak) => `Cleanup leak ${String(leak.id)}`),
     ...unmappedChangeRisks.map((risk) => `Unmapped change risk ${String(risk.changeId)}`),
     ...validationDiagnostics.map((diagnostic) => `Validation diagnostic ${diagnostic}`),
@@ -136,6 +140,8 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     // that are not presently policy-blocking, so later policy changes remain
     // auditable and omissions are detectable.
     ruleInputs,
-    sourceArtifacts: [...source.map((artifact) => artifact.record)].sort((left, right) => left.id.localeCompare(right.id)),
+    sourceArtifacts: source
+      .map((artifact) => ({ id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
   };
 }

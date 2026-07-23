@@ -20,7 +20,7 @@ const dimensions = {
   viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
 } as const;
 
-async function setup(overrides: { requirementAuthority?: string; result?: Record<string, unknown>; testCase?: Record<string, unknown>; obligation?: Record<string, unknown> } = {}) {
+async function setup(overrides: { requirementAuthority?: string; result?: Record<string, unknown>; resultProvenance?: string; testCase?: Record<string, unknown>; obligation?: Record<string, unknown> } = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-workspace-coverage-"));
   roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile });
@@ -35,13 +35,13 @@ async function setup(overrides: { requirementAuthority?: string; result?: Record
     ...dimensions, required: true, ...overrides.obligation,
   });
   const { coverage: coverageOverride, ...testCaseOverrides } = overrides.testCase ?? {};
-  await register("test-case", {
+  const testCase = await register("test-case", {
     artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
     steps: [{ id: "save", action: "click", sideEffect: "none" }], coverage: { ...dimensions, ...(coverageOverride ?? {}) }, ...testCaseOverrides,
   });
-  await register("test-result", {
-    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
-  });
+  await workspace.registerArtifactValue({ type: "test-result", relationships: [testCase.id], provenance: overrides.resultProvenance ?? "runtime-execution", value: {
+    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
+  } });
   await workspace.close();
   return { root, runId: workspace.runId, workspacePath: workspace.path };
 }
@@ -73,6 +73,12 @@ describe("evaluateWorkspaceCoverage", () => {
     const fixture = await setup({ requirementAuthority: "INFERRED" });
 
     await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"] });
+  });
+
+  it("does not let an agent-draft result satisfy authoritative release coverage", async () => {
+    const fixture = await setup({ resultProvenance: "agent-draft" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
   });
 
   it("does not accept caller-constructed IDs or verification context", async () => {

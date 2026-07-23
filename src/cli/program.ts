@@ -8,7 +8,8 @@ import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
-import { runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
+import { recordHumanApproval } from "../operations/record-human-approval.js";
+import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
 import { isRuntimeCompatible, runtimeCompatibility, runtimeVersion } from "../installer/manifest.js";
 import { isAgentName, isInstallTarget } from "../installer/agents.js";
 import { installSkills } from "../installer/install.js";
@@ -69,7 +70,7 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   let stderr = "";
   let exitCode: ExitCodeValue = ExitCode.SUCCESS;
   const program = new Command();
-  program.name("qa-skill").exitOverride();
+  program.name("qa-skill").version(runtimeVersion).exitOverride();
   program.configureOutput({ writeOut: (value) => { stdout += value; }, writeErr: (value) => { stderr += value; } });
   program.command("init").action(async () => { await initialize(options.cwd); });
   const skillsCommand = program.command("skills");
@@ -107,6 +108,13 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string }) => {
       stdout += `${JSON.stringify(await scaffoldWorkflowInput({ root: commandOptions.root, mode: commandOptions.mode, outputPath: commandOptions.output, ...(commandOptions.environmentFile === undefined ? {} : { environmentPath: commandOptions.environmentFile }), ...(commandOptions.sourceRoot === undefined ? {} : { sourceRoot: commandOptions.sourceRoot }), ...(commandOptions.sourceRunId === undefined ? {} : { sourceRunId: commandOptions.sourceRunId }) }))}\n`;
     });
+  workflowCommand.command("bootstrap")
+    .requiredOption("--root <path>").requiredOption("--environment-file <json>").requiredOption("--requirement-file <path>").requiredOption("--plan-file <path>")
+    .requiredOption("--test-case-file <path>", "Canonical testcase file", (value, previous: string[]) => [...previous, value], [])
+    .requiredOption("--coverage-file <path>", "Coverage obligation file", (value, previous: string[]) => [...previous, value], [])
+    .action(async (commandOptions: { root: string; environmentFile: string; requirementFile: string; planFile: string; testCaseFile: string[]; coverageFile: string[] }) => {
+      stdout += `${JSON.stringify(await bootstrapPlanningBundle({ root: commandOptions.root, environmentPath: commandOptions.environmentFile, requirementPath: commandOptions.requirementFile, planPath: commandOptions.planFile, testCasePaths: commandOptions.testCaseFile, coveragePaths: commandOptions.coverageFile }))}\n`;
+    });
   program.command("runtime").command("verify").option("--range <semver>", "compatible runtime range", runtimeCompatibility)
     .action((commandOptions: { range: string }) => {
       if (!isRuntimeCompatible(runtimeVersion, commandOptions.range)) throw new QaSkillsError(`Runtime ${runtimeVersion} is not compatible with ${commandOptions.range}`, "INVALID_ARTIFACT");
@@ -127,6 +135,14 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
         sourcePath: commandOptions.file,
         relationships: commandOptions.relationship,
       });
+    });
+  program.command("approval").command("record")
+    .requiredOption("--root <path>")
+    .requiredOption("--run-id <id>")
+    .requiredOption("--plan-artifact-id <id>")
+    .requiredOption("--approved-by <identity>")
+    .action(async (commandOptions: { root: string; runId: string; planArtifactId: string; approvedBy: string }) => {
+      stdout += `${JSON.stringify(await recordHumanApproval(commandOptions))}\n`;
     });
   program.command("validate")
     .requiredOption("--root <path>")
@@ -151,6 +167,8 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       if (error.code === "LIVE_LOCK") exitCode = ExitCode.BLOCKED;
       else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
+    } else if (error instanceof CommanderError && error.code === "commander.version") {
+      exitCode = ExitCode.SUCCESS;
     } else if (error instanceof CommanderError) {
       stderr += `${error.message}\n`;
       exitCode = ExitCode.INVALID_INPUT;

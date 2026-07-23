@@ -66,9 +66,10 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean | "inte
   } });
   let sourceBug: { artifactId: string; sha256: string; bugId: string } | undefined;
   if (options.sourceBug) {
-    const sourceAttempt = await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
-    if (options.sourceBug === "intermittent") await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-REPEAT", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
-    if (options.sourceBug === "partial" && second) await source.registerArtifactValue({ type: "test-result", relationships: [second.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-SECOND", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME-SECOND", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
+  const sourceSteps = [{ stepId: "open", status: "PASSED", durationMs: 1 }, { stepId: "fill", status: "PASSED", durationMs: 1 }, { stepId: "save", status: "FAILED", durationMs: 1, failureOrigin: "assertion", expectedResultId: "ER-RUNTIME" }] as const;
+  const sourceAttempt = await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", steps: sourceSteps, startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
+  if (options.sourceBug === "intermittent") await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-REPEAT", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", steps: sourceSteps, startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
+    if (options.sourceBug === "partial" && second) await source.registerArtifactValue({ type: "test-result", relationships: [second.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-SECOND", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME-SECOND", status: "FAILED", failureClassification: "PRODUCT_DEFECT", steps: sourceSteps, startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
     await source.registerEvidenceBundle({ binaries: [{ filename: "source-bug.txt", contents: Buffer.from("source browser failure"), mediaType: "text/plain", captureType: "log" }], relationships: [sourceAttempt.id], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: source.runId, attemptId: "ATT-SOURCE-BUG", testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "source browser failure" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: baseUrl, viewport: { width: 1, height: 1 }, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" } }) });
     const generated = await generateBugReport({ workspace: source, attemptId: "ATT-SOURCE-BUG", unsafeRerunReason: "Source fixture preserves a single captured production defect observation." });
     if (generated.kind !== "BUG") throw new Error("Expected source product bug");
@@ -219,6 +220,25 @@ describe("public runtime QA Tester", () => {
 
     expect(artifacts.filter((item) => item.record.type === "evidence-gap").map((item) => item.value.reason)).toContain("Protected screenshot capture requires a verifiable redaction policy");
     expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "screenshot")).toBe(false);
+    await workspace.close();
+  });
+
+  it("records required video as an evidence gap and makes the deterministic full release gate NOT_READY", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-video-gap-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      testDataRegistries: { trusted: new TestDataHookRegistry([], {}) },
+      evidencePolicies: { video: { safety: { screenshot: "required", console: "off", network: "off", logs: "required", video: "required" } } },
+    });
+
+    const result = await tester({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "video" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+
+    expect(artifacts.filter((item) => item.record.type === "evidence-gap").map((item) => item.value.reason))
+      .toContain("Required video capture is unsupported by the active browser manager");
+    expect(artifacts.find((item) => item.record.type === "release-gate")?.value.recommendation).toBe("NOT_READY");
     await workspace.close();
   });
 

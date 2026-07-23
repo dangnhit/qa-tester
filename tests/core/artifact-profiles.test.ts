@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as artifactProfiles from "../../src/core/artifact-profiles.js";
-import { evaluateArtifactProfile } from "../../src/core/artifact-profiles.js";
+import { evaluateArtifactProfile, evaluatePublicTerminalProfile } from "../../src/core/artifact-profiles.js";
 
 describe("artifact profiles", () => {
   it("publishes a version for the audited profile definitions", () => {
@@ -27,5 +27,11 @@ describe("artifact profiles", () => {
 
   it("rejects unknown unaudited profile names", () => {
     expect(() => evaluateArtifactProfile("invented" as never, [])).toThrow(/profile/i);
+  });
+
+  it("rejects terminal public plan and full profiles that omit canonical planning facts", () => {
+    expect(evaluatePublicTerminalProfile("plan", ["test-case"]).diagnostics.map((item) => item.artifactType)).toEqual(expect.arrayContaining(["requirement-analysis", "test-plan", "coverage-obligation"]));
+    expect(evaluatePublicTerminalProfile("full", ["test-result", "evidence", "release-gate", "qa-execution-report"]).valid).toBe(false);
+    expect(evaluatePublicTerminalProfile("plan", ["requirement-analysis", "test-plan", "test-case", "coverage-obligation"]).valid).toBe(true);
   });
 });

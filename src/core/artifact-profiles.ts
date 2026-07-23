@@ -17,6 +17,12 @@ const requirements: Readonly<Record<ArtifactProfileName, readonly (readonly stri
   cleanup: [["run-metadata"], ["environment-profile"], ["cleanup-run"]],
 };
 
+const publicTerminalRequirements: Readonly<Partial<Record<ArtifactProfileName, readonly (readonly string[])[]>>> = {
+  plan: [["requirement-analysis"], ["test-plan"], ["test-case"], ["coverage-obligation"]],
+  execute: [["requirement-analysis"], ["test-plan"], ["test-case"], ["coverage-obligation"], ["test-result"], ["evidence", "evidence-gap"]],
+  full: [["requirement-analysis"], ["test-plan"], ["test-case"], ["coverage-obligation"], ["test-result"], ["evidence", "evidence-gap"], ["release-gate"], ["qa-execution-report"]],
+};
+
 export function assertArtifactProfileName(profile: string): asserts profile is ArtifactProfileName {
   if (!(artifactProfileNames as readonly string[]).includes(profile)) {
     throw new QaSkillsError(`Unknown unaudited artifact profile: ${profile}`, "INVALID_PROFILE");
@@ -34,5 +40,16 @@ export function evaluateArtifactProfile(profile: ArtifactProfileName, artifactTy
       message: `Profile ${profile} requires ${alternatives.join(" or ")}`,
     }];
   });
+  return { valid: diagnostics.length === 0, diagnostics };
+}
+
+/** Additional completeness obligations for terminal public workflows; lifecycle-only workspaces retain the structural profile above. */
+export function evaluatePublicTerminalProfile(profile: ArtifactProfileName, artifactTypes: readonly string[]): ArtifactProfileEvaluation {
+  const present = new Set(artifactTypes);
+  const diagnostics = (publicTerminalRequirements[profile] ?? []).flatMap((alternatives) => alternatives.some((type) => present.has(type)) ? [] : [{
+    code: "REQUIRED_ARTIFACT_MISSING" as const,
+    artifactType: alternatives.join(" or "),
+    message: `Terminal public profile ${profile} requires ${alternatives.join(" or ")}`,
+  }]);
   return { valid: diagnostics.length === 0, diagnostics };
 }

@@ -6,6 +6,7 @@ import { validateBrowserTestDsl } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
+import { authorizeStep } from "../safety/side-effects.js";
 
 export const activeBrowserSessions = new Map<string, ActiveBrowserSession>();
 const reservedAttemptIds = new Set<string>();
@@ -21,7 +22,13 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
   const artifact = artifacts.find((candidate) => candidate.record.id === testCaseArtifactId && candidate.record.type === "test-case");
   if (!artifact) throw new QaSkillsError("Execution requires an approved registered test case artifact", "ARTIFACT_BINDING");
   const plan = artifacts.find((candidate) => candidate.record.type === "test-plan" && artifact.record.relationships.includes(candidate.record.id));
-  if (!plan || !object(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== true) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
+  const autoApproved = plan && object(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true;
+  const humanApproved = plan && artifacts.some((candidate) => candidate.record.type === "approval-decision"
+    && candidate.record.relationships.filter((id) => id === plan.record.id).length === 1
+    && candidate.value.planArtifactId === plan.record.id
+    && candidate.value.planSha256 === plan.record.sha256
+    && candidate.value.decision === "APPROVED");
+  if (!plan || (!autoApproved && !humanApproved)) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
   const cases: unknown = plan.value.testCases;
   const planCases: readonly unknown[] = Array.isArray(cases) ? cases as unknown[] : [];
   const planCase = planCases.find((candidate) => object(candidate)
@@ -68,6 +75,15 @@ function notRunStep(step: BrowserTestStep): BrowserStepResult {
   return { stepId: step.id, status: "NOT_RUN", startedAt: now, finishedAt: now, durationMs: 0, action: step.action, assertions: step.assertions ?? [] };
 }
 
+function blockedStep(step: BrowserTestStep, reasons: readonly string[]): BrowserStepResult {
+  const now = new Date().toISOString();
+  return { stepId: step.id, status: "BLOCKED", startedAt: now, finishedAt: now, durationMs: 0, action: step.action, assertions: step.assertions ?? [], error: `Safety denied: ${reasons.join(", ")}`, failureOrigin: "action" };
+}
+
+function permitTarget(step: BrowserTestStep): string {
+  return step.action.kind === "open" && typeof step.action.url === "string" ? step.action.url : JSON.stringify(step.action);
+}
+
 async function executeCanonical(input: InternalExecuteTestInput & { persistAttempt?: (attempt: TestAttempt) => Promise<void> }): Promise<TestAttempt> {
   const started = Date.now();
   const session = await createBrowserAttemptSession(input.browser, input.testCase);
@@ -87,6 +103,10 @@ async function executeCanonical(input: InternalExecuteTestInput & { persistAttem
     await input.onSessionActive?.({ attemptId: input.attemptId, session });
     for (const step of input.steps) {
       if (priorFailed && !(step.independent === true && step.sideEffect === "none")) { steps.push(notRunStep(step)); continue; }
+      if (input.authorizeStep !== undefined) {
+        const decision = await input.authorizeStep(step);
+        if (!decision.allowed) { steps.push(blockedStep(step, decision.reasons)); priorFailed = true; continue; }
+      }
       const result = await executeBrowserStep(session.page, step, session.telemetry, resolveSecret);
       steps.push(result);
       if (result.status === "FAILED") priorFailed = true;
@@ -121,13 +141,20 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
-    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), persistAttempt: async (attempt) => {
+    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), ...(input.environment === undefined ? {} : { authorizeStep: async (step) => authorizeStep({ sideEffect: step.sideEffect, action: step.action.kind, channel: "browser", target: permitTarget(step) }, input.environment!, input.externalPermitRegistry ?? []) }), persistAttempt: async (attempt) => {
       await input.workspace.registerArtifactValue({
         type: "test-result",
         value: {
           artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
           attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
           testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
+          steps: attempt.steps.map((step) => ({
+            stepId: step.stepId,
+            status: step.status,
+            durationMs: step.durationMs,
+            ...(step.failureOrigin === undefined ? {} : { failureOrigin: step.failureOrigin }),
+            ...(step.failedAssertion?.expectedResultId === undefined ? {} : { expectedResultId: step.failedAssertion.expectedResultId }),
+          })),
           failureClassification: attempt.status === "PASSED"
             ? "NONE"
             : attempt.steps.some((step) => step.status === "FAILED"
@@ -139,7 +166,7 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
           startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
         },
         relationships: [testCase.artifact.record.id],
-        provenance: "runtime",
+        provenance: "runtime-execution",
       });
     } });
     return attempt;

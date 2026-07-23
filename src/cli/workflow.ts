@@ -7,10 +7,43 @@ import { loadQaConfig } from "../config/load-config.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createQaTester, type QaWorkflowInput, type WorkflowResult } from "../orchestration/qa-tester.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
+import { RunWorkspace } from "../core/run-workspace.js";
+import { readAgentDraft } from "../operations/ingest-requirement-analysis.js";
+import type { CanonicalPlanBundleRef } from "../operations/run-workflow.js";
 
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
 export type ScaffoldOptions = Readonly<{ root: string; mode: string; outputPath: string; environmentPath?: string; sourceRoot?: string; sourceRunId?: string }>;
+export type BootstrapOptions = Readonly<{ root: string; environmentPath: string; requirementPath: string; planPath: string; testCasePaths: readonly string[]; coveragePaths: readonly string[] }>;
+
+/** Creates the first terminal planning run and returns its complete checksum-bound bundle. */
+export async function bootstrapPlanningBundle(options: BootstrapOptions): Promise<{ runId: string; bundle: CanonicalPlanBundleRef }> {
+  if (options.testCasePaths.length === 0 || options.coveragePaths.length === 0) throw new QaSkillsError("Bootstrap requires at least one testcase and coverage obligation", "INVALID_ARTIFACT");
+  const environmentValue: unknown = JSON.parse(await readFile(resolve(options.environmentPath), "utf8"));
+  if (!record(environmentValue)) throw new QaSkillsError("Bootstrap environment profile must contain an object", "INVALID_ARTIFACT");
+  const [requirement, plan, ...rest] = await Promise.all([
+    readAgentDraft(resolve(options.requirementPath)),
+    readAgentDraft(resolve(options.planPath)),
+    ...options.testCasePaths.map((path) => readAgentDraft(resolve(path))),
+    ...options.coveragePaths.map((path) => readAgentDraft(resolve(path))),
+  ]);
+  const testCases = rest.slice(0, options.testCasePaths.length);
+  const obligations = rest.slice(options.testCasePaths.length);
+  const workspace = await RunWorkspace.create({ root: resolve(options.root), mode: "plan", environmentProfile: environmentValue });
+  try {
+    const batch = await workspace.registerArtifactValueBatch([
+      { key: "requirement", type: "requirement-analysis", value: requirement, relationships: [], provenance: "agent-draft" },
+      { key: "plan", type: "test-plan", value: plan, relationshipKeys: ["requirement"], provenance: "agent-draft" },
+      ...testCases.map((value, index) => ({ key: `testcase-${index}`, type: "test-case" as const, value, relationshipKeys: ["plan"], provenance: "agent-draft" })),
+      ...obligations.map((value, index) => ({ key: `coverage-${index}`, type: "coverage-obligation" as const, value, relationshipKeys: ["requirement"], referenceFields: { requirementAnalysisArtifactId: "requirement" }, provenance: "agent-draft" })),
+    ]);
+    const validation = await workspace.finalize("plan");
+    if (!validation.valid) throw new QaSkillsError("Bootstrap planning workspace did not satisfy the terminal plan profile", "ARTIFACT_BINDING");
+    return { runId: workspace.runId, bundle: { sourceRunId: workspace.runId, artifacts: [...batch.values()].map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) } };
+  } finally {
+    await workspace.close();
+  }
+}
 
 /** Create a closed workflow input from explicit paths; never discovers a "latest" run. */
 export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<Record<string, unknown>> {

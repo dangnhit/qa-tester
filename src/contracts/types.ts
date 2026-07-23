@@ -16,6 +16,7 @@ export const artifactTypes = [
   "requirement-analysis",
   "coverage-obligation",
   "test-plan",
+  "approval-decision",
   "exploration-charter",
   "retest-result",
   "regression-selection",

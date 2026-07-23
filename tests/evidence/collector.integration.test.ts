@@ -21,7 +21,7 @@ async function registerAttempt(workspace: RunWorkspace, attemptId: string): Prom
     coverage: { requirementId: "REQ-1", role: "tester", behavior: "capture", browser: "chromium", viewport: { width: 80, height: 60 }, accessibilityMethod: null, risk: "low", outcome: "capture completes" },
   }, relationships: [], provenance: "test" });
   await workspace.registerArtifactValue({ type: "test-result", value: {
-    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
+    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
   }, relationships: [testCase.id], provenance: "test" });
 }
 
@@ -164,6 +164,34 @@ describe("live evidence collector", () => {
       const manifest = await readFile(join(workspace.path, "artifact-manifest.json"), "utf8");
       expect(manifest).not.toContain(pii);
       expect(JSON.stringify(await workspace.readRegisteredArtifacts())).not.toContain(pii);
+    } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
+  });
+
+  it("executes a concrete protected-telemetry scrubber before persistence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-protected-scrubber-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-protected-scrubber", name: "Protected", classification: "production", baseUrl: "https://example.test", productionReadOnly: true } });
+    const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage();
+    const attemptId = "attempt-protected-scrubber"; const pii = "customer+private@personal.example";
+    await registerAttempt(workspace, attemptId);
+    activeBrowserSessions.set(attemptId, { context, page, secrets: new Set(), telemetry: { findings: [{ kind: "network", level: "error", message: `leaked ${pii}`, timestamp: new Date().toISOString() }], responseStatuses: new Map(), networkRecords: [{ url: `https://example.test/account/${pii}`, requestBody: `email=${pii}`, responseBody: pii }] } });
+    let invocations = 0;
+    try {
+      const result = await attachEvidence({
+        workspace,
+        attemptId,
+        callerAttemptId: attemptId,
+        telemetry: "network",
+        protectedEnvironment: true,
+        telemetryScrubber: (payload, context) => {
+          invocations += 1;
+          expect(context).toEqual({ attemptId, channel: "network" });
+          return JSON.parse(JSON.stringify(payload).replaceAll(pii, "[PII]")) as typeof payload;
+        },
+      });
+      expect(result.kind).toBe("evidence");
+      expect(invocations).toBe(1);
+      const persisted = await Promise.all((await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "evidence").map((artifact) => readFile(join(workspace.path, artifact.record.relativePath), "utf8")));
+      expect(persisted.join("\n")).not.toContain(pii);
     } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
   });
 });

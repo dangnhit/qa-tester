@@ -28,7 +28,15 @@ export function validateRedactionPlan(plan: RedactionPlan): RedactionCheck {
 }
 
 export function redactText(value: string, secrets: readonly string[]): string {
-  return secrets.filter((secret) => secret.length > 0).reduce((result, secret) => result.replaceAll(secret, "[REDACTED]"), value);
+  const variants = secrets
+    .filter((secret) => secret.length > 0)
+    .flatMap((secret) => {
+      const component = encodeURIComponent(secret);
+      return [secret, component, component.replaceAll("%20", "+"), encodeURI(secret)];
+    });
+  return [...new Set(variants)]
+    .sort((left, right) => right.length - left.length)
+    .reduce((result, secret) => result.replaceAll(secret, "[REDACTED]"), value);
 }
 
 function redactJson(value: unknown, secrets: readonly string[]): unknown {

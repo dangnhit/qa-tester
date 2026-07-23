@@ -243,7 +243,8 @@ export async function runDemo(options: Readonly<{ root?: string; protectedEnviro
         browserManagers: { demo: { browser, annotateFailures: true } },
         secretResolvers: { demo: () => secret },
         testDataRegistries: { demo: testDataRegistry },
-        evidencePolicies: { demo: { safety: { screenshot: "required", console: "required", network: "required", logs: "required", trace: "required" }, ...(protectedEnvironment ? { protection: { protectedEnvironment: true, domSelectors: ["input"], deterministicTelemetryScrubber: true } } : {}) } },
+        evidencePolicies: { demo: { safety: { screenshot: "required", console: "required", network: "required", logs: "required", trace: "required" }, ...(protectedEnvironment ? { protection: { protectedEnvironment: true, domSelectors: ["input"], telemetryScrubberId: "demo" } } : {}) } },
+        telemetryScrubbers: { demo: (payload) => payload },
       })({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "demo", ...(resolveDemoSecret ? { secretResolverId: "demo" } : {}), testDataRegistryId: "demo", testDataHookIds: ["demo-owned-resource"], evidencePolicyId: "demo" } });
       const cleanupRun = await executeCleanupRun({
         root,

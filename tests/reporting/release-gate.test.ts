@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateReleaseGate } from "../../src/reporting/release-gate.js";
+import { deriveReleaseGateFromWorkspaceArtifacts, evaluateReleaseGate } from "../../src/reporting/release-gate.js";
 
 const passing = { artifactsValid: true, coverage: { requiredMissing: [], optionalGaps: [], requiredHighRisk: [{ obligationId: "COV-PAY", passed: true }] }, bugs: [], sharedBlockers: [] };
 
@@ -20,5 +20,26 @@ describe("evaluateReleaseGate", () => {
     expect(evaluateReleaseGate({ ...passing, coverage: { ...passing.coverage, optionalGaps: ["COV-OPTIONAL"] } }).recommendation).toBe("READY_WITH_RISKS");
     expect(evaluateReleaseGate({ ...passing, bugs: [{ bugId: "BUG-3", triageStatus: "TRIAGED", severity: "Major", open: true }] }).recommendation).toBe("READY_WITH_RISKS");
     expect(evaluateReleaseGate(passing)).toMatchObject({ recommendation: "READY", ruleInputs: passing });
+  });
+
+  it("never recommends READY while an Evidence Gap leaves a claim unsubstantiated", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([{
+      record: { id: "GAP-1", sha256: "a".repeat(64), type: "evidence-gap" },
+      value: {
+        artifactType: "evidence-gap",
+        schemaVersion: "1.0.0",
+        producerVersion: "0.1.0",
+        evidenceGapId: "GAP-1",
+        runId: "RUN-1",
+        scope: "operational",
+        reason: "Required video could not be captured.",
+        affectedClaim: "video capture",
+      },
+    }]);
+
+    expect(result.recommendation).toBe("NOT_READY");
+    expect(result.ruleInputs.sharedBlockers).toEqual(expect.arrayContaining([
+      expect.stringMatching(/evidence gap.*video capture/i),
+    ]));
   });
 });

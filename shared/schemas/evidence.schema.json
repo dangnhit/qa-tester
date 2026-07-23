@@ -20,6 +20,17 @@
     "binaryArtifactIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "binaryArtifacts": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "relativePath", "sha256", "mediaType"], "properties": { "id": { "type": "string", "minLength": 1 }, "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "mediaType": { "type": "string", "minLength": 1 } } } },
     "telemetryFindings": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["kind", "level", "message"], "properties": { "kind": { "enum": ["console", "network"] }, "level": { "type": "string", "minLength": 1 }, "message": { "type": "string", "minLength": 1 } } } },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceEvidenceArtifactId", "sourceEvidenceSha256", "sourceBinaryArtifactId", "sourceRawSha256"],
+      "properties": {
+        "sourceEvidenceArtifactId": { "type": "string", "minLength": 1 },
+        "sourceEvidenceSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sourceBinaryArtifactId": { "type": "string", "minLength": 1 },
+        "sourceRawSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
