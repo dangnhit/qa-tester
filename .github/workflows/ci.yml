@@ -16,38 +16,41 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run generate:types
       - run: npm run check:generated
       - run: npm run typecheck
       - run: npm run lint
-      - name: Unit, schema, and CLI tests
-        run: npm test -- tests/core tests/contracts tests/cli tests/planning tests/defects tests/reporting tests/test-data tests/regression tests/retest tests/exploratory
+      - name: Full test suite
+        run: npm test
+      - run: npm run build
 
   windows:
     name: Windows Node 24
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
       - name: Unit, path, init, and installer lifecycle tests
         run: npm test -- tests/core tests/contracts tests/cli tests/installer
+      - run: npm run build
 
   browser-demo:
     name: Chromium integration and expected-failure demo
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -62,8 +65,8 @@ jobs:
     name: Deterministic secret and ignore scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm

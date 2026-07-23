@@ -14,6 +14,7 @@
       input { border: 1px solid #8292aa; padding: 0 .8rem; }
       button { border: 0; background: #1d4ed8; color: white; font-weight: 700; cursor: pointer; }
       small { color: #53637a; }
+      output { display: block; min-height: 2rem; padding: .5rem; border: 1px dashed #94a3b8; border-radius: .4rem; }
     </style>
   </head>
   <body>
@@ -22,7 +23,8 @@
       <form data-testid="demo-form">
         <label>Email <input aria-label="Email" value="qa@example.test" /></label>
         <button type="button">Save profile</button>
-        <small>The fixture intentionally omits the authoritative success message.</small>
+        <small>The fixture intentionally leaves the authoritative success message empty.</small>
+        <output data-testid="validation-message" aria-live="polite"></output>
       </form>
     </main>
     <script>

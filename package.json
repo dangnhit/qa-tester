@@ -2,6 +2,7 @@
   "name": "@vigentix/qa-skills",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "files": [
     "dist",
@@ -32,13 +33,13 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "commander": "^14.0.0",
+    "@playwright/test": "^1.54.1",
     "sharp": "^0.34.3",
     "ulid": "^3.0.1",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",
-    "@playwright/test": "^1.54.1",
     "@types/node": "^24.0.15",
     "eslint": "^9.31.0",
     "json-schema-to-typescript": "^15.0.4",

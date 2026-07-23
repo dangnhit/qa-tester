@@ -461,12 +461,11 @@ async function inspectWorkspaceState(
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test step result must reference one registered attempt and test case step") || changed;
         }
       } else if (artifact.record.type === "evidence") {
-        // Legacy staging evidence is ignored here; public runtime capture no
-        // longer emits it and always binds final evidence to a result.
-        if (value.pendingAttempt === true) continue;
         const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
-        if (matches.length !== 1) {
-          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference exactly one registered attempt") || changed;
+        const match = matches[0];
+        if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
+          || value.testCaseId !== match.value?.testCaseId || value.testCaseRevisionId !== match.value?.testCaseRevisionId || value.testCaseInstanceId !== match.value?.testCaseInstanceId) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
         }
       } else if (artifact.record.type === "bug-report") {
         const matchingAttempts = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
@@ -657,7 +656,7 @@ async function inspectWorkspaceState(
   for (const artifact of artifacts.filter((candidate) => candidate.valid && (candidate.record.type === "evidence" || candidate.record.type === "evidence-gap") && candidate.value !== undefined)) {
     const value = artifact.value as Record<string, unknown>;
     if (artifact.record.type === "evidence") {
-      if (value.pendingAttempt !== true && !exactAttemptEvidenceBinding(artifact, artifacts)) {
+      if (!exactAttemptEvidenceBinding(artifact, artifacts)) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must have one exact test-result relationship and matching testcase identity") || changed;
       }
     } else if (value.scope === "attempt") {
@@ -1271,18 +1270,12 @@ export class RunWorkspace {
         throw new QaSkillsError("Test step result references an unregistered step", "ARTIFACT_BINDING");
       }
     } else if (type === "evidence") {
-      // A staging descriptor is permitted only long enough for a trusted
-      // finalizer (annotation/capture) to create its final successor. Reopen
-      // validation rejects a forever-pending descriptor; final descriptors
-      // always require an already-registered exact attempt.
-      if (value.pendingAttempt !== true) {
-        const records = await this.readGateWorkspaceArtifacts(manifest);
-        const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
-        if (result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
-          || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
-          || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
-          throw new QaSkillsError("Evidence binding requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
-        }
+      const records = await this.readGateWorkspaceArtifacts(manifest);
+      const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
+      if (result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
+        || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
+        || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
+        throw new QaSkillsError("Evidence binding requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
       }
     } else if (type === "evidence-gap") {
       if (value.scope === "operational") {

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+async function filesUnder(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return (await Promise.all(entries.map(async (entry) => entry.isDirectory() ? filesUnder(join(directory, entry.name)) : [join(directory, entry.name)]))).flat();
+}
 describe("localhost intentional-failure demo", () => {
   it("detects the product defect on Chromium desktop and mobile and validates the full artifact profile", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-skills-demo-"));
@@ -35,5 +39,38 @@ describe("localhost intentional-failure demo", () => {
     expect(result.validation.valid).toBe(true);
     expect(result.telemetry.consoleErrors).toContain("QA_DEMO_CONSOLE_ERROR");
     expect(result.telemetry.failedRequests).toContain("/api/demo-failure");
+    expect(result.cleanup).toEqual({ status: "COMPLETED", resources: ["deleted"] });
+    for (const instanceId of ["INSTANCE-DEMO-DESKTOP", "INSTANCE-DEMO-MOBILE"]) {
+      const evidence = result.evidenceByInstance.find((item) => item.instanceId === instanceId);
+      expect(evidence).toMatchObject({
+        instanceId,
+        rawScreenshots: 1,
+        annotatedScreenshots: 1,
+        traces: 1,
+        console: 1,
+        network: 1,
+        annotation: {
+          testCaseRevisionId: "REV-DEMO-SAVE",
+          testCaseInstanceId: instanceId,
+          locator: JSON.stringify({ testId: "validation-message" }),
+        },
+      });
+      expect(evidence?.annotation.label).toMatch(/expected text/i);
+      expect(evidence?.annotation.testResultRelated).toBe(true);
+    }
+  }, 60_000);
+
+  it("records a trace Evidence Gap instead of unsafe trace bytes for a protected secret-resolved attempt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-demo-protected-"));
+    roots.push(root);
+
+    const secret = "never-persist-demo-secret";
+    const result = await runDemo({ root, protectedEnvironment: true, resolvedSecret: secret });
+
+    expect(result.files.some((file) => file.startsWith("traces/"))).toBe(false);
+    expect(result.traceEvidenceGaps).toHaveLength(2);
+    expect(result.traceEvidenceGaps.every((gap) => /protected|secret/i.test(gap.reason))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    for (const path of await filesUnder(root)) expect(await readFile(path)).not.toContain(Buffer.from(secret));
   }, 60_000);
 });

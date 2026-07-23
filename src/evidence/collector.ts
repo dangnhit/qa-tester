@@ -35,6 +35,11 @@ async function registerGap(workspace: RunWorkspace, attemptId: string, reason: s
   return { kind: "evidence-gap", descriptorArtifactId: record.id, gap };
 }
 
+/** Registers an explicit attempt-bound gap when an evidence channel cannot be persisted safely. */
+export function recordEvidenceGap(input: { workspace: RunWorkspace; attemptId: string; reason: string; affectedClaim: string }): Promise<GapResult> {
+  return registerGap(input.workspace, input.attemptId, input.reason, input.affectedClaim);
+}
+
 async function applyRegionMasks(session: ActiveBrowserSession, regions: readonly CssBox[]): Promise<string[]> {
   return session.page.evaluate((boxes) => boxes.map((box, index) => {
     const browser = globalThis as unknown as PageRuntime;

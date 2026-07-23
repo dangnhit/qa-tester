@@ -10,13 +10,16 @@ import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
 import { activeBrowserSessions, executeTestInstance } from "./execute-browser-test.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
-import { attachEvidence, captureEvidence } from "../evidence/collector.js";
+import { attachEvidence, captureEvidence, recordEvidenceGap } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
+import { normalizeGeometry } from "../evidence/geometry.js";
+import { redactText } from "../evidence/redaction.js";
+import { resolveLocator } from "../browser/locator.js";
 import { resolveEvidencePolicy, type EvidencePolicyLayers } from "../evidence/policy.js";
 import { prepareTestData } from "./prepare-test-data.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { registerChangeScope } from "../regression/change-scope.js";
-import { readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEntityId } from "../core/ids.js";
@@ -74,7 +77,7 @@ export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode;
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
 export type CanonicalPlanBundleRef = Readonly<{ sourceRunId: string; artifacts: readonly RegisteredArtifactRef[] }>;
 export type QaRuntimeRegistry = Readonly<{
-  browserManagers?: Readonly<Record<string, Readonly<{ browser: Browser; captureTrace?: boolean; annotateFailures?: boolean }>>>;
+  browserManagers?: Readonly<Record<string, Readonly<{ browser: Browser; annotateFailures?: boolean }>>>;
   secretResolvers?: Readonly<Record<string, SecretResolver>>;
   testDataRegistries?: Readonly<Record<string, TestDataHookRegistry>>;
   evidencePolicies?: Readonly<Record<string, EvidencePolicyLayers>>;
@@ -94,7 +97,7 @@ export type QaWorkflowInput = Readonly<{
   /** Reopens the same nonterminal run after its checkpointed runtime becomes available. */
   resumeRunId?: string;
   linkedRunId?: string;
-  runtime?: Readonly<{ browserManagerId?: string; secretResolverId?: string; testDataRegistryId?: string; evidencePolicyId?: string; changeScopeSourceId?: string }>;
+  runtime?: Readonly<{ browserManagerId?: string; secretResolverId?: string; testDataRegistryId?: string; testDataHookIds?: readonly string[]; evidencePolicyId?: string; changeScopeSourceId?: string }>;
   charter?: ExplorationCharter;
   retest?: Readonly<{ sourceBug: RegisteredArtifactRef }>;
 }>;
@@ -111,7 +114,7 @@ function asString(value: unknown, label: string): string {
 }
 
 function workflowInputChecksum(input: QaWorkflowInput): string {
-  return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, charter: input.charter, retest: input.retest }));
+  return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, testDataHookIds: input.runtime?.testDataHookIds, charter: input.charter, retest: input.retest }));
 }
 
 type WorkflowStateSnapshot = Readonly<{
@@ -371,35 +374,49 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
       results.push(registered.record); continue;
     }
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
-    const tracePath = join(tmpdir(), `qa-skills-${attemptId}.zip`);
-    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(manager.captureTrace === true ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
-      if (manager.captureTrace === true) {
-        try {
-          await session.context.tracing.stop({ path: tracePath });
-          const bytes = await readFile(tracePath);
-          const resultArtifact = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
-          if (!resultArtifact) throw new QaSkillsError("Trace capture requires a registered attempt", "ARTIFACT_BINDING");
-          const evidenceId = createEntityId();
-          const capturedAt = new Date().toISOString();
-          const viewport = session.page.viewportSize() ?? { width: 1, height: 1 };
-          const scroll = await session.page.evaluate(() => {
-            const page = globalThis as unknown as { scrollX: number; scrollY: number };
-            return { x: Math.max(0, page.scrollX), y: Math.max(0, page.scrollY) };
-          });
-          await workspace.registerEvidenceBundle({
-            binaries: [{ filename: `${evidenceId}-trace.zip`, contents: bytes, mediaType: "application/zip", captureType: "trace" }],
-            relationships: [resultArtifact.record.id],
-            provenance: "runtime",
-            descriptor: (binaries) => {
-              const binary = binaries[0]!;
-              const value = { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId, runId: workspace.runId, attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId), kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", dimensions: viewport, dpr: 1, scroll, clip: { x: 0, y: 0, width: viewport.width, height: viewport.height }, url: session.page.url(), viewport, browser: "playwright", build: "demo", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
-              const validation = validateArtifact("evidence", value);
-              if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
-              return value;
-            },
-          });
-        } finally {
-          await rm(tracePath, { force: true });
+    const traceActive = policy.trace === "on-failure" || policy.trace === "always" || policy.trace === "required";
+    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(traceActive ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
+      const retainTrace = policy.trace === "always" || policy.trace === "required" || (policy.trace === "on-failure" && attempt.status !== "PASSED");
+      if (traceActive) {
+        const unsafeTraceReason = capturePolicy.protectedEnvironment
+          ? "Trace bytes are unavailable for a protected environment because deterministic archive redaction cannot be proven"
+          : session.secrets.size > 0
+            ? "Trace bytes are unavailable after secret resolution because deterministic archive redaction cannot be proven"
+            : undefined;
+        if (!retainTrace || unsafeTraceReason !== undefined) {
+          await session.context.tracing.stop();
+          if (retainTrace && unsafeTraceReason !== undefined) await recordEvidenceGap({ workspace, attemptId, reason: unsafeTraceReason, affectedClaim: "trace capture" });
+        } else {
+          const traceDirectory = await mkdtemp(join(tmpdir(), "qa-skills-trace-"));
+          const tracePath = join(traceDirectory, "trace.zip");
+          try {
+            await session.context.tracing.stop({ path: tracePath });
+            const bytes = await readFile(tracePath);
+            const resultArtifact = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+            if (!resultArtifact) throw new QaSkillsError("Trace capture requires a registered attempt", "ARTIFACT_BINDING");
+            const evidenceId = createEntityId();
+            const capturedAt = new Date().toISOString();
+            const viewport = session.page.viewportSize() ?? { width: 1, height: 1 };
+            const scroll = await session.page.evaluate(() => {
+              const page = globalThis as unknown as { scrollX: number; scrollY: number };
+              return { x: Math.max(0, page.scrollX), y: Math.max(0, page.scrollY) };
+            });
+            const safeUrl = redactText(session.page.url(), [...session.secrets]);
+            await workspace.registerEvidenceBundle({
+              binaries: [{ filename: `${evidenceId}-trace.zip`, contents: bytes, mediaType: "application/zip", captureType: "trace" }],
+              relationships: [resultArtifact.record.id],
+              provenance: "runtime",
+              descriptor: (binaries) => {
+                const binary = binaries[0]!;
+                const value = { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId, runId: workspace.runId, attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId), kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", dimensions: viewport, dpr: 1, scroll, clip: { x: 0, y: 0, width: viewport.width, height: viewport.height }, url: safeUrl, viewport, browser: "playwright", build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+                const validation = validateArtifact("evidence", value);
+                if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
+                return value;
+              },
+            });
+          } finally {
+            await rm(traceDirectory, { recursive: true, force: true });
+          }
         }
       }
       const attachment = async (telemetry: "console" | "network" | "log") => {
@@ -412,10 +429,20 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
       if (policy.screenshot === "always" || policy.screenshot === "required" || (policy.screenshot === "on-failure" && attempt.status !== "PASSED")) {
         const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
         if (manager.annotateFailures === true && attempt.status !== "PASSED" && evidence.kind === "evidence") {
-          const viewport = session.page.viewportSize() ?? { width: 390, height: 844 };
-          const width = Math.max(1, Math.min(360, viewport.width - 24));
-          const height = Math.max(1, Math.min(90, viewport.height - 24));
-          await annotateScreenshot({ workspace, rawEvidenceDescriptorId: evidence.descriptorArtifactId, rawBinaryArtifactId: evidence.binaryArtifactId, annotations: [{ id: "demo-failure", label: "Missing authoritative validation message", locator: "[data-testid=validation-message]", cssBox: { x: 12, y: 12, width, height }, x: 12, y: 12, width, height }] });
+          const failed = attempt.steps.find((step) => step.status === "FAILED" && step.failedAssertion !== undefined && "locator" in step.failedAssertion);
+          if (failed?.failedAssertion && "locator" in failed.failedAssertion) {
+            const box = await resolveLocator(session.page, failed.failedAssertion.locator).boundingBox();
+            const raw = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === evidence.descriptorArtifactId)?.value;
+            const provenance = record(raw?.provenance) ? raw.provenance : undefined;
+            const dimensions = record(provenance?.dimensions) ? provenance.dimensions : undefined;
+            const scroll = record(provenance?.scroll) ? provenance.scroll : undefined;
+            const clip = record(provenance?.clip) ? provenance.clip : undefined;
+            if (box && dimensions && scroll && clip && typeof dimensions.width === "number" && typeof dimensions.height === "number" && typeof provenance?.dpr === "number" && typeof scroll.x === "number" && typeof scroll.y === "number" && typeof clip.x === "number" && typeof clip.y === "number" && typeof clip.width === "number" && typeof clip.height === "number") {
+              const locator = JSON.stringify(failed.failedAssertion.locator);
+              const annotations = normalizeGeometry({ image: { width: dimensions.width, height: dimensions.height, dpr: provenance.dpr, scrollX: scroll.x, scrollY: scroll.y, clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height } }, annotations: [{ id: `failure-${failed.stepId}`, box, ...(failed.error === undefined ? {} : { label: failed.error }), locator }] });
+              await annotateScreenshot({ workspace, rawEvidenceDescriptorId: evidence.descriptorArtifactId, rawBinaryArtifactId: evidence.binaryArtifactId, annotations });
+            }
+          }
         }
       }
     } });
@@ -633,6 +660,13 @@ export function createQaTesterWithTraceForTests(runtime: QaRuntimeRegistry, trac
   return (input) => runQaTesterWithAdapters(runtime, input, traced);
 }
 
+/** Finalizes once and derives the returned outcome from the same facts persisted in run metadata. */
+export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: PublicWorkflowMode): Promise<{ outcome: Extract<WorkflowTerminalStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">; validation: WorkspaceValidation }> {
+  const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
+  const validation = await workspace.finalize(mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+  return { outcome: hasExecutionFailures || !validation.valid ? "COMPLETED_WITH_FAILURES" : "COMPLETED", validation };
+}
+
 async function outputRecords(workspace: RunWorkspace, output: WorkflowOutput): Promise<readonly ArtifactRecord[]> {
   if (Array.isArray(output) && output.every(artifactRecord)) return output;
   if (artifactRecord(output)) return [output];
@@ -748,9 +782,7 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
       state.outputs[name] = output as never;
       state.checkpoint = await advanceCheckpoint(workspace, input, state.checkpoint, name, await outputRecords(workspace, output), state);
     }
-    const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
-    const outcome = hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : "COMPLETED";
-    const validation = await workspace.finalize(input.mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+    const { outcome, validation } = await finalizeWorkflowOutcome(workspace, input.mode);
     return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
   } finally { await workspace.close(); }
 }
@@ -767,7 +799,7 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
   }
   if (name === "prepare-test-data") {
     const hooks = resolveRuntime(runtime.testDataRegistries, input.runtime?.testDataRegistryId, "test-data registry");
-    await prepareTestData({ workspace, hooks, hookIds: [] });
+    await prepareTestData({ workspace, hooks, hookIds: input.runtime?.testDataHookIds ?? [] });
     const manifest = (await artifacts()).find((artifact) => artifact.record.type === "test-data-manifest");
     if (!manifest) throw new QaSkillsError("Test-data operation did not register its manifest", "ARTIFACT_BINDING");
     return manifest.record as WorkflowOperationOutputMap[Name];
@@ -901,9 +933,7 @@ async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowR
         await exactRetestReproduction(workspace, input.retest);
       }
     }
-    const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
-    const outcome = hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : "COMPLETED";
-    const validation = await workspace.finalize(input.mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+    const { outcome, validation } = await finalizeWorkflowOutcome(workspace, input.mode);
     return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
   } finally { if (ownsWorkspace) await workspace.close(); }
 }

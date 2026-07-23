@@ -19,6 +19,8 @@ export type EvidenceProvenance = {
   dimensions?: { width: number; height: number };
   cssBoxes?: readonly { x: number; y: number; width: number; height: number }[];
   normalizedPixelBoxes?: readonly PixelAnnotation[];
+  locator?: string;
+  annotationLabels?: readonly string[];
 };
 
 export function evidenceFilename(evidenceId: string, suffix: "sanitized-raw" | "annotated"): string { return `${evidenceId}-${suffix}.png`; }

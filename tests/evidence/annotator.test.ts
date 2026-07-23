@@ -38,10 +38,22 @@ function pixel(bytes: Buffer, width: number, x: number, y: number): number[] {
 }
 
 async function registerRaw(workspace: RunWorkspace, options: { attemptId?: string; bytes?: Buffer } = {}) {
+  const attemptId = options.attemptId ?? "attempt-1";
+  const testCase = await workspace.registerArtifactValue({
+    type: "test-case",
+    relationships: [],
+    value: { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "0.1.0", testCaseId: "TC-ANNOTATION", revisionId: "REV-ANNOTATION", instanceId: "INSTANCE-ANNOTATION", title: "Annotation source", steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-ANNOTATION", role: "member", behavior: "annotate", browser: "chromium", viewport: { width: 120, height: 80 }, accessibilityMethod: null, risk: "low", outcome: "annotated" } },
+  });
+  const result = await workspace.registerArtifactValue({
+    type: "test-result",
+    relationships: [testCase.id],
+    value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
+  });
   const bytes = options.bytes ?? await patternedPng();
   return workspace.registerEvidenceBundle({
     binaries: [{ filename: "sanitized-raw.png", contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
-    descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: workspace.runId, attemptId: options.attemptId ?? "attempt-1", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: binaries[0]?.mediaType, binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 120, height: 80 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 120, height: 80 }, url: "https://example.test", viewport: { width: 120, height: 80 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:00:00.000Z" } }),
+    relationships: [result.id],
+    descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: workspace.runId, attemptId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: binaries[0]?.mediaType, binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 120, height: 80 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 120, height: 80 }, url: "https://example.test", viewport: { width: 120, height: 80 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:00:00.000Z", testcaseId: "TC-ANNOTATION" } }),
   });
 }
 
@@ -169,7 +181,7 @@ describe("annotateScreenshot", () => {
     expect(await readdir(join(workspace.path, "evidence"))).toEqual([raw.relativePath.split("/").at(-1)]);
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { id: string }[] };
     expect(manifest.artifacts.map((artifact) => artifact.id)).toEqual(expect.arrayContaining([raw.id, rawBundle.descriptor.id]));
-    expect(manifest.artifacts).toHaveLength(3);
+    expect(manifest.artifacts).toHaveLength(5);
     await workspace.close();
   });
 

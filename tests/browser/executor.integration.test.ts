@@ -42,18 +42,18 @@ function browserDsl() {
   ] } satisfies { steps: readonly BrowserTestStep[] };
 }
 
-function requirement() {
+function requirement(authority: "AUTHORITATIVE" | "INFERRED" = "AUTHORITATIVE") {
   return {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-BROWSER",
-    statements: [{ requirementId: "REQ-BROWSER", sourceProvenance: { kind: "user", reference: "ticket-browser" }, normalizedText: "A member must be able to save an email.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }],
+    statements: [{ requirementId: "REQ-BROWSER", sourceProvenance: authority === "INFERRED" ? { kind: "code", reference: "controller.ts" } : { kind: "user", reference: "ticket-browser" }, normalizedText: "A member must be able to save an email.", authority, role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }],
   };
 }
 
-function plan(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER", dsl: { steps: readonly BrowserTestStep[] } = browserDsl(), policy: "auto-approve-safe" | "human-review" = "auto-approve-safe") {
+function plan(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER", dsl: { steps: readonly BrowserTestStep[] } = browserDsl(), policy: "auto-approve-safe" | "human-review" = "auto-approve-safe", expectedAuthority: "AUTHORITATIVE" | "INFERRED" = "AUTHORITATIVE") {
   return {
     artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-BROWSER", approvalPolicy: { mode: policy },
     testCases: [{
-      testCaseId: "TC-BROWSER", title: "Saves email", expectedResults: [{ id: "ER-BROWSER", requirementId: "REQ-BROWSER", authority: "AUTHORITATIVE", text: "The email is saved." }],
+      testCaseId: "TC-BROWSER", title: "Saves email", expectedResults: [{ id: "ER-BROWSER", requirementId: "REQ-BROWSER", authority: expectedAuthority, text: "The email is saved." }],
       steps: [{ id: "plan-open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [],
       browserExecution: { revisionId, instanceId, browserDsl: dsl, browserDslFingerprint: sha256Fingerprint(dsl) },
     }],
@@ -68,12 +68,12 @@ function testCase(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER") {
   };
 }
 
-async function governedWorkspace(options: { revisionId?: string; instanceId?: string; testCaseRevisionId?: string; testCaseInstanceId?: string; dsl?: { steps: readonly BrowserTestStep[] }; policy?: "auto-approve-safe" | "human-review"; decision?: unknown } = {}) {
+async function governedWorkspace(options: { revisionId?: string; instanceId?: string; testCaseRevisionId?: string; testCaseInstanceId?: string; dsl?: { steps: readonly BrowserTestStep[] }; policy?: "auto-approve-safe" | "human-review"; expectedAuthority?: "AUTHORITATIVE" | "INFERRED"; decision?: unknown } = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-browser-"));
   roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
-  await workspace.registerArtifactValue({ type: "requirement-analysis", value: requirement(), relationships: [] });
-  const planValue = plan(options.revisionId, options.instanceId, options.dsl, options.policy);
+  await workspace.registerArtifactValue({ type: "requirement-analysis", value: requirement(options.expectedAuthority), relationships: [] });
+  const planValue = plan(options.revisionId, options.instanceId, options.dsl, options.policy, options.expectedAuthority);
   if (options.decision !== undefined) Object.assign(planValue, { approvalDecision: options.decision });
   const registeredPlan = await workspace.registerArtifactValue({ type: "test-plan", value: planValue, relationships: [] });
   const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase(options.testCaseRevisionId ?? options.revisionId, options.testCaseInstanceId ?? options.instanceId), relationships: [registeredPlan.id] });
@@ -178,6 +178,28 @@ describe("executeTestInstance", () => {
     expect(attempt.telemetry.some((finding) => finding.message.includes("[REDACTED]"))).toBe(true);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("NEVER-serialize");
+  });
+
+  it("classifies only an assertion bound to an approved authoritative expected result as a product defect", async () => {
+    const authoritativeDsl = { steps: [
+      { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" },
+      { id: "mismatch", action: { kind: "wait", milliseconds: 0 }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Missing", expectedResultId: "ER-BROWSER" }], sideEffect: "none" },
+    ] } satisfies { steps: readonly BrowserTestStep[] };
+    const authoritative = await governedWorkspace({ dsl: authoritativeDsl });
+    await executeTestInstance({ workspace: authoritative.workspace, browser, attemptId: "ATTEMPT-AUTHORITY", testCaseArtifactId: authoritative.registeredCase.id });
+    const authoritativeResult = (await authoritative.workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === "ATTEMPT-AUTHORITY");
+    expect(authoritativeResult?.value.failureClassification).toBe("PRODUCT_DEFECT");
+
+    const unboundDsl = { steps: [
+      { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" },
+      { id: "mismatch", action: { kind: "wait", milliseconds: 0 }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Missing" }], sideEffect: "none" },
+    ] } satisfies { steps: readonly BrowserTestStep[] };
+    const unbound = await governedWorkspace({ dsl: unboundDsl });
+    await executeTestInstance({ workspace: unbound.workspace, browser, attemptId: "ATTEMPT-UNBOUND", testCaseArtifactId: unbound.registeredCase.id });
+    const unboundResult = (await unbound.workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === "ATTEMPT-UNBOUND");
+    expect(unboundResult?.value.failureClassification).toBe("TEST_DEFECT");
+
+    await expect(governedWorkspace({ dsl: authoritativeDsl, expectedAuthority: "INFERRED" })).rejects.toThrow(/approved|authoritative|auto-approval/i);
   });
 
   it("runs one real Chromium attempt through fail-fast dependent and independent steps without retrying", async () => {

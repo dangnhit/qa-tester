@@ -4,7 +4,7 @@
   "title": "Evidence Item",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
   "properties": {
     "artifactType": { "const": "evidence" },
     "schemaVersion": { "const": "1.0.0" },
@@ -19,7 +19,6 @@
     "mediaType": { "type": "string", "minLength": 1 },
     "binaryArtifactIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "binaryArtifacts": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "relativePath", "sha256", "mediaType"], "properties": { "id": { "type": "string", "minLength": 1 }, "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "mediaType": { "type": "string", "minLength": 1 } } } },
-    "pendingAttempt": { "type": "boolean" },
     "telemetryFindings": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["kind", "level", "message"], "properties": { "kind": { "enum": ["console", "network"] }, "level": { "type": "string", "minLength": 1 }, "message": { "type": "string", "minLength": 1 } } } },
     "provenance": {
       "type": "object",
@@ -34,6 +33,7 @@
         "cssBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
         "pixelBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
         "locator": { "type": "string" },
+        "annotationLabels": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "url": { "type": "string" },
         "viewport": { "$ref": "#/$defs/viewport" },
         "browser": { "type": "string", "minLength": 1 },
@@ -44,9 +44,6 @@
       }
     }
   },
-  "allOf": [
-    { "if": { "properties": { "pendingAttempt": { "const": true } }, "required": ["pendingAttempt"] }, "then": {}, "else": { "properties": { "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } }, "required": ["testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } }
-  ],
   "$defs": {
     "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 } } },
     "box": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } },

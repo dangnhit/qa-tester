@@ -1,17 +1,15 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export type EvidenceItem = {
-  [k: string]: unknown | undefined;
-} & {
+export interface EvidenceItem {
   artifactType: "evidence";
   schemaVersion: "1.0.0";
   producerVersion: string;
   evidenceId: string;
   runId: string;
   attemptId: string;
-  testCaseId?: string;
-  testCaseRevisionId?: string;
-  testCaseInstanceId?: string;
+  testCaseId: string;
+  testCaseRevisionId: string;
+  testCaseInstanceId: string;
   kind: "screenshot" | "trace" | "console" | "network" | "log" | "evidence-gap";
   capturedAt: string;
   sha256: string;
@@ -38,7 +36,6 @@ export type EvidenceItem = {
       mediaType: string;
     }[]
   ];
-  pendingAttempt?: boolean;
   telemetryFindings?: {
     kind: "console" | "network";
     level: string;
@@ -53,6 +50,7 @@ export type EvidenceItem = {
     cssBoxes?: Box[];
     pixelBoxes?: Box[];
     locator?: string;
+    annotationLabels?: string[];
     url: string;
     viewport: Viewport;
     browser: string;
@@ -61,8 +59,7 @@ export type EvidenceItem = {
     testcaseId?: string;
     bugId?: string;
   };
-};
-
+}
 export interface Viewport {
   width: number;
   height: number;

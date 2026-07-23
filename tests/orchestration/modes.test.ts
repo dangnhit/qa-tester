@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { operationNames, operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
-import { createQaTester, createUnsafeWorkflowRunnerForTests, workflowOperationAdaptersForTests } from "../../src/operations/run-workflow.js";
+import { createQaTester, createUnsafeWorkflowRunnerForTests, finalizeWorkflowOutcome, workflowOperationAdaptersForTests } from "../../src/operations/run-workflow.js";
+import { RunWorkspace } from "../../src/core/run-workspace.js";
+import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 
 describe("workflow mode operation plans", () => {
   it("uses the minimal dependency-ordered operations for plan and execute", () => {
@@ -77,5 +79,27 @@ describe("workflow mode operation plans", () => {
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
       })).resolves.toMatchObject({ outcome: "AWAITING_RUNTIME" });
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("returns the finalized metadata outcome when a passing attempt still fails the artifact profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-workflow-invalid-profile-"));
+    const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-INVALID-PROFILE", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false };
+    const workspace = await RunWorkspace.create({ root, mode: "full", environmentProfile: environment });
+    try {
+      const requirement = await workspace.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: { artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-INVALID-PROFILE", statements: [{ requirementId: "REQ-INVALID-PROFILE", sourceProvenance: { kind: "user", reference: "test" }, normalizedText: "The page must open.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }] } });
+      const dsl = { steps: [{ id: "open", action: { kind: "open", url: "https://example.test" }, sideEffect: "none" }] };
+      const plan = await workspace.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: { artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-INVALID-PROFILE", approvalPolicy: { mode: "auto-approve-safe" }, testCases: [{ testCaseId: "TC-INVALID-PROFILE", title: "Open", expectedResults: [{ id: "ER-INVALID-PROFILE", requirementId: "REQ-INVALID-PROFILE", authority: "AUTHORITATIVE", text: "Open" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [], browserExecution: { revisionId: "REV-INVALID-PROFILE", instanceId: "INSTANCE-INVALID-PROFILE", browserDsl: dsl, browserDslFingerprint: sha256Fingerprint(dsl) } }] } });
+      const testcase = await workspace.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-INVALID-PROFILE", revisionId: "REV-INVALID-PROFILE", instanceId: "INSTANCE-INVALID-PROFILE", title: "Open", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-INVALID-PROFILE", role: "member", behavior: "open", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Open" } } });
+      await workspace.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-INVALID-PROFILE", runId: workspace.runId, testCaseId: "TC-INVALID-PROFILE", testCaseRevisionId: "REV-INVALID-PROFILE", testCaseInstanceId: "INSTANCE-INVALID-PROFILE", status: "PASSED", failureClassification: "NONE", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" } });
+
+      const result = await finalizeWorkflowOutcome(workspace, "full");
+      const metadata = JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8")) as { status: string };
+      expect(result.outcome).toBe("COMPLETED_WITH_FAILURES");
+      expect(result.validation.valid).toBe(false);
+      expect(metadata.status).toBe(result.outcome);
+    } finally {
+      await workspace.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -48,9 +48,9 @@ npx playwright install chromium
 npm run demo
 ```
 
-The demo binds an ephemeral `127.0.0.1` port and makes no external request. Its fixture deliberately omits an authoritative validation message, emits `QA_DEMO_CONSOLE_ERROR`, and calls a local endpoint that deterministically fails. The runtime executes Chromium desktop and emulated mobile Test Case Instances, records traces, sanitized raw and annotated screenshots, console/network telemetry, product Bug Candidates, a QA report, and a validated Full Artifact Profile.
+The demo binds an ephemeral `127.0.0.1` port and makes no external request. Its fixture deliberately leaves an authoritative validation message empty, emits `QA_DEMO_CONSOLE_ERROR`, and calls a local endpoint that deterministically fails. The runtime executes Chromium desktop and emulated mobile Test Case Instances, records traces, sanitized raw and annotated screenshots, console/network telemetry, product Bug Candidates, a QA report, and a validated Full Artifact Profile. It also creates one owned synthetic Test Resource and proves its lifecycle through a separate linked Cleanup Run.
 
-The command exits `0` only when the intentional defect is detected as `FAILED + PRODUCT_DEFECT`, the QA Run is `COMPLETED_WITH_FAILURES`, the release recommendation is `NOT_READY`, and all expected artifacts validate. Canonical run data is written under `qa-results/`; convenient evidence projections are under `demo-artifacts/`. Both are ignored.
+The command exits `0` only when the intentional defect is detected as `FAILED + PRODUCT_DEFECT`, the QA Run is `COMPLETED_WITH_FAILURES`, the release recommendation is `NOT_READY`, each desktop/mobile attempt has its required evidence, cleanup completes, and all expected artifacts validate. Canonical run data is written under `qa-results/`; convenient copied evidence projections are written under `demo-artifacts/`. Both are ignored.
 
 ## CLI reference
 
@@ -70,7 +70,7 @@ All commands print machine-readable JSON unless noted.
 | `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
 
-Workflow/profile modes are `plan`, `execute`, `full`, `exploratory`, `retest`, `regression`, and `cleanup`.
+Public workflow modes are `plan`, `execute`, `full`, `exploratory`, `retest`, and `regression`. `cleanup` is a linked maintenance-run profile created through the cleanup operation; it is not accepted by the public workflow runner.
 
 Exit codes:
 
@@ -156,7 +156,7 @@ demo-artifacts/<run-id>/
 └── traces/
 ```
 
-Every manifest record is checksum-bound and relationships use artifact IDs. Consumers must not scan for the newest run or guess filenames. A completed run is immutable; retest, regression, and cleanup create linked runs.
+Every canonical descriptor and binary is registered in the manifest with a checksum; relationships use artifact IDs. `demo-artifacts/` contains convenience copies only and is never authoritative. Consumers must not scan for the newest run or guess filenames. A completed run is immutable; retest, regression, and cleanup create linked runs.
 
 ## Troubleshooting
 

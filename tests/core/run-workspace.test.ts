@@ -78,6 +78,10 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
   };
 }
 
+async function registerEvidenceAttempt(workspace: RunWorkspace, attemptId = "ATTEMPT-EVIDENCE") {
+  const testCaseRecord = await workspace.registerArtifactValue({ type: "test-case", relationships: [], value: testCase("TC-EVIDENCE") });
+  return workspace.registerArtifactValue({ type: "test-result", relationships: [testCaseRecord.id], value: testResult(workspace, "TC-EVIDENCE", attemptId) });
+}
 async function registerDocument(workspace: RunWorkspace, type: ArtifactType, name: string, value: unknown, relationships: string[] = []) {
   const sourcePath = join(workspace.root, name);
   await writeFile(sourcePath, JSON.stringify(value));
@@ -134,7 +138,7 @@ function failSecondEvidenceBinaryWrite() {
 function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1", kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
     provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
     ...overrides,
@@ -149,11 +153,11 @@ describe("RunWorkspace", () => {
   it("commits an evidence binary and descriptor together or leaves neither registered", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const attempt = await registerEvidenceAttempt(workspace);
     const bundle = await workspace.registerEvidenceBundle({
       binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
-      descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-PENDING", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
-      }),
+      relationships: [attempt.id],
+      descriptor: (binaries) => screenshotDescriptor(workspace, binaries),
     });
     expect(bundle.binaries).toHaveLength(1);
     expect(bundle.descriptor.type).toBe("evidence");
@@ -176,10 +180,11 @@ describe("RunWorkspace", () => {
     const directory = await root();
     const failure = failNextManifestWrite();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile, persistence: failure.persistence });
+    const attempt = await registerEvidenceAttempt(workspace);
     failure.arm();
-    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "rollback.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" } }) })).rejects.toThrow(/manifest/i);
+    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "rollback.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }], relationships: [attempt.id], descriptor: (binaries) => screenshotDescriptor(workspace, binaries) })).rejects.toThrow(/manifest/i);
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
-    expect(manifest.artifacts).toHaveLength(1);
+    expect(manifest.artifacts).toHaveLength(3);
     await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
     await workspace.close();
   });
@@ -188,14 +193,15 @@ describe("RunWorkspace", () => {
     const directory = await root();
     const failure = failSecondEvidenceBinaryWrite();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile, persistence: failure.persistence });
-
+    const attempt = await registerEvidenceAttempt(workspace);
     await expect(workspace.registerEvidenceBundle({
       binaries: ["first", "second", "third"].map((filename) => ({ filename: `${filename}.png`, contents: Buffer.from(filename), mediaType: "image/png", captureType: "screenshot" as const, dimensions: { width: 1, height: 1 } })),
+      relationships: [attempt.id],
       descriptor: (binaries) => screenshotDescriptor(workspace, binaries),
     })).rejects.toThrow(/late evidence binary write failure/i);
 
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
-    expect(manifest.artifacts).toHaveLength(1);
+    expect(manifest.artifacts).toHaveLength(3);
     await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
     await workspace.close();
   });
@@ -207,9 +213,10 @@ describe("RunWorkspace", () => {
   ])("rejects a forged primary descriptor %s before persistence", async (_name, override) => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
-
+    const attempt = await registerEvidenceAttempt(workspace);
     await expect(workspace.registerEvidenceBundle({
       binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
+      relationships: [attempt.id],
       descriptor: (binaries) => screenshotDescriptor(workspace, binaries, override),
     })).rejects.toThrow(/primary|descriptor|binding/i);
 
@@ -220,8 +227,10 @@ describe("RunWorkspace", () => {
   it("rejects a rechecksummed persisted descriptor whose primary binary binding was tampered", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const attempt = await registerEvidenceAttempt(workspace);
     const bundle = await workspace.registerEvidenceBundle({
       binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
+      relationships: [attempt.id],
       descriptor: (binaries) => screenshotDescriptor(workspace, binaries),
     });
     const descriptor = JSON.parse(await readFile(bundle.descriptor.absolutePath, "utf8")) as Record<string, unknown>;

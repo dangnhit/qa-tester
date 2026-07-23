@@ -20,10 +20,18 @@ function svg(input: { width: number; height: number; annotations: readonly Pixel
 
 /** Creates a separately registered annotated PNG; raw sanitized pixels remain immutable. */
 export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEvidenceDescriptorId: string; rawBinaryArtifactId: string; annotations: readonly PixelAnnotation[] }): Promise<AnnotatedEvidence> {
-  const source = (await input.workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === input.rawEvidenceDescriptorId && artifact.record.type === "evidence");
+  const artifacts = await input.workspace.readRegisteredArtifacts();
+  const source = artifacts.find((artifact) => artifact.record.id === input.rawEvidenceDescriptorId && artifact.record.type === "evidence");
   const sourceValue = source?.value;
   if (!source || !sourceValue) throw new Error("Raw evidence descriptor is not an authoritative workspace screenshot source");
   if (!Array.isArray(sourceValue.binaryArtifactIds) || sourceValue.binaryArtifactIds[0] !== input.rawBinaryArtifactId || sourceValue.kind !== "screenshot" || typeof sourceValue.runId !== "string" || sourceValue.runId !== input.workspace.runId || typeof sourceValue.attemptId !== "string" || typeof sourceValue.provenance !== "object" || sourceValue.provenance === null) throw new Error("Raw evidence descriptor is not an authoritative workspace screenshot source");
+  const attempt = artifacts.find((artifact) => artifact.record.type === "test-result"
+    && source.record.relationships.includes(artifact.record.id)
+    && artifact.value.attemptId === sourceValue.attemptId
+    && artifact.value.testCaseId === sourceValue.testCaseId
+    && artifact.value.testCaseRevisionId === sourceValue.testCaseRevisionId
+    && artifact.value.testCaseInstanceId === sourceValue.testCaseInstanceId);
+  if (!attempt || typeof sourceValue.testCaseId !== "string" || typeof sourceValue.testCaseRevisionId !== "string" || typeof sourceValue.testCaseInstanceId !== "string") throw new Error("Raw screenshot is not bound to one canonical test result");
   const rawRecord = await input.workspace.readArtifactRecord(input.rawBinaryArtifactId);
   if (rawRecord.type !== "evidence" || rawRecord.mediaType !== "image/png" || rawRecord.captureType !== "screenshot") throw new Error("Raw evidence binary is not a sanitized screenshot");
   const rawPath = await input.workspace.resolve(rawRecord.relativePath);
@@ -31,7 +39,29 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
   if (!metadata.width || !metadata.height || input.annotations.some((annotation) => !valid(annotation, metadata.width, metadata.height))) throw new Error("Annotation geometry is invalid or outside the screenshot bounds");
   const dimensions = { width: metadata.width, height: metadata.height };
   const sourceProvenance = sourceValue.provenance as Record<string, unknown>;
-  const provenance: EvidenceProvenance & { dimensions: { width: number; height: number } } = { evidenceId: typeof sourceValue.evidenceId === "string" ? sourceValue.evidenceId : input.rawEvidenceDescriptorId, runId: input.workspace.runId, attemptId: sourceValue.attemptId, captureType: "screenshot", dpr: typeof sourceProvenance.dpr === "number" ? sourceProvenance.dpr : 1, scroll: sourceProvenance.scroll as { x: number; y: number }, clip: sourceProvenance.clip as { x: number; y: number; width: number; height: number }, url: String(sourceProvenance.url), viewport: sourceProvenance.viewport as { width: number; height: number }, browser: String(sourceProvenance.browser), build: String(sourceProvenance.build), capturedAt: String(sourceProvenance.capturedAt), dimensions, ...(typeof sourceProvenance.testcaseId === "string" ? { testcaseId: sourceProvenance.testcaseId } : {}), ...(typeof sourceProvenance.bugId === "string" ? { bugId: sourceProvenance.bugId } : {}), cssBoxes: input.annotations.map((annotation) => annotation.cssBox), normalizedPixelBoxes: input.annotations.map((annotation) => ({ ...annotation, cssBox: { ...annotation.cssBox } })) };
+  const locator = input.annotations.find((annotation) => annotation.locator !== undefined)?.locator;
+  const annotationLabels = input.annotations.flatMap((annotation) => annotation.label === undefined ? [] : [annotation.label]);
+  const provenance: EvidenceProvenance & { dimensions: { width: number; height: number } } = {
+    evidenceId: typeof sourceValue.evidenceId === "string" ? sourceValue.evidenceId : input.rawEvidenceDescriptorId,
+    runId: input.workspace.runId,
+    attemptId: sourceValue.attemptId,
+    captureType: "screenshot",
+    dpr: typeof sourceProvenance.dpr === "number" ? sourceProvenance.dpr : 1,
+    scroll: sourceProvenance.scroll as { x: number; y: number },
+    clip: sourceProvenance.clip as { x: number; y: number; width: number; height: number },
+    url: String(sourceProvenance.url),
+    viewport: sourceProvenance.viewport as { width: number; height: number },
+    browser: String(sourceProvenance.browser),
+    build: String(sourceProvenance.build),
+    capturedAt: String(sourceProvenance.capturedAt),
+    dimensions,
+    ...(typeof sourceProvenance.testcaseId === "string" ? { testcaseId: sourceProvenance.testcaseId } : {}),
+    ...(typeof sourceProvenance.bugId === "string" ? { bugId: sourceProvenance.bugId } : {}),
+    cssBoxes: input.annotations.map((annotation) => annotation.cssBox),
+    normalizedPixelBoxes: input.annotations.map((annotation) => ({ ...annotation, cssBox: { ...annotation.cssBox } })),
+    ...(locator === undefined ? {} : { locator }),
+    ...(annotationLabels.length === 0 ? {} : { annotationLabels }),
+  };
   const rawChecksum = await sha256(rawPath);
   const annotationValue = { artifactType: "annotation", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: provenance.evidenceId, captureType: "screenshot", rawSha256: rawChecksum, annotations: input.annotations.map((annotation) => ({ id: annotation.id, ...(annotation.label === undefined ? {} : { label: annotation.label }), ...(annotation.locator === undefined ? {} : { locator: annotation.locator }), cssBox: annotation.cssBox, pixelBox: { x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height } })), provenance: { runId: provenance.runId, attemptId: provenance.attemptId, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip } };
   if (!validateAnnotation(annotationValue).valid) throw new Error("Annotation descriptor does not match its contract");
@@ -39,12 +69,12 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
   const annotationId = createEntityId();
   const bundle = await input.workspace.registerEvidenceBundle({
     binaries: [{ filename: evidenceFilename(annotationId, "annotated"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions }],
-    relationships: [input.rawEvidenceDescriptorId, input.rawBinaryArtifactId],
+    relationships: [attempt.record.id, input.rawEvidenceDescriptorId, input.rawBinaryArtifactId],
     provenance: "runtime",
     descriptor: (binaries) => {
       const binary = binaries[0];
       if (!binary?.mediaType) throw new Error("Annotated evidence bundle is missing its binary");
-      return { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: annotationId, runId: input.workspace.runId, attemptId: provenance.attemptId, testCaseId: provenance.testcaseId ?? "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: provenance.capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "screenshot", dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip, cssBoxes: provenance.cssBoxes, pixelBoxes: provenance.normalizedPixelBoxes?.map(({ x, y, width, height }) => ({ x, y, width, height })), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) } };
+      return { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: annotationId, runId: input.workspace.runId, attemptId: provenance.attemptId, testCaseId: sourceValue.testCaseId, testCaseRevisionId: sourceValue.testCaseRevisionId, testCaseInstanceId: sourceValue.testCaseInstanceId, kind: "screenshot", capturedAt: provenance.capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "screenshot", dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip, cssBoxes: provenance.cssBoxes, pixelBoxes: provenance.normalizedPixelBoxes?.map(({ x, y, width, height }) => ({ x, y, width, height })), ...(provenance.locator === undefined ? {} : { locator: provenance.locator }), ...(provenance.annotationLabels === undefined ? {} : { annotationLabels: provenance.annotationLabels }), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) } };
     },
   });
   const binary = bundle.binaries[0];

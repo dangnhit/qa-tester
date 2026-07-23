@@ -29,7 +29,7 @@ export type BrowserAction =
   | { kind: "upload"; locator: LocatorDefinition; files: string[] }
   | { kind: "wait"; milliseconds?: number; locator?: LocatorDefinition };
 
-export type BrowserAssertion =
+export type BrowserAssertion = (
   | { kind: "visible"; locator: LocatorDefinition }
   | { kind: "text"; locator: LocatorDefinition; text: string }
   | { kind: "value"; locator: LocatorDefinition; value: StringValue }
@@ -40,7 +40,7 @@ export type BrowserAssertion =
   | { kind: "checked"; locator: LocatorDefinition }
   | { kind: "response-status"; url: string; status: number }
   | { kind: "console-policy"; level?: "error" | "warning"; allow?: string[] }
-  | { kind: "network-policy"; allow?: string[] };
+  | { kind: "network-policy"; allow?: string[] }) & { expectedResultId?: string };
 
 export type BrowserTestStep = {
   id: string;
@@ -83,6 +83,7 @@ export type BrowserStepResult = {
   assertions: readonly BrowserAssertion[];
   error?: string;
   failureOrigin?: "action" | "assertion";
+  failedAssertion?: BrowserAssertion;
 };
 
 export type TestAttempt = {
@@ -128,6 +129,7 @@ export type ExecuteTestInput = {
 
 export type CanonicalBrowserTestCase = BrowserTestInstance & {
   browserDsl: { steps: readonly BrowserTestStep[] };
+  authoritativeExpectedResultIds: readonly string[];
   artifact: RegisteredWorkspaceArtifact;
 };
 export type InternalExecuteTestInput = RawExecuteTestInput & {

@@ -74,43 +74,52 @@ export type Assertion =
   | {
       kind: "visible";
       locator: Locator;
+      expectedResultId?: string;
     }
   | {
       kind: "text";
       locator: Locator;
       text: string;
+      expectedResultId?: string;
     }
   | {
       kind: "value";
       locator: Locator;
       value: Value;
+      expectedResultId?: string;
     }
   | {
       kind: "url";
       url: string;
+      expectedResultId?: string;
     }
   | {
       kind: "count";
       locator: Locator;
       count: number;
+      expectedResultId?: string;
     }
   | {
       kind: "enabled" | "disabled" | "checked";
       locator: Locator;
+      expectedResultId?: string;
     }
   | {
       kind: "response-status";
       url: string;
       status: number;
+      expectedResultId?: string;
     }
   | {
       kind: "console-policy";
       level?: "error" | "warning";
       allow?: string[];
+      expectedResultId?: string;
     }
   | {
       kind: "network-policy";
       allow?: string[];
+      expectedResultId?: string;
     };
 
 export interface BrowserTestDSL {
