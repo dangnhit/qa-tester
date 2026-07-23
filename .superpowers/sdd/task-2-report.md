@@ -285,7 +285,7 @@ A separate stale-lock stress audit completed 100 iterations with 10 concurrent c
 - `08e9fe1` — `fix: close task 2 lifecycle safety gaps`
 - `62d2be3` — `fix: enforce task 2 workspace invariants`
 - `960d468` — `fix: harden task 2 finalization and validation`
-- Final registration recovery and governed metadata typing wave — current commit
+- `a5df90b` — `fix: recover artifact registration transactions`
 
 ## Residual concerns
 
