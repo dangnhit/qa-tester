@@ -8,7 +8,17 @@ export interface WorkflowCheckpoint {
   runId: string;
   mode: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression";
   inputChecksum: string;
+  revision: number;
+  supersedesArtifactId?: string;
   completedOperations: string[];
+  operationOutputs: {
+    [k: string]:
+      | {
+          artifactId: string;
+          sha256: string;
+        }[]
+      | undefined;
+  };
   bundle?: {
     sourceRunId: string;
     artifacts: {

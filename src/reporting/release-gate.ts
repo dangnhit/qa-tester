@@ -67,7 +67,9 @@ export function deriveReleaseGateFromArtifacts(input: Readonly<{
  * a caller cannot omit a troublesome fact from a hand-built rule snapshot.
  */
 export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly GateWorkspaceArtifact[], validationDiagnostics: readonly string[] = []): DerivedReleaseGate {
-  const source = artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report");
+  // Workflow checkpoints are operational resumability metadata, not QA facts.
+  // Including later revisions would retroactively invalidate an immutable gate.
+  const source = artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report" && artifact.record.type !== "workflow-checkpoint");
   const valuesOf = (type: string) => source.filter((artifact) => artifact.record.type === type);
   const cases = valuesOf("test-case");
   const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {

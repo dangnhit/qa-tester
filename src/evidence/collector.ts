@@ -44,7 +44,7 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   const dimensions = input.provenance.dimensions;
   if (!dimensions || !input.binary.mediaType) throw new Error("Evidence dimensions and media type are required");
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, pendingAttempt: true,
+    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId,
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings.map((finding) => ({ kind: finding.kind, level: finding.level, message: finding.message })) }),
     provenance: { captureType: input.provenance.captureType, dimensions, dpr: input.provenance.dpr, scroll: input.provenance.scroll, clip: input.provenance.clip, ...(input.provenance.cssBoxes === undefined ? {} : { cssBoxes: input.provenance.cssBoxes }), ...(input.provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: input.provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }), url: input.provenance.url, viewport: input.provenance.viewport, browser: input.provenance.browser, build: input.provenance.build, capturedAt: input.provenance.capturedAt, ...(input.provenance.testcaseId === undefined ? {} : { testcaseId: input.provenance.testcaseId }), ...(input.provenance.bugId === undefined ? {} : { bugId: input.provenance.bugId }) },
@@ -78,9 +78,15 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
 }
 
 /** Persists only scrubbed live telemetry into the supplied workspace; closed sessions are never reconstructed. */
-export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
+export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; protectedEnvironment?: boolean; deterministicScrubberRegistered?: boolean; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
   if (!session) return registerGap(input.workspace, input.attemptId, "An active caller-owned browser evidence session is required; closed-session telemetry cannot be reconstructed", `${input.telemetry} telemetry`);
+  // Known secret redaction is not a policy capable of deterministically
+  // scrubbing arbitrary PII. Protected telemetry is therefore absent unless a
+  // registered policy explicitly proves all channels are scrubbed.
+  if (input.protectedEnvironment === true && input.deterministicScrubberRegistered !== true) {
+    return registerGap(input.workspace, input.attemptId, "Protected telemetry is unavailable without a registered deterministic scrubber for every telemetry channel", `${input.telemetry} telemetry`);
+  }
   const secrets = [...session.secrets];
   const findings = session.telemetry.findings.filter((finding) => input.telemetry === "log" || finding.kind === input.telemetry).map((finding) => ({ ...finding, message: redactText(finding.message, secrets), ...(finding.url === undefined ? {} : { url: redactText(finding.url, secrets) }) }));
   const payload = input.telemetry === "network" ? { findings, records: session.telemetry.networkRecords.map((record) => redactNetworkRecord(record, secrets)) } : { findings };

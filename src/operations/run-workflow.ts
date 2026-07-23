@@ -1,5 +1,5 @@
 import { assertExplorationCharter, type ExplorationCharter } from "../exploratory/charter.js";
-import { deriveRegressionOutcome, deriveRetestVerdict, type RegressionOutcome } from "../retest/verdict.js";
+import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId, type RegressionOutcome } from "../retest/verdict.js";
 import { selectRegressionCases, type RegressionSelection } from "../regression/selector.js";
 import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } from "../regression/change-scope.js";
 import { sha256Text } from "../core/checksum.js";
@@ -68,6 +68,10 @@ export type QaWorkflowInput = Readonly<{
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
+function artifactRecord(value: unknown): value is ArtifactRecord {
+  return record(value) && typeof value.id === "string" && typeof value.sha256 === "string" && typeof value.type === "string" && typeof value.relativePath === "string";
+}
+
 function asString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) throw new QaSkillsError(`Registered ${label} is invalid`, "ARTIFACT_BINDING");
   return value;
@@ -77,18 +81,37 @@ function workflowInputChecksum(input: QaWorkflowInput): string {
   return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, charter: input.charter, retest: input.retest }));
 }
 
-async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInput): Promise<void> {
+type WorkflowCheckpoint = Readonly<{ record: ArtifactRecord; completedOperations: readonly WorkflowOperationName[]; operationOutputs: Readonly<Record<string, readonly RegisteredArtifactRef[]>> }>;
+
+async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInput): Promise<WorkflowCheckpoint> {
   const checkpoints = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "workflow-checkpoint");
   const checksum = workflowInputChecksum(input);
-  if (checkpoints.length === 1) {
-    if (checkpoints[0]?.value.inputChecksum !== checksum) throw new QaSkillsError("Resume input does not match its durable workflow checkpoint", "ARTIFACT_BINDING");
-    return;
+  if (checkpoints.length > 0) {
+    const latest = [...checkpoints].sort((left, right) => Number(right.value.revision) - Number(left.value.revision))[0];
+    if (!latest || latest.value.inputChecksum !== checksum) throw new QaSkillsError("Resume input does not match its durable workflow checkpoint", "ARTIFACT_BINDING");
+    return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: record(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {} };
   }
-  if (checkpoints.length !== 0) throw new QaSkillsError("Workflow has ambiguous durable checkpoints", "ARTIFACT_BINDING");
-  await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
+  const created = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
-    inputChecksum: checksum, completedOperations: [], ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
+    inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [], provenance: "runtime" });
+  return { record: created, completedOperations: [], operationOutputs: {} };
+}
+
+async function advanceCheckpoint(workspace: RunWorkspace, input: QaWorkflowInput, previous: WorkflowCheckpoint, operation: WorkflowOperationName, output: WorkflowOutput | readonly ArtifactRecord[]): Promise<WorkflowCheckpoint> {
+  if (previous.completedOperations.includes(operation)) return previous;
+  const records: readonly ArtifactRecord[] = Array.isArray(output) ? output.filter(artifactRecord) : artifactRecord(output) ? [output] : [];
+  const operationOutputs: Record<string, readonly RegisteredArtifactRef[]> = { ...previous.operationOutputs, [operation]: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
+  const registered = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
+    artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode, inputChecksum: workflowInputChecksum(input), revision: Number((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === previous.record.id)?.value.revision) + 1,
+    supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs,
+    ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
+  }, relationships: [previous.record.id, ...records.map((artifact) => artifact.id)], provenance: "runtime" });
+  return { record: registered, completedOperations: [...previous.completedOperations, operation], operationOutputs };
+}
+
+async function newArtifactsSince(workspace: RunWorkspace, before: ReadonlySet<string>): Promise<readonly ArtifactRecord[]> {
+  return (await workspace.readRegisteredArtifacts()).filter((artifact) => !before.has(artifact.record.id)).map((artifact) => artifact.record);
 }
 
 function missingRuntimeLabel(runtime: QaRuntimeRegistry, input: QaWorkflowInput): string | undefined {
@@ -189,7 +212,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
     await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), onBeforeSessionClose: async ({ attempt }) => {
       const attachment = async (telemetry: "console" | "network" | "log") => {
-        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
+        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
         if (evidence.kind === "evidence") evidenceIds.push(evidence.descriptorArtifactId);
         else evidenceIds.push(evidence.descriptorArtifactId);
       };
@@ -231,7 +254,7 @@ async function registerRuntimeRetestResult(workspace: RunWorkspace, reference: R
   if (reproduction.length === 0 || reproduction.some((attempt) => !attempt || attempt.value.testCaseId !== source.testCaseId || attempt.value.testCaseRevisionId !== source.revisionId || attempt.value.testCaseInstanceId !== source.instanceId)) throw new QaSkillsError("Retest reproduction did not execute the exact immutable source testcase", "ARTIFACT_BINDING");
   const regression = regressionAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId)).filter((attempt): attempt is NonNullable<typeof attempt> => attempt !== undefined);
   const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => asString(attempt.value.status, "regression execution status")));
-  const reproductionScenarios = reproduction.map((attempt) => ({ scenarioId: `${source.testCaseId}:${source.revisionId}:${source.instanceId}`, attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
+  const reproductionScenarios = reproduction.map((attempt) => ({ scenarioId: sourceScenarioId({ testCaseId: source.testCaseId, revisionId: source.revisionId, instanceId: source.instanceId }), attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
   const verdict = deriveRetestVerdict({ originalBugId: source.bugId, reproductionStatuses: reproductionScenarios.map((scenario) => scenario.status), scenarioIds: reproductionScenarios.map((scenario) => scenario.scenarioId), regressionOutcome });
   return workspace.registerArtifactValue({ type: "retest-result", value: { artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: workspace.linkedRunId, sourceBugArtifactId: reference.artifactId, sourceBugArtifactSha256: reference.sha256, bugId: source.bugId, reproductionAttemptIds: [...reproductionAttemptIds], reproductionScenarios, regressionAttemptIds: [...regressionAttemptIds], verdict: verdict.verdict, regressionOutcome }, relationships: [...reproduction, ...regression].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined), provenance: "runtime" });
 }
@@ -346,7 +369,7 @@ async function registerRetestResult(workspace: RunWorkspace, input: NonNullable<
   const verdict = deriveRetestVerdict({ originalBugId: reproduction.source.bugId, reproductionStatuses: reproduction.statuses, ...(input.regressionOutcome === undefined ? {} : { regressionOutcome: input.regressionOutcome }) });
   return workspace.registerArtifactValue({ type: "retest-result", value: {
     artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: reproduction.sourceRunId,
-    sourceBugArtifactId: input.sourceBugArtifactId, sourceBugArtifactSha256: reproduction.source.record.sha256, bugId: verdict.bugId, reproductionAttemptIds: [...input.reproductionAttemptIds], reproductionScenarios: input.reproductionAttemptIds.map((attemptId, index) => ({ scenarioId: `${reproduction.source.testCaseId}:${reproduction.source.revisionId}:${reproduction.source.instanceId}`, attemptId, status: reproduction.statuses[index] })), regressionAttemptIds: [], verdict: verdict.verdict,
+    sourceBugArtifactId: input.sourceBugArtifactId, sourceBugArtifactSha256: reproduction.source.record.sha256, bugId: verdict.bugId, reproductionAttemptIds: [...input.reproductionAttemptIds], reproductionScenarios: input.reproductionAttemptIds.map((attemptId, index) => ({ scenarioId: sourceScenarioId({ testCaseId: reproduction.source.testCaseId, revisionId: reproduction.source.revisionId, instanceId: reproduction.source.instanceId }), attemptId, status: reproduction.statuses[index] })), regressionAttemptIds: [], verdict: verdict.verdict,
     regressionOutcome: verdict.regressionOutcome ?? "NOT_RUN",
   }, relationships: (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-result" && input.reproductionAttemptIds.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record.id), provenance: "runtime" });
 }
@@ -377,29 +400,60 @@ export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowIn
     const outputs = new Map<WorkflowOperationName, WorkflowOutput>();
     const order = operationsForMode(input.mode);
     try {
-      await checkpointWorkflow(workspace, input);
+      let checkpoint = await checkpointWorkflow(workspace, input);
       const missing = missingRuntimeLabel(runtime, input);
       if (missing !== undefined) return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_RUNTIME", operationOrder: order, outputs, validation: await workspace.validate(input.mode) };
+      // Every required source/runtime dependency is resolved before any
+      // import, data preparation, browser action, or report side effect.
+      if (input.mode === "retest") {
+        if (!input.retest) throw new QaSkillsError("Retest requires a checksum-bound source bug reference", "ARTIFACT_BINDING");
+        resolveRuntime(runtime.changeScopeSources, input.runtime?.changeScopeSourceId, "change-scope source");
+        await sourceBugFromReference(workspace, input.retest.sourceBug);
+      }
       if (["full", "execute", "regression", "retest", "exploratory"].includes(input.mode)) resolveRuntime(runtime.browserManagers, input.runtime?.browserManagerId, "browser manager");
       if (["full", "execute", "regression", "retest"].includes(input.mode)) {
         if (!input.bundle) throw new QaSkillsError("Workflow requires a checksum-bound canonical plan bundle", "ARTIFACT_BINDING");
-        if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) await importCanonicalPlanBundle(workspace, input.bundle);
+        if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          await importCanonicalPlanBundle(workspace, input.bundle);
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "ingest-testcases", await newArtifactsSince(workspace, before));
+        }
       }
       if (input.mode === "exploratory") {
         if (!input.charter) throw new QaSkillsError("Exploratory workflow requires exactly one charter", "INVALID_ARTIFACT");
-        outputs.set("register-exploration-charter", await registerCharter(workspace, input.charter));
-        outputs.set("collect-evidence", await executeExploration(workspace, runtime, input.runtime ?? {}, input.charter));
-        outputs.set("generate-qa-report", await (await import("./generate-qa-report.js")).generateQaReport({ workspace }));
+        if (!checkpoint.completedOperations.includes("register-exploration-charter")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("register-exploration-charter", await registerCharter(workspace, input.charter));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "register-exploration-charter", await newArtifactsSince(workspace, before));
+        }
+        if (!checkpoint.completedOperations.includes("collect-evidence")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("collect-evidence", await executeExploration(workspace, runtime, input.runtime ?? {}, input.charter));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "collect-evidence", await newArtifactsSince(workspace, before));
+        }
+        if (!checkpoint.completedOperations.includes("generate-qa-report")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("generate-qa-report", await (await import("./generate-qa-report.js")).generateQaReport({ workspace }));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "generate-qa-report", await newArtifactsSince(workspace, before));
+        }
         const validation = await workspace.finalize(input.mode);
         return { runId: workspace.runId, mode: input.mode, outcome: "COMPLETED", operationOrder: order, outputs, validation };
       }
       if (input.mode === "plan") {
         if (!input.bundle) throw new QaSkillsError("Plan workflow requires a canonical bundle materialized by the runtime", "ARTIFACT_BINDING");
-        if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) await importCanonicalPlanBundle(workspace, input.bundle);
+        if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-case")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          await importCanonicalPlanBundle(workspace, input.bundle);
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "ingest-testcases", await newArtifactsSince(workspace, before));
+        }
       }
       if (input.mode === "full") {
         const hooks = resolveRuntime(runtime.testDataRegistries, input.runtime?.testDataRegistryId, "test-data registry");
-        outputs.set("prepare-test-data", await prepareTestData({ workspace, hooks, hookIds: [] }));
+        if (!checkpoint.completedOperations.includes("prepare-test-data")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("prepare-test-data", await prepareTestData({ workspace, hooks, hookIds: [] }));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "prepare-test-data", await newArtifactsSince(workspace, before));
+        }
       }
       let executionCases = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-case").map((artifact) => artifact.record.id);
       let retestSource: Awaited<ReturnType<typeof sourceBugFromReference>> | undefined;
@@ -413,33 +467,49 @@ export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowIn
         if (!exact) throw new QaSkillsError("Retest bundle must import the exact original testcase revision and instance", "ARTIFACT_BINDING");
         // Reproduction is an actual runtime execution before regression
         // selection, never a caller-provided attempt ID or outcome claim.
-        await executeWithRuntime(workspace, runtime, input.runtime ?? {}, [exact.record.id]);
+        if (!checkpoint.completedOperations.includes("reproduce-bug")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          await executeWithRuntime(workspace, runtime, input.runtime ?? {}, [exact.record.id]);
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "reproduce-bug", await newArtifactsSince(workspace, before));
+        }
         reproductionAttempts = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-result" && artifact.value.testCaseId === source.testCaseId && artifact.value.testCaseRevisionId === source.revisionId && artifact.value.testCaseInstanceId === source.instanceId).map((artifact) => asString(artifact.value.attemptId, "reproduction attempt ID"));
         outputs.set("reproduce-bug", reproductionAttempts);
         const changeSource = resolveRuntime(runtime.changeScopeSources, input.runtime?.changeScopeSourceId, "change-scope source");
-        await registerChangeScope({ workspace, changes: changeSource.changes, provenance: changeSource.provenance });
+        if (!(await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "change-scope")) await registerChangeScope({ workspace, changes: changeSource.changes, provenance: changeSource.provenance });
         const selectedArtifacts = await workspace.readRegisteredArtifacts();
         const scope = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "change-scope");
         if (!scope) throw new QaSkillsError("Retest change scope was not registered", "ARTIFACT_BINDING");
         const selection = selectRegressionCases({ changes: changeSource.changes, testCases: selectedArtifacts.filter((artifact) => artifact.record.type === "test-case").map((artifact) => regressionCaseFromCanonical(artifact.value)) });
-        const registeredSelection = await registerSelection(workspace, selection, scope.record);
-        outputs.set("select-regression", registeredSelection);
+        if (!checkpoint.completedOperations.includes("select-regression")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          const registeredSelection = await registerSelection(workspace, selection, scope.record);
+          outputs.set("select-regression", registeredSelection);
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "select-regression", await newArtifactsSince(workspace, before));
+        }
         const selectionArtifacts = await workspace.readRegisteredArtifacts();
         executionCases = selectedCaseArtifactIds(selection, selectionArtifacts).filter((id) => id !== exact.record.id);
       }
       if (input.mode === "regression") {
         const source = resolveRuntime(runtime.changeScopeSources, input.runtime?.changeScopeSourceId, "change-scope source");
-        const change = await registerChangeScope({ workspace, changes: source.changes, provenance: source.provenance });
+        const change = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "change-scope")?.record ?? await registerChangeScope({ workspace, changes: source.changes, provenance: source.provenance });
         const artifacts = await workspace.readRegisteredArtifacts();
         const testCases: RegressionCase[] = artifacts.filter((artifact) => artifact.record.type === "test-case").map((artifact) => regressionCaseFromCanonical(artifact.value));
         const selection = selectRegressionCases({ changes: source.changes, testCases });
-        const registered = await registerSelection(workspace, selection, change);
-        outputs.set("select-regression", registered);
+        if (!checkpoint.completedOperations.includes("select-regression")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          const registered = await registerSelection(workspace, selection, change);
+          outputs.set("select-regression", registered);
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "select-regression", await newArtifactsSince(workspace, before));
+        }
         executionCases = selectedCaseArtifactIds(selection, artifacts);
       }
       if (["full", "execute", "regression"].includes(input.mode)) {
         if (executionCases.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
-        outputs.set("execute-browser-test", await executeWithRuntime(workspace, runtime, input.runtime ?? {}, executionCases));
+        if (!checkpoint.completedOperations.includes("execute-browser-test")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("execute-browser-test", await executeWithRuntime(workspace, runtime, input.runtime ?? {}, executionCases));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "execute-browser-test", await newArtifactsSince(workspace, before));
+        }
         if (input.mode === "full") {
           const attempts = await workspace.readRegisteredArtifacts();
           for (const attempt of attempts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "FAILED")) {
@@ -448,20 +518,32 @@ export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowIn
             const generated = await (await import("./generate-bug-report.js")).generateBugReport({ workspace, attemptId: asString(attempt.value.attemptId, "attempt ID") });
             outputs.set("generate-bug-report", generated);
           }
-          outputs.set("ingest-coverage-obligation", await evaluateWorkspaceCoverage({ root: workspace.root, runId: workspace.runId, workspace }));
+          if (!checkpoint.completedOperations.includes("ingest-coverage-obligation")) {
+            const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+            outputs.set("ingest-coverage-obligation", await evaluateWorkspaceCoverage({ root: workspace.root, runId: workspace.runId, workspace }));
+            checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "ingest-coverage-obligation", await newArtifactsSince(workspace, before));
+          }
         }
-        if (input.mode === "full" || input.mode === "regression") outputs.set("generate-qa-report", await (await import("./generate-qa-report.js")).generateQaReport({ workspace }));
+        if ((input.mode === "full" || input.mode === "regression") && !checkpoint.completedOperations.includes("generate-qa-report")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("generate-qa-report", await (await import("./generate-qa-report.js")).generateQaReport({ workspace }));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "generate-qa-report", await newArtifactsSince(workspace, before));
+        }
       }
       if (input.mode === "retest") {
         if (!retestSource || !input.retest) throw new QaSkillsError("Retest source was not resolved", "ARTIFACT_BINDING");
         // The remaining imported cases are regression work and remain
         // independent from the source-bug verdict.
-        const regressionEvidence = executionCases.length === 0 ? [] : await executeWithRuntime(workspace, runtime, input.runtime ?? {}, executionCases);
+        const regressionEvidence = checkpoint.completedOperations.includes("collect-evidence") || executionCases.length === 0 ? [] : await executeWithRuntime(workspace, runtime, input.runtime ?? {}, executionCases);
         outputs.set("collect-evidence", regressionEvidence);
         const all = await workspace.readRegisteredArtifacts();
         const reproductionIds = new Set(reproductionAttempts);
         const regressionAttemptIds = all.filter((artifact) => artifact.record.type === "test-result" && !reproductionIds.has(String(artifact.value.attemptId))).map((artifact) => asString(artifact.value.attemptId, "regression attempt ID"));
-        outputs.set("derive-retest-verdict", await registerRuntimeRetestResult(workspace, input.retest.sourceBug, retestSource, reproductionAttempts, regressionAttemptIds));
+        if (!checkpoint.completedOperations.includes("derive-retest-verdict")) {
+          const before = new Set((await workspace.readRegisteredArtifacts()).map((artifact) => artifact.record.id));
+          outputs.set("derive-retest-verdict", await registerRuntimeRetestResult(workspace, input.retest.sourceBug, retestSource, reproductionAttempts, regressionAttemptIds));
+          checkpoint = await advanceCheckpoint(workspace, input, checkpoint, "derive-retest-verdict", await newArtifactsSince(workspace, before));
+        }
       }
       const validation = await workspace.finalize(input.mode);
       return { runId: workspace.runId, mode: input.mode, outcome: "COMPLETED", operationOrder: order, outputs, validation };

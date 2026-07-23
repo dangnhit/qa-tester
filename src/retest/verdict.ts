@@ -1,9 +1,15 @@
 import { QaSkillsError } from "../core/errors.js";
 import { executionStatuses, type ExecutionStatus } from "../contracts/types.js";
+import { sha256Text } from "../core/checksum.js";
 
 export type RetestVerdict = "FIXED" | "NOT_FIXED" | "PARTIALLY_FIXED" | "CANNOT_VERIFY" | "INTERMITTENT";
 export type RegressionOutcome = "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
 export type RetestResult = Readonly<{ bugId: string; verdict: RetestVerdict; reproductionStatuses: readonly ExecutionStatus[]; regressionOutcome?: RegressionOutcome }>;
+
+/** Canonical source-attempt scenario identity; caller labels cannot affect a verdict. */
+export function sourceScenarioId(input: Readonly<{ testCaseId: string; revisionId: string; instanceId: string; parameters?: Readonly<Record<string, unknown>> }>): string {
+  return sha256Text(JSON.stringify({ testCaseId: input.testCaseId, revisionId: input.revisionId, instanceId: input.instanceId, parameters: input.parameters ?? {} }));
+}
 
 function assertExecutionStatus(value: string): asserts value is ExecutionStatus {
   if (!(executionStatuses as readonly string[]).includes(value)) throw new QaSkillsError(`Unknown execution status: ${value}`, "ARTIFACT_BINDING");

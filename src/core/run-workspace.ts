@@ -6,7 +6,7 @@ import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/t
 import { validateArtifact } from "../contracts/validator.js";
 import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
-import { deriveRegressionOutcome, deriveRetestVerdict } from "../retest/verdict.js";
+import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId } from "../retest/verdict.js";
 import { regressionCaseFromCanonical } from "../regression/change-scope.js";
 import { selectRegressionCases } from "../regression/selector.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
@@ -393,6 +393,8 @@ async function inspectWorkspaceState(
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test step result must reference one registered attempt and test case step") || changed;
         }
       } else if (artifact.record.type === "evidence") {
+        // Legacy staging evidence is ignored here; public runtime capture no
+        // longer emits it and always binds final evidence to a result.
         if (value.pendingAttempt === true) continue;
         const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
         if (matches.length !== 1) {
@@ -522,13 +524,28 @@ async function inspectWorkspaceState(
             const sourceBug = sourceArtifacts.find((candidate) => candidate.record.id === value.sourceBugArtifactId && candidate.record.type === "bug-report");
             const original = sourceBug === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value.attemptId === sourceBug.value.attemptId);
             sourceBugValid = sourceRecord.type === "bug-report" && sourceRecord.sha256 === value.sourceBugArtifactSha256 && sourceBug?.value.bugId === value.bugId;
-            reproductionMatchesSource = original !== undefined && attempts.every((attempt) => attempt?.value?.testCaseId === original.value.testCaseId && attempt?.value?.testCaseRevisionId === original.value.testCaseRevisionId && attempt?.value?.testCaseInstanceId === original.value.testCaseInstanceId);
+            reproductionMatchesSource = original !== undefined && attempts.every((attempt) => attempt?.value?.testCaseId === original.value.testCaseId && attempt?.value?.testCaseRevisionId === original.value.testCaseRevisionId && attempt?.value?.testCaseInstanceId === original.value.testCaseInstanceId) && scenarios.every((scenario) => isRecord(scenario) && scenario.scenarioId === sourceScenarioId({ testCaseId: String(original.value.testCaseId), revisionId: String(original.value.testCaseRevisionId), instanceId: String(original.value.testCaseInstanceId) }));
           } finally { await source.close(); }
         } catch { sourceBugValid = false; }
         if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || regressionAttempts.some((attempt) => !attempt) || !scenarioValid || value.regressionOutcome !== derivedOutcome || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Retest result must bind linked source and exact reproduction artifacts with a derived verdict") || changed;
         }
       }
+    }
+  }
+
+  const checkpoints = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "workflow-checkpoint" && artifact.value !== undefined)
+    .sort((left, right) => Number(left.value?.revision) - Number(right.value?.revision));
+  for (const [index, checkpoint] of checkpoints.entries()) {
+    const value = checkpoint.value as Record<string, unknown>;
+    const prior = checkpoints[index - 1];
+    const completed = Array.isArray(value.completedOperations) ? value.completedOperations : [];
+    const outputs = isRecord(value.operationOutputs) ? value.operationOutputs : undefined;
+    const outputReferencesValid = outputs !== undefined && Object.values(outputs).every((items) => Array.isArray(items) && items.every((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" && artifacts.some((artifact) => artifact.record.id === item.artifactId && artifact.record.sha256 === item.sha256)));
+    const validInitial = index !== 0 || (value.revision === 1 && value.supersedesArtifactId === undefined && checkpoint.record.relationships.length === 0);
+    const validSuccessor = index === 0 || (value.revision === index + 1 && value.supersedesArtifactId === prior?.record.id && checkpoint.record.relationships.includes(prior?.record.id ?? "") && Array.isArray(prior?.value?.completedOperations) && prior.value.completedOperations.every((operation) => completed.includes(operation)) && completed.length === prior.value.completedOperations.length + 1);
+    if (value.runId !== expectedRunId || value.inputChecksum === undefined || new Set(completed).size !== completed.length || !outputReferencesValid || !validInitial || !validSuccessor) {
+      changed = invalidate(checkpoint, diagnostics, "INVALID_REFERENCE", "Workflow checkpoints must form an immutable revision chain with verified operation outputs") || changed;
     }
   }
 
@@ -1134,6 +1151,10 @@ export class RunWorkspace {
         throw new QaSkillsError("Test step result references an unregistered step", "ARTIFACT_BINDING");
       }
     } else if (type === "evidence") {
+      // A staging descriptor is permitted only long enough for a trusted
+      // finalizer (annotation/capture) to create its final successor. Reopen
+      // validation rejects a forever-pending descriptor; final descriptors
+      // always require an already-registered exact attempt.
       if (value.pendingAttempt !== true) {
         const testResults = await this.readRegisteredValues(manifest, "test-result");
         if (testResults.filter((result) => result.attemptId === value.attemptId).length !== 1) throw new QaSkillsError("Evidence references an unregistered or ambiguous attempt", "ARTIFACT_BINDING");
@@ -1318,7 +1339,7 @@ export class RunWorkspace {
         const regressionIds = Array.isArray(value.regressionAttemptIds) ? value.regressionAttemptIds : [];
         const regression = regressionIds.map((id) => attempts.find((attempt) => attempt?.attemptId === id));
         const scenarios = Array.isArray(value.reproductionScenarios) ? value.reproductionScenarios : [];
-        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && typeof scenario.scenarioId === "string");
+        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && scenario.scenarioId === sourceScenarioId({ testCaseId: String(original.value.testCaseId), revisionId: String(original.value.testCaseRevisionId), instanceId: String(original.value.testCaseInstanceId) }));
         const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => String(attempt?.status)));
         const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), regressionOutcome });
         const resultRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-result");

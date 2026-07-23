@@ -15,6 +15,16 @@ function pixel(bytes: Buffer, width: number, x: number, y: number): number[] {
   return [...bytes.subarray(offset, offset + 4)];
 }
 
+async function registerAttempt(workspace: RunWorkspace, attemptId: string): Promise<void> {
+  const testCase = await workspace.registerArtifactValue({ type: "test-case", value: {
+    artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "test", testCaseId: `TC-${attemptId}`, revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Evidence fixture", steps: [{ id: "step-1", action: "observe", sideEffect: "none" }],
+    coverage: { requirementId: "REQ-1", role: "tester", behavior: "capture", browser: "chromium", viewport: { width: 80, height: 60 }, accessibilityMethod: null, risk: "low", outcome: "capture completes" },
+  }, relationships: [], provenance: "test" });
+  await workspace.registerArtifactValue({ type: "test-result", value: {
+    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
+  }, relationships: [testCase.id], provenance: "test" });
+}
+
 describe("live evidence collector", () => {
   it("masks protected DOM and region pixels while preserving known unmasked screenshot pixels", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-evidence-workspace-"));
@@ -23,6 +33,7 @@ describe("live evidence collector", () => {
     const context = await browser.newContext({ viewport: { width: 80, height: 60 } });
     const page = await context.newPage();
     const attemptId = "attempt-live";
+    await registerAttempt(workspace, attemptId);
     activeBrowserSessions.set(attemptId, { context, page, telemetry: { findings: [], responseStatuses: new Map(), networkRecords: [] }, secrets: new Set() });
     try {
       await page.setContent('<style>html,body{margin:0;background:#123456}.secret,#region{position:fixed;width:16px;height:16px}.secret{left:10px;top:10px;background:#ef4444}#region{left:45px;top:10px;background:#3b82f6}</style><div class="secret">secret</div><div id="region">region</div>');
@@ -89,6 +100,7 @@ describe("live evidence collector", () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const secret = "distinctive-secret-value";
+    await registerAttempt(workspace, "attempt-secret");
     activeBrowserSessions.set("attempt-secret", { context, page, secrets: new Set([secret]), telemetry: { findings: [{ kind: "console", message: `console ${secret}`, url: `https://example.test/?token=${secret}`, timestamp: new Date().toISOString() }], responseStatuses: new Map(), networkRecords: [{ url: `https://example.test/?token=${secret}`, requestHeaders: { Authorization: `Bearer ${secret}` }, requestBody: `password=${secret}` }] } });
     try {
       const result = await attachEvidence({ workspace, attemptId: "attempt-secret", callerAttemptId: "attempt-secret", telemetry: "network" });
@@ -106,5 +118,20 @@ describe("live evidence collector", () => {
       await browser.close();
       await workspace.close();
     }
+  });
+
+  it("never persists arbitrary protected telemetry PII without a registered deterministic scrubber", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-protected-telemetry-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-protected", name: "Protected", classification: "production", baseUrl: "https://example.test", productionReadOnly: true } });
+    const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage();
+    const attemptId = "attempt-protected-pii"; const pii = "customer+private@personal.example";
+    await registerAttempt(workspace, attemptId);
+    activeBrowserSessions.set(attemptId, { context, page, secrets: new Set(), telemetry: { findings: [{ kind: "console", level: "error", message: `leaked ${pii}`, timestamp: new Date().toISOString() }], responseStatuses: new Map(), networkRecords: [{ url: `https://example.test/account/${pii}`, requestBody: `email=${pii}`, responseBody: pii }] } });
+    try {
+      await expect(attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry: "network", protectedEnvironment: true })).resolves.toMatchObject({ kind: "evidence-gap" });
+      const manifest = await readFile(join(workspace.path, "artifact-manifest.json"), "utf8");
+      expect(manifest).not.toContain(pii);
+      expect(JSON.stringify(await workspace.readRegisteredArtifacts())).not.toContain(pii);
+    } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
   });
 });

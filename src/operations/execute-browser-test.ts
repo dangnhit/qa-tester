@@ -55,7 +55,7 @@ function notRunStep(step: BrowserTestStep): BrowserStepResult {
   return { stepId: step.id, status: "NOT_RUN", startedAt: now, finishedAt: now, durationMs: 0, action: step.action, assertions: step.assertions ?? [] };
 }
 
-async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAttempt> {
+async function executeCanonical(input: InternalExecuteTestInput & { persistAttempt?: (attempt: TestAttempt) => Promise<void> }): Promise<TestAttempt> {
   const started = Date.now();
   const session = await createBrowserAttemptSession(input.browser, input.testCase);
   const contextId = `${input.attemptId}:context`;
@@ -83,9 +83,10 @@ async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAt
     const safeSteps = steps.map((step) => step.error === undefined ? step : { ...step, error: scrub(step.error) });
     const safeTelemetry = session.telemetry.findings.map((finding) => ({ ...finding, message: scrub(finding.message), ...(finding.url === undefined ? {} : { url: scrub(finding.url) }) }));
     const attempt = { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
-    // Evidence must observe the completed state.  This hook is runtime-owned
-    // and deliberately runs while the session registry and browser context
-    // remain live, immediately before cleanup.
+    // Register the canonical attempt before any evidence hook runs.  Evidence
+    // descriptors are never provisional: each one binds this immutable result
+    // while the browser context is still available for capture.
+    await input.persistAttempt?.(attempt);
     await input.onBeforeSessionClose?.({ attempt, session });
     return attempt;
   } finally {
@@ -107,19 +108,20 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
-    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}) });
-    await input.workspace.registerArtifactValue({
-      type: "test-result",
-      value: {
-        artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
-        attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
-        testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
-        failureClassification: attempt.status === "PASSED" ? "NONE" : "UNDETERMINED",
-        startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
-      },
-      relationships: [testCase.artifact.record.id],
-      provenance: "runtime",
-    });
+    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), persistAttempt: async (attempt) => {
+      await input.workspace.registerArtifactValue({
+        type: "test-result",
+        value: {
+          artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
+          attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
+          testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
+          failureClassification: attempt.status === "PASSED" ? "NONE" : "UNDETERMINED",
+          startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
+        },
+        relationships: [testCase.artifact.record.id],
+        provenance: "runtime",
+      });
+    } });
     return attempt;
   });
   executionTail = operation.then(() => undefined, () => undefined);
