@@ -176,6 +176,15 @@ describe("validateArtifact", () => {
     expect(invalidRun).toEqual(beforeValidation);
   });
 
+  it("requires finalizedProfile exactly for terminal run states", () => {
+    const finalizedProfile = { name: "full", version: "1.0.0" };
+
+    expect(validateArtifact("run-metadata", { ...validRun, finalizedProfile }).valid).toBe(false);
+    expect(validateArtifact("run-metadata", { ...validRun, status: "FINALIZING", finalizedProfile }).valid).toBe(false);
+    expect(validateArtifact("run-metadata", { ...validRun, status: "COMPLETED" }).valid).toBe(false);
+    expect(validateArtifact("run-metadata", { ...validRun, status: "COMPLETED", finalizedProfile }).valid).toBe(true);
+  });
+
   describe("the remaining canonical schemas", () => {
     for (const contract of otherArtifactContracts) {
       it(`accepts a minimal valid ${contract.type} artifact`, () => {

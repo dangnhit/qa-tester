@@ -24,5 +24,18 @@
       }
     },
     "linkedRunId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$" }
+  },
+  "if": {
+    "properties": {
+      "status": { "enum": ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"] }
+    },
+    "required": ["status"]
+  },
+  "then": {
+    "properties": { "finalizedProfile": true },
+    "required": ["finalizedProfile"]
+  },
+  "else": {
+    "properties": { "finalizedProfile": false }
   }
 }

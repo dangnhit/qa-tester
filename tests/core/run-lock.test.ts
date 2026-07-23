@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,5 +43,40 @@ describe("run locks", () => {
     expect(refused).toHaveLength(1);
     expect(refused[0]?.reason).toMatchObject({ code: "LIVE_LOCK" });
     await owners[0]?.value.release();
+  });
+
+  it("recovers an abandoned recovery mutex without allowing two owners", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-abandoned-recovery-"));
+    roots.push(root);
+    const staleOwner = {
+      pid: 999_999_999,
+      createdAt: "2026-07-23T12:00:00.000Z",
+      token: "abandoned-recovery",
+    };
+    await writeFile(join(root, ".run.lock"), JSON.stringify(staleOwner), { flag: "wx" });
+    await writeFile(join(root, ".run.lock.recovery"), JSON.stringify(staleOwner), { flag: "wx" });
+
+    const attempts = await Promise.allSettled([acquireRunLock(root), acquireRunLock(root)]);
+    const owners = attempts.filter((attempt): attempt is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireRunLock>>> => attempt.status === "fulfilled");
+    const refused = attempts.filter((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected");
+
+    expect(owners).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.reason).toMatchObject({ code: "LIVE_LOCK" });
+    await owners[0]?.value.release();
+  });
+
+  it("can retry release after a transient ownership-read failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-release-retry-"));
+    roots.push(root);
+    const path = join(root, ".run.lock");
+    const lock = await acquireRunLock(root);
+    const ownedRecord = await readFile(path, "utf8");
+    await writeFile(path, "{", "utf8");
+
+    await expect(lock.release()).rejects.toThrow();
+    await writeFile(path, ownedRecord, "utf8");
+    await expect(lock.release()).resolves.toBeUndefined();
+    await expect(access(path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

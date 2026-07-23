@@ -70,6 +70,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+async function readBoundWorkspaceState(
+  path: string,
+  expectedRunId: string,
+  options: { allowEnvironmentIntegrityDiagnostics?: boolean } = {},
+): Promise<{ metadata: WorkspaceMetadata; manifest: Manifest }> {
+  const metadataPath = await assertRealpathWithin(path, "run-metadata.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as WorkspaceMetadata;
+  if (!validateArtifact("run-metadata", metadata).valid) throw new QaSkillsError("Invalid workspace metadata", "INVALID_ARTIFACT");
+  if (metadata.runId !== expectedRunId) throw new QaSkillsError("Metadata run ID does not match the requested workspace", "ARTIFACT_BINDING");
+
+  const manifestPath = await assertRealpathWithin(path, "artifact-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Manifest;
+  if (!validateArtifact("artifact-manifest", manifest).valid) throw new QaSkillsError("Invalid artifact manifest", "INVALID_MANIFEST");
+  if (manifest.runId !== expectedRunId) throw new QaSkillsError("Manifest run ID does not match the requested workspace", "ARTIFACT_BINDING");
+
+  const environmentRecords = manifest.artifacts.filter((artifact) => artifact.type === "environment-profile");
+  if (environmentRecords.length !== 1) throw new QaSkillsError("Workspace must have one authoritative environment profile", "ARTIFACT_BINDING");
+  const environmentRecord = environmentRecords[0];
+  if (!environmentRecord) throw new QaSkillsError("Authoritative environment profile is missing", "ARTIFACT_BINDING");
+  let environmentPath: string;
+  try {
+    environmentPath = await assertRealpathWithin(path, environmentRecord.relativePath);
+  } catch (error: unknown) {
+    if (options.allowEnvironmentIntegrityDiagnostics && error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { metadata, manifest };
+    }
+    throw error;
+  }
+  if (await sha256(environmentPath) !== environmentRecord.sha256) {
+    if (options.allowEnvironmentIntegrityDiagnostics) return { metadata, manifest };
+    throw new QaSkillsError("Authoritative environment profile checksum does not match its manifest record", "ARTIFACT_BINDING");
+  }
+  const environmentProfile = JSON.parse(await readFile(environmentPath, "utf8")) as unknown;
+  if (!validateArtifact("environment-profile", environmentProfile).valid || !isRecord(environmentProfile)) {
+    throw new QaSkillsError("Invalid authoritative environment profile", "ARTIFACT_BINDING");
+  }
+  if (metadata.environmentProfileId !== environmentProfile.environmentProfileId) {
+    throw new QaSkillsError("Metadata environment profile ID does not match the authoritative registered environment profile", "ARTIFACT_BINDING");
+  }
+  return { metadata, manifest };
+}
+
 async function filesUnder(root: string, directory: string): Promise<string[]> {
   await assertPathWithin(root, directory);
   let entries: string[];
@@ -99,6 +141,7 @@ export class RunWorkspace {
   ) {}
 
   private closed = false;
+  private closePromise: Promise<void> | undefined;
 
   public static async create(options: { root: string; mode: ArtifactProfileName; environmentProfile: Record<string, unknown>; linkedRunId?: string }): Promise<RunWorkspace> {
     if (!(artifactProfileNames as readonly string[]).includes(options.mode)) throw new QaSkillsError("Invalid mode", "INVALID_MODE");
@@ -132,9 +175,7 @@ export class RunWorkspace {
   public static async open(root: string, runId: string): Promise<RunWorkspace> {
     const realRoot = await realpath(root);
     const path = await assertRealpathWithin(realRoot, join("qa-results", runId));
-    const metadataPath = await assertRealpathWithin(path, "run-metadata.json");
-    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as WorkspaceMetadata;
-    if (!validateArtifact("run-metadata", metadata).valid) throw new QaSkillsError("Invalid workspace metadata", "INVALID_ARTIFACT");
+    const { metadata } = await readBoundWorkspaceState(path, runId);
     const lock = terminalStatuses.has(metadata.status) ? undefined : await acquireRunLock(path);
     return new RunWorkspace(realRoot, path, runId, metadata.mode, metadata, lock);
   }
@@ -170,7 +211,7 @@ export class RunWorkspace {
 
   public async validate(profile: ArtifactProfileName = this.mode): Promise<WorkspaceValidation> {
     this.assertOpen();
-    const manifest = await this.readManifest();
+    const { manifest } = await readBoundWorkspaceState(this.path, this.runId, { allowEnvironmentIntegrityDiagnostics: true });
     const diagnostics: WorkspaceDiagnostic[] = [];
     const profileResult = evaluateArtifactProfile(profile, ["run-metadata", ...manifest.artifacts.map((artifact) => artifact.type)]);
     diagnostics.push(...profileResult.diagnostics);
@@ -195,21 +236,26 @@ export class RunWorkspace {
   public async finalize(profile: ArtifactProfileName = this.mode): Promise<WorkspaceValidation> {
     this.assertWritable();
     assertArtifactProfileName(profile);
+    if (profile !== this.mode) throw new QaSkillsError(`Finalization profile ${profile} does not match run mode ${this.mode}`, "INVALID_PROFILE");
     if (this.metadata.status === "CREATED") await this.transitionInternal("RUNNING");
     if (this.metadata.status !== "RUNNING") throw new QaSkillsError(`Cannot finalize a ${this.metadata.status} workspace`, "ILLEGAL_TRANSITION");
-    this.metadata = { ...this.metadata, finalizedProfile: { name: profile, version: artifactProfileVersion } };
-    await this.writeMetadata();
-    await this.transitionInternal("FINALIZING");
     const result = await this.validate(profile);
-    await this.transitionInternal(result.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES");
+    await this.transitionInternal("FINALIZING");
+    await this.transitionTerminal(result.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES", profile);
     return result;
   }
 
-  public async close(): Promise<void> {
-    if (!this.closed) {
-      await this.lock?.release();
-      this.closed = true;
+  public close(): Promise<void> {
+    this.closed = true;
+    if (!this.closePromise) {
+      this.closePromise = (async () => {
+        await this.lock?.release();
+      })().catch((error: unknown) => {
+        this.closePromise = undefined;
+        throw error;
+      });
     }
+    return this.closePromise;
   }
 
   private assertOpen(): void {
@@ -243,15 +289,80 @@ export class RunWorkspace {
     if (unknownRelationship) {
       throw new QaSkillsError(`Relationship ${unknownRelationship} is not registered in this workspace`, "ARTIFACT_BINDING");
     }
+    await this.assertSemanticReferences(type, value, manifest);
   }
 
   private async transitionInternal(status: RunStatus): Promise<void> {
+    if (terminalStatuses.has(status)) throw new QaSkillsError("Terminal transitions require finalization", "ILLEGAL_TRANSITION");
     if (!nextStatuses[this.metadata.status].includes(status)) {
       throw new QaSkillsError(`Illegal lifecycle transition: ${this.metadata.status} -> ${status}`, "ILLEGAL_TRANSITION");
     }
     this.metadata = { ...this.metadata, status };
     await this.writeMetadata();
-    if (terminalStatuses.has(status)) await this.lock?.release();
+  }
+
+  private async transitionTerminal(status: Extract<RunStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">, profile: ArtifactProfileName): Promise<void> {
+    if (!nextStatuses[this.metadata.status].includes(status)) {
+      throw new QaSkillsError(`Illegal lifecycle transition: ${this.metadata.status} -> ${status}`, "ILLEGAL_TRANSITION");
+    }
+    this.metadata = {
+      ...this.metadata,
+      status,
+      finalizedProfile: { name: profile, version: artifactProfileVersion },
+    };
+    await this.writeMetadata();
+    await this.lock?.release();
+  }
+
+  private async readRegisteredValues(manifest: Manifest, type: ArtifactType): Promise<Record<string, unknown>[]> {
+    return Promise.all(manifest.artifacts.filter((artifact) => artifact.type === type).map(async (artifact) => {
+      const path = await assertRealpathWithin(this.path, artifact.relativePath);
+      if (await sha256(path) !== artifact.sha256) throw new QaSkillsError(`Referenced ${type} checksum mismatch`, "ARTIFACT_BINDING");
+      const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+      if (!isRecord(value) || !validateArtifact(type, value).valid) throw new QaSkillsError(`Referenced ${type} is invalid`, "ARTIFACT_BINDING");
+      return value;
+    }));
+  }
+
+  private async assertSemanticReferences(type: ArtifactType, value: Record<string, unknown>, manifest: Manifest): Promise<void> {
+    if (type === "test-result") {
+      const testCases = await this.readRegisteredValues(manifest, "test-case");
+      if (!testCases.some((testCase) => testCase.testCaseId === value.testCaseId)) {
+        throw new QaSkillsError("Test result references an unregistered test case", "ARTIFACT_BINDING");
+      }
+    } else if (type === "test-step-result") {
+      const testResults = await this.readRegisteredValues(manifest, "test-result");
+      const testResult = testResults.find((result) => result.attemptId === value.attemptId);
+      if (!testResult) throw new QaSkillsError("Test step result references an unregistered attempt", "ARTIFACT_BINDING");
+      const testCases = await this.readRegisteredValues(manifest, "test-case");
+      const testCase = testCases.find((candidate) => candidate.testCaseId === testResult.testCaseId);
+      const steps = testCase?.steps;
+      if (!Array.isArray(steps) || !steps.some((step) => isRecord(step) && step.id === value.stepId)) {
+        throw new QaSkillsError("Test step result references an unregistered step", "ARTIFACT_BINDING");
+      }
+    } else if (type === "evidence") {
+      const testResults = await this.readRegisteredValues(manifest, "test-result");
+      if (!testResults.some((result) => result.attemptId === value.attemptId)) {
+        throw new QaSkillsError("Evidence references an unregistered attempt", "ARTIFACT_BINDING");
+      }
+    } else if (type === "bug-report") {
+      const testResults = await this.readRegisteredValues(manifest, "test-result");
+      if (!testResults.some((result) => result.attemptId === value.attemptId)) {
+        throw new QaSkillsError("Bug report references an unregistered attempt", "ARTIFACT_BINDING");
+      }
+      const evidenceItems = await this.readRegisteredValues(manifest, "evidence");
+      const evidenceIds = value.evidenceIds;
+      if (!Array.isArray(evidenceIds) || !evidenceIds.every((evidenceId) => evidenceItems.some(
+        (evidence) => evidence.evidenceId === evidenceId && evidence.attemptId === value.attemptId,
+      ))) {
+        throw new QaSkillsError("Bug report references unregistered evidence for its attempt", "ARTIFACT_BINDING");
+      }
+    } else if (type === "test-data-manifest") {
+      const resources = value.resources;
+      if (!Array.isArray(resources) || !resources.every((resource) => isRecord(resource) && resource.ownerRunId === this.runId)) {
+        throw new QaSkillsError("Test data resource owner run does not match this workspace", "ARTIFACT_BINDING");
+      }
+    }
   }
 
   private async registerCanonicalArtifact(type: ArtifactType, value: unknown, relationships: string[], provenance: string): Promise<ArtifactRecord & { absolutePath: string }> {
@@ -275,6 +386,7 @@ export class RunWorkspace {
     const path = await assertRealpathWithin(this.path, "artifact-manifest.json");
     const manifest = JSON.parse(await readFile(path, "utf8")) as Manifest;
     if (!validateArtifact("artifact-manifest", manifest).valid) throw new QaSkillsError("Invalid artifact manifest", "INVALID_MANIFEST");
+    if (manifest.runId !== this.runId) throw new QaSkillsError("Manifest run ID does not match this workspace", "ARTIFACT_BINDING");
     return manifest;
   }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { sha256 } from "../../src/core/checksum.js";
+import type { ArtifactType } from "../../src/contracts/types.js";
 import type { ArtifactProfileName } from "../../src/core/artifact-profiles.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 
@@ -51,6 +52,27 @@ function testCase(id: string) {
     title: `Test ${id}`,
     steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
   };
+}
+
+function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "ATTEMPT-1") {
+  return {
+    artifactType: "test-result",
+    schemaVersion: "1.0.0",
+    producerVersion: "1.0.0",
+    attemptId,
+    runId: workspace.runId,
+    testCaseId,
+    status: "PASSED",
+    failureClassification: "NONE",
+    startedAt: "2026-07-23T12:34:56.000Z",
+    finishedAt: "2026-07-23T12:35:56.000Z",
+  };
+}
+
+async function registerDocument(workspace: RunWorkspace, type: ArtifactType, name: string, value: unknown) {
+  const sourcePath = join(workspace.root, name);
+  await writeFile(sourcePath, JSON.stringify(value));
+  return workspace.registerArtifact({ type, sourcePath, relationships: [] });
 }
 
 afterEach(async () => {
@@ -141,6 +163,49 @@ describe("RunWorkspace", () => {
     await current.close();
   });
 
+  it("marks the instance closed before lock release can yield", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+
+    const closing = workspace.close();
+    await expect(workspace.transition("RUNNING")).rejects.toThrow(/closed/i);
+    await expect(closing).resolves.toBeUndefined();
+  });
+
+  it("rejects persisted metadata run ID tampering when opening", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    await workspace.close();
+    await writeFile(join(workspace.path, "run-metadata.json"), JSON.stringify(metadata(workspace, {
+      runId: "20260723T123456Z-a1b2c3",
+    })));
+
+    await expect(RunWorkspace.open(directory, workspace.runId)).rejects.toThrow(/run.*workspace|binding/i);
+  });
+
+  it("rejects persisted manifest run ID tampering on open and validate", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const manifestPath = join(workspace.path, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, runId: "20260723T123456Z-a1b2c3" }));
+
+    await expect(workspace.validate()).rejects.toThrow(/manifest.*run|binding/i);
+    await workspace.close();
+    await expect(RunWorkspace.open(directory, workspace.runId)).rejects.toThrow(/manifest.*run|binding/i);
+  });
+
+  it("binds persisted environment metadata to the authoritative registered profile", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    await workspace.close();
+    await writeFile(join(workspace.path, "run-metadata.json"), JSON.stringify(metadata(workspace, {
+      environmentProfileId: "env-foreign",
+    })));
+
+    await expect(RunWorkspace.open(directory, workspace.runId)).rejects.toThrow(/environment.*profile|binding/i);
+  });
+
   it("canonicalizes YAML Agent Drafts into registered JSON artifacts", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
@@ -189,12 +254,23 @@ describe("RunWorkspace", () => {
 
   it("persists the exact audited profile name and version used for finalization", async () => {
     const directory = await root();
-    const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
 
     await workspace.finalize("plan");
     expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({
       status: "COMPLETED",
       finalizedProfile: { name: "plan", version: "1.0.0" },
+    });
+  });
+
+  it("rejects finalization with a weaker profile than the run mode", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
+
+    await expect(workspace.finalize("plan")).rejects.toThrow(/mode|profile|downgrade/i);
+    expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({
+      status: "CREATED",
+      mode: "full",
     });
   });
 
@@ -204,6 +280,22 @@ describe("RunWorkspace", () => {
 
     await expect(workspace.finalize("invented" as ArtifactProfileName)).rejects.toThrow(/profile/i);
     expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({ status: "CREATED" });
+  });
+
+  it("remains retryable when finalization precondition validation throws", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const manifestPath = join(workspace.path, "artifact-manifest.json");
+    const validManifest = await readFile(manifestPath, "utf8");
+    await writeFile(manifestPath, "{");
+
+    await expect(workspace.finalize()).rejects.toThrow();
+    expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({
+      status: "RUNNING",
+    });
+
+    await writeFile(manifestPath, validManifest);
+    await expect(workspace.finalize()).resolves.toMatchObject({ valid: true });
   });
 
   it("requires structured evidence gaps and canonicalizes them atomically", async () => {
@@ -277,6 +369,84 @@ describe("RunWorkspace", () => {
     }));
 
     await expect(workspace.registerArtifact({ type: "environment-profile", sourcePath, relationships: [] })).rejects.toThrow(/environment.*profile|authoritative|binding/i);
+  });
+
+  it("validates test result, attempt, and step references against registered artifacts", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+
+    await expect(registerDocument(workspace, "test-result", "missing-case-result.json", testResult(workspace, "TC-MISSING"))).rejects.toThrow(/test.?case|reference|binding/i);
+    await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"));
+
+    const stepResult = {
+      artifactType: "test-step-result",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      attemptId: "ATTEMPT-1",
+      stepId: "step-1",
+      status: "PASSED",
+      durationMs: 1,
+    };
+    await expect(registerDocument(workspace, "test-step-result", "foreign-attempt-step.json", { ...stepResult, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
+    await expect(registerDocument(workspace, "test-step-result", "foreign-step.json", { ...stepResult, stepId: "step-missing" })).rejects.toThrow(/step|reference|binding/i);
+    await expect(registerDocument(workspace, "test-step-result", "step.json", stepResult)).resolves.toMatchObject({ type: "test-step-result" });
+  });
+
+  it("validates evidence and bug references by expected type and attempt", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
+    await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"));
+
+    const evidence = {
+      artifactType: "evidence",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      runId: workspace.runId,
+      attemptId: "ATTEMPT-1",
+      kind: "log",
+      capturedAt: "2026-07-23T12:34:56.000Z",
+      sha256: "a".repeat(64),
+      relativePath: "evidence/log.json",
+    };
+    await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
+    await registerDocument(workspace, "evidence", "evidence.json", evidence);
+
+    const bug = {
+      artifactType: "bug-report",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      bugId: "BUG-LOGIN-001",
+      runId: workspace.runId,
+      attemptId: "ATTEMPT-1",
+      triageStatus: "NEEDS_TRIAGE",
+      expected: "Login succeeds",
+      actual: "Login fails",
+      evidenceIds: [evidence.evidenceId],
+    };
+    await expect(registerDocument(workspace, "bug-report", "foreign-bug-attempt.json", { ...bug, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
+    await expect(registerDocument(workspace, "bug-report", "foreign-bug-evidence.json", { ...bug, evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXY0"] })).rejects.toThrow(/evidence|reference|binding/i);
+    await expect(registerDocument(workspace, "bug-report", "bug.json", bug)).resolves.toMatchObject({ type: "bug-report" });
+  });
+
+  it("binds test-data resource ownership to the workspace run", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "cleanup", environmentProfile });
+    const manifest = {
+      artifactType: "test-data-manifest",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: workspace.runId,
+      resources: [{ id: "resource-1", ownerRunId: "foreign-run", cleanupAction: "delete" }],
+    };
+
+    await expect(registerDocument(workspace, "test-data-manifest", "foreign-owner.json", manifest)).rejects.toThrow(/owner|run|binding/i);
+    await expect(registerDocument(workspace, "test-data-manifest", "owned.json", {
+      ...manifest,
+      resources: [{ ...manifest.resources[0], ownerRunId: workspace.runId }],
+    })).resolves.toMatchObject({ type: "test-data-manifest" });
   });
 
   it("allows distinct artifacts of the same type while rejecting an identical canonical artifact", async () => {

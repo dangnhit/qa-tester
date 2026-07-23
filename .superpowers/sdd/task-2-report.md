@@ -93,6 +93,39 @@ Test Files  5 passed (5)
 Tests       72 passed (72)
 ```
 
+### Third review-fix wave RED/GREEN
+
+Focused RED command:
+
+```text
+npm test -- tests/core/run-workspace.test.ts tests/core/run-lock.test.ts tests/contracts/validator.test.ts
+```
+
+The initial run failed only on the newly specified behavior:
+
+```text
+Test Files  3 failed (3)
+Tests       12 failed | 61 passed (73)
+```
+
+The RED failures demonstrated:
+
+- A `full` run could downgrade finalization to `plan`.
+- Persisted metadata, manifest, and authoritative environment bindings were not re-established on open/validate.
+- `close()` left an interleaving window before marking the instance closed.
+- A thrown finalization validation stranded metadata in `FINALIZING`.
+- An abandoned stale-lock recovery mutex permanently blocked recovery.
+- Active and terminal metadata did not conditionally forbid/require `finalizedProfile`.
+- Governed payload references were not checked against registered test cases, attempts, steps, evidence, and run-owned test data.
+- Lock release marked itself released before ownership verification completed, preventing retry.
+
+After the fixes, the same focused command passed:
+
+```text
+Test Files  3 passed (3)
+Tests       73 passed (73)
+```
+
 ## Verification
 
 All commands exited successfully:
@@ -110,7 +143,7 @@ Final full-suite result:
 
 ```text
 Test Files  7 passed (7)
-Tests       79 passed (79)
+Tests       91 passed (91)
 ```
 
 ## Delivered
@@ -128,6 +161,12 @@ Tests       79 passed (79)
 - Versioned Draft 2020-12 Evidence Gap schema with required reason and affected claim, including generated TypeScript declarations.
 - Audited artifact-profile versioning persisted in run metadata at finalization.
 - CLI safety-denied mapping for path traversal and symlink escape refusals.
+- Exact mode-profile finalization with downgrade prevention.
+- Persisted run/manifest/environment rebinding on every open and validation.
+- Synchronous close invalidation and prevalidated, retryable finalization.
+- Owner-identified stale recovery leases and retryable ownership-checked release.
+- Conditional terminal-only `finalizedProfile` schema enforcement.
+- Semantic payload reference validation for test cases, attempts, steps, evidence, and test-data ownership.
 
 ## Files changed
 
