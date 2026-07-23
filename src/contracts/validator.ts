@@ -1,6 +1,6 @@
 import type { ErrorObject } from "ajv";
 
-import { artifactValidators, browserTestDslValidator, planningActionValidator } from "./catalog.js";
+import { annotationValidator, artifactValidators, browserTestDslValidator, planningActionValidator } from "./catalog.js";
 import type { ArtifactType, NormalizedValidationError, ValidationResult } from "./types.js";
 
 function normalizeErrors(errors: ErrorObject[] | null | undefined): NormalizedValidationError[] {
@@ -30,4 +30,9 @@ export function validatePlanningAction(value: unknown): ValidationResult {
 export function validateBrowserTestDsl(value: unknown): ValidationResult {
   const valid = browserTestDslValidator(value);
   return { valid: Boolean(valid), errors: valid ? [] : normalizeErrors(browserTestDslValidator.errors) };
+}
+
+export function validateAnnotation(value: unknown): ValidationResult {
+  const valid = annotationValidator(value);
+  return { valid: Boolean(valid), errors: valid ? [] : normalizeErrors(annotationValidator.errors) };
 }

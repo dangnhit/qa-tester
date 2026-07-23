@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import artifactManifestSchema from "../../shared/schemas/artifact-manifest.schema.json" with { type: "json" };
+import annotationSchema from "../../shared/schemas/annotation.schema.json" with { type: "json" };
 import bugReportSchema from "../../shared/schemas/bug-report.schema.json" with { type: "json" };
 import browserTestDslSchema from "../../shared/schemas/browser-test-dsl.schema.json" with { type: "json" };
 import environmentProfileSchema from "../../shared/schemas/environment-profile.schema.json" with { type: "json" };
@@ -48,6 +49,7 @@ ajv.addSchema(planningActionSchema);
 
 export const planningActionValidator = ajv.getSchema(planningActionSchema.$id) as ValidateFunction;
 export const browserTestDslValidator = ajv.getSchema(browserTestDslSchema.$id) as ValidateFunction;
+export const annotationValidator = ajv.compile(annotationSchema);
 
 export const artifactValidators: Readonly<Record<ArtifactType, ValidateFunction>> = Object.fromEntries(
   Object.entries(schemas).map(([type, schema]) => [type, ajv.compile(schema)]),

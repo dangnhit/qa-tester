@@ -47,11 +47,11 @@ export async function assertRealpathWithin(root: string, candidate: string): Pro
   throw new QaSkillsError(`Symlink escape is not allowed: ${candidate}`, "SYMLINK_ESCAPE");
 }
 
-export async function atomicWriteFile(root: string, path: string, contents: string): Promise<void> {
+export async function atomicWriteFile(root: string, path: string, contents: string | Uint8Array): Promise<void> {
   await assertPathWithin(root, path);
   await mkdir(dirname(path), { recursive: true });
   await assertPathWithin(root, path);
   const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+  await writeFile(temporary, contents, { ...(typeof contents === "string" ? { encoding: "utf8" } : {}), mode: 0o600 });
   await rename(temporary, path);
 }

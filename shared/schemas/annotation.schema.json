@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/annotation.schema.json",
+  "title": "Evidence Annotation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "captureType", "rawSha256", "annotations", "provenance"],
+  "properties": {
+    "artifactType": { "const": "annotation" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "evidenceId": { "type": "string", "minLength": 1 },
+    "captureType": { "const": "screenshot" },
+    "rawSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "cssBox", "pixelBox"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "maxLength": 120 },
+          "locator": { "type": "string" },
+          "cssBox": { "$ref": "#/$defs/box" },
+          "pixelBox": { "$ref": "#/$defs/box" }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "attemptId", "url", "viewport", "browser", "build", "capturedAt", "dpr", "scroll", "clip"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1 },
+        "attemptId": { "type": "string", "minLength": 1 },
+        "testcaseId": { "type": "string" },
+        "bugId": { "type": "string" },
+        "url": { "type": "string", "format": "uri" },
+        "viewport": { "$ref": "#/$defs/viewport" },
+        "browser": { "type": "string", "minLength": 1 },
+        "build": { "type": "string", "minLength": 1 },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "dimensions": { "$ref": "#/$defs/viewport" },
+        "dpr": { "type": "number", "exclusiveMinimum": 0 },
+        "scroll": { "$ref": "#/$defs/point" },
+        "clip": { "$ref": "#/$defs/box" }
+      }
+    }
+  },
+  "$defs": {
+    "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 } } },
+    "box": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } },
+    "viewport": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } } }
+  }
+}
