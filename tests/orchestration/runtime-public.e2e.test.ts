@@ -273,6 +273,29 @@ describe("public runtime QA Tester", () => {
     await expect(RunWorkspace.open(root, result.runId)).rejects.toThrow(/checkpoint|selection|execution|binding/i);
   });
 
+  it("rejects a rechecksummed regression checkpoint that reorders two valid selected execution cases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-regression-checkpoint-order-")); roots.push(root);
+    const bundle = await sourceBundle(root, { sourceBug: "partial" });
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "required" } } },
+      changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "checkpoint-order" } } },
+    });
+    const result = await tester({ root, mode: "regression", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const checkpoint = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "workflow-checkpoint" && JSON.stringify(artifact.value.completedOperations) === JSON.stringify(["select-regression"]));
+    if (!checkpoint) throw new Error("Expected selected checkpoint");
+    await rechecksumRegisteredArtifact(workspace, checkpoint.record.id, (value) => {
+      const state = value.state as Record<string, unknown>;
+      const cases = state.executionCases as unknown[];
+      if (cases.length !== 2) throw new Error("Expected two selected canonical cases");
+      state.executionCases = [...cases].reverse();
+      value.stateChecksum = sha256Text(canonicalJson(state));
+    });
+    await workspace.close();
+    await expect(RunWorkspace.open(root, result.runId)).rejects.toThrow(/checkpoint|selection|execution|binding/i);
+  });
+
   it("retests an immutable source bug before independent regression and derives FIXED from registered attempts", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-retest-")); roots.push(root);
     const bundle = await sourceBundle(root, { sourceBug: true });

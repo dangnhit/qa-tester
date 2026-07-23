@@ -125,6 +125,13 @@ function sameCheckpointRefs(left: readonly unknown[], right: readonly unknown[])
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
+/** Checkpoint execution selection is an ordered worklist, unlike aggregate
+ * fact sets such as evidence sources. */
+function sameOrderedCheckpointRefs(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const normalize = (item: unknown) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" ? `${item.artifactId}:${item.sha256}` : "";
+  return left.length === right.length && left.every((item, index) => normalize(item) === normalize(right[index]));
+}
+
 /** The selection record, rather than a checkpoint snapshot, owns execution
  * membership and order. Excluded decisions intentionally never appear here. */
 function selectedExecutionCaseRefs(
@@ -637,7 +644,7 @@ async function inspectWorkspaceState(
     const selectionOutput = selectionOutputRefs.length === 1 && isRecord(selectionOutputRefs[0]) ? selectionOutputRefs[0] : undefined;
     const selectionArtifact = selectionOutput === undefined ? undefined : artifacts.find((artifact) => artifact.valid && artifact.record.type === "regression-selection" && artifact.record.id === selectionOutput.artifactId && artifact.record.sha256 === selectionOutput.sha256);
     const selectedExecutionRefs = selectedExecutionCaseRefs(selectionArtifact, artifacts);
-    const selectionStateValid = !completed.includes("select-regression") || (state !== undefined && selectionArtifact !== undefined && selectedExecutionRefs !== undefined && state.selection !== undefined && sameCheckpointRefs([state.selection], selectionOutputRefs) && sameCheckpointRefs(array(state.executionCases), selectedExecutionRefs));
+    const selectionStateValid = !completed.includes("select-regression") || (state !== undefined && selectionArtifact !== undefined && selectedExecutionRefs !== undefined && state.selection !== undefined && sameCheckpointRefs([state.selection], selectionOutputRefs) && sameOrderedCheckpointRefs(array(state.executionCases), selectedExecutionRefs));
     const operationStateValid = state !== undefined
       && (!completed.includes("reproduce-bug") || sameCheckpointRefs(array(state.reproductionAttempts), outputs === undefined ? [] : array(outputs["reproduce-bug"])))
       && (!completed.includes("execute-browser-test") || value.mode === "retest" || sameCheckpointRefs(array(state.executionCases), executionCaseRefs))
