@@ -58,6 +58,7 @@ type LoadedArtifact = {
 
 export type WorkspaceDiagnostic = { code: string; message: string; relativePath?: string };
 export type WorkspaceValidation = { valid: boolean; diagnostics: WorkspaceDiagnostic[] };
+export type RegisteredWorkspaceArtifact = Readonly<{ record: ArtifactRecord; value: Readonly<Record<string, unknown>> }>;
 export type WorkspacePersistence = {
   writeAtomic(root: string, path: string, contents: string): Promise<void>;
 };
@@ -333,9 +334,10 @@ async function inspectWorkspaceState(
         const matches = valuesOf("test-case").filter((candidate) =>
           candidate.value?.testCaseId === value.testCaseId
           && candidate.value?.revisionId === value.testCaseRevisionId
+          && candidate.value?.instanceId === value.testCaseInstanceId
         );
         if (matches.length !== 1) {
-          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test result must reference exactly one registered test case revision") || changed;
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test result must reference exactly one registered test case revision and instance") || changed;
         }
       } else if (artifact.record.type === "test-step-result") {
         const matchingAttempts = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
@@ -580,6 +582,18 @@ export class RunWorkspace {
     return this.validateInternal(profile);
   }
 
+  /** Returns only freshly revalidated, manifest-registered immutable payloads. */
+  public async readRegisteredArtifacts(): Promise<readonly RegisteredWorkspaceArtifact[]> {
+    this.assertOpen();
+    const inspected = await inspectWorkspaceState(this.path, this.runId);
+    if (inspected.diagnostics.length > 0) {
+      throw new QaSkillsError(`Workspace artifact binding is invalid: ${inspected.diagnostics[0]?.message ?? "unknown error"}`, "ARTIFACT_BINDING");
+    }
+    return inspected.artifacts.flatMap((artifact) => artifact.valid && artifact.value
+      ? [{ record: artifact.record, value: artifact.value }]
+      : []);
+  }
+
   public finalize(
     profile: ArtifactProfileName = this.mode,
     outcome?: ExplicitTerminalOutcome,
@@ -787,8 +801,9 @@ export class RunWorkspace {
       if (testCases.filter((testCase) =>
         testCase.testCaseId === value.testCaseId
         && testCase.revisionId === value.testCaseRevisionId
+        && testCase.instanceId === value.testCaseInstanceId
       ).length !== 1) {
-        throw new QaSkillsError("Test result references an unregistered or ambiguous test case revision", "ARTIFACT_BINDING");
+        throw new QaSkillsError("Test result references an unregistered or ambiguous test case revision and instance", "ARTIFACT_BINDING");
       }
       const testResults = await this.readRegisteredValues(manifest, "test-result");
       if (testResults.some((result) => result.attemptId === value.attemptId)) {

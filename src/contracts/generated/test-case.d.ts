@@ -6,6 +6,7 @@ export interface TestCase {
   producerVersion: string;
   testCaseId: string;
   revisionId: string;
+  instanceId: string;
   title: string;
   /**
    * @minItems 1
@@ -22,4 +23,17 @@ export interface TestCase {
       sideEffect: "none" | "reversible" | "external" | "destructive";
     }[]
   ];
+  coverage: {
+    requirementId: string;
+    role: string;
+    behavior: string;
+    browser: string;
+    viewport: {
+      width: number;
+      height: number;
+    };
+    accessibilityMethod: string | null;
+    risk: "low" | "medium" | "high" | "critical";
+    outcome: string;
+  };
 }

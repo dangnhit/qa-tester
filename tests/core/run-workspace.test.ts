@@ -50,8 +50,13 @@ function testCase(id: string) {
     producerVersion: "1.0.0",
     testCaseId: id,
     revisionId: `REV-${id}`,
+    instanceId: `${id}--INSTANCE-1`,
     title: `Test ${id}`,
     steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
+    coverage: {
+      requirementId: "REQ-TEST", role: "member", behavior: "test behavior", browser: "chromium",
+      viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "low", outcome: "test outcome",
+    },
   };
 }
 
@@ -64,6 +69,7 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
     runId: workspace.runId,
     testCaseId,
     testCaseRevisionId: `REV-${testCaseId}`,
+    testCaseInstanceId: `${testCaseId}--INSTANCE-1`,
     status: "PASSED",
     failureClassification: "NONE",
     startedAt: "2026-07-23T12:34:56.000Z",

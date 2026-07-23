@@ -49,8 +49,13 @@ const otherArtifactContracts = [
       producerVersion: "1.0.0",
       testCaseId: "TC-1",
       revisionId: "REV-1",
+      instanceId: "TC-1--INSTANCE-1",
       title: "A valid test case",
       steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
+      coverage: {
+        requirementId: "REQ-1", role: "member", behavior: "sign in", browser: "chromium",
+        viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "medium", outcome: "account opens",
+      },
     },
   },
   {
@@ -77,6 +82,7 @@ const otherArtifactContracts = [
       runId: "20260723T123456Z-a1b2c3",
       testCaseId: "TC-1",
       testCaseRevisionId: "REV-1",
+      testCaseInstanceId: "TC-1--INSTANCE-1",
       status: "PASSED",
       failureClassification: "NONE",
       startedAt: "2026-07-23T12:34:56.000Z",
