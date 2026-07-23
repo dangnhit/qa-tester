@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
 import { createQaTester, createUnsafeWorkflowRunnerForTests } from "../../src/operations/run-workflow.js";
@@ -14,6 +15,12 @@ describe("workflow mode operation plans", () => {
 
   it("keeps cleanup out of the public QA Tester modes", () => {
     expect(() => operationsForMode("cleanup" as never)).toThrow(/unsupported.*mode/i);
+  });
+
+  it("keeps callback orchestration out of the package public surface", async () => {
+    const packageJson = JSON.parse(await readFile(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8")) as { exports: Record<string, string> };
+    expect(Object.values(packageJson.exports)).not.toContain("./dist/operations/run-workflow.js");
+    expect(JSON.stringify(packageJson.exports)).not.toContain("UnsafeWorkflowRunner");
   });
 
   it("takes transitive metadata dependencies and rejects cycles deterministically", () => {

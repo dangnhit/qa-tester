@@ -59,4 +59,11 @@ The green slices cover mode ordering, bounded exploration charters and non-autho
 
 Verification: focused runtime E2E passed repeatedly (final focused run: 2 tests); `npm test` passed 45 files / 268 tests; `npm run typecheck`, `npm run lint`, `npm run generate:types`, and `git diff --check` passed.
 
-Regression and retest still need equivalent public fixture-backed runtime E2Es before the full Task 8 matrix can be marked complete.
+The public fixture-backed matrix now also covers regression and retest:
+
+- REGRESSION imports the terminal source bundle into a fresh run, resolves checksum-bound runtime change scope, verifies selected-only Chromium execution and case-bound evidence, preserves unmapped risk as incomplete, generates the report, and proves source manifest bytes are unchanged.
+- RETEST imports a terminal source product bug bundle, executes its exact testcase revision before regression selection, derives `FIXED` and independent `NOT_RUN` regression outcome from registered attempts, and preserves the source bug identity and source bytes. Multiple reproduction scenarios are not expressible through the current closed public retest input: it deliberately executes the one exact immutable source testcase once, so `PARTIALLY_FIXED`/`INTERMITTENT` remain covered by the verdict unit contract rather than fabricated at the public runtime boundary.
+- A no-evidence runtime registry is rejected by the execution postcondition without a report; rechecksummed invalid charter budget, regression complete claim with unmapped risk, and retest verdict mutations all fail on workspace reopen.
+- Package exports now expose only the production Skill Adapter and CLI; callback orchestration remains an explicit test-only source seam.
+
+To stabilize genuine Chromium evidence work without relaxing assertions or timeouts, Vitest now runs test files serially; concurrent browser processes had caused an unrelated evidence-scrubbing integration test to exceed its default timeout on the second complete-suite run.

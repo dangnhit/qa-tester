@@ -1,15 +1,17 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "@playwright/test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { createQaTester, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
+import { generateBugReport } from "../../src/operations/generate-bug-report.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { TestDataHookRegistry } from "../../src/test-data/hooks.js";
 import { serveBrowserFixture } from "../../fixtures/browser/server.js";
+import { sha256Text } from "../../src/core/checksum.js";
 
 const roots: string[] = [];
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-RUNTIME", name: "Runtime fixture", classification: "test", baseUrl: "http://fixture.invalid", productionReadOnly: false } as const;
@@ -35,8 +37,8 @@ function dsl() {
   ] } as const;
 }
 
-async function sourceBundle(root: string): Promise<CanonicalPlanBundleRef> {
-  const source = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment });
+async function sourceBundle(root: string, options: { sourceBug?: boolean } = {}): Promise<CanonicalPlanBundleRef & { sourceBug?: { artifactId: string; sha256: string; bugId: string } }> {
+  const source = await RunWorkspace.create({ root, mode: options.sourceBug ? "execute" : "plan", environmentProfile: environment });
   const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-RUNTIME",
     statements: [{ requirementId: "REQ-RUNTIME", sourceProvenance: { kind: "user", reference: "runtime-e2e" }, normalizedText: "Member must be able to save an email.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }],
@@ -52,10 +54,33 @@ async function sourceBundle(root: string): Promise<CanonicalPlanBundleRef> {
   const coverage = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
     artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV-RUNTIME", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-RUNTIME", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true,
   } });
-  await source.finalize("plan");
+  let sourceBug: { artifactId: string; sha256: string; bugId: string } | undefined;
+  if (options.sourceBug) {
+    await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
+    await source.registerEvidenceBundle({ binaries: [{ filename: "source-bug.txt", contents: Buffer.from("source browser failure"), mediaType: "text/plain", captureType: "log" }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: source.runId, attemptId: "ATT-SOURCE-BUG", kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "source browser failure" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: baseUrl, viewport: { width: 1, height: 1 }, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" } }) });
+    const generated = await generateBugReport({ workspace: source, attemptId: "ATT-SOURCE-BUG", unsafeRerunReason: "Source fixture preserves a single captured production defect observation." });
+    if (generated.kind !== "BUG") throw new Error("Expected source product bug");
+    sourceBug = { artifactId: generated.record.id, sha256: generated.record.sha256, bugId: String((await source.readRegisteredArtifacts()).find((item) => item.record.id === generated.record.id)?.value.bugId) };
+  }
+  await source.finalize(options.sourceBug ? "execute" : "plan");
   const records = await Promise.all([requirement, plan, testcase, coverage].map((artifact) => source.readArtifactRecord(artifact.id)));
   await source.close();
-  return { sourceRunId: source.runId, artifacts: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
+  return { sourceRunId: source.runId, artifacts: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })), ...(sourceBug === undefined ? {} : { sourceBug }) };
+}
+
+async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId: string, mutate: (value: Record<string, unknown>) => void): Promise<void> {
+  const record = await workspace.readArtifactRecord(artifactId);
+  const artifactPath = await workspace.resolve(record.relativePath);
+  const value = JSON.parse(await readFile(artifactPath, "utf8")) as Record<string, unknown>;
+  mutate(value);
+  const contents = `${JSON.stringify(value, null, 2)}\n`;
+  await writeFile(artifactPath, contents);
+  const manifestPath = join(workspace.path, "artifact-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; sha256: string }[] };
+  const manifestRecord = manifest.artifacts.find((item) => item.id === artifactId);
+  if (!manifestRecord) throw new Error("Expected manifest artifact");
+  manifestRecord.sha256 = sha256Text(contents);
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 describe("public runtime QA Tester", () => {
@@ -95,5 +120,108 @@ describe("public runtime QA Tester", () => {
     expect(artifacts.some((item) => item.record.type === "release-gate")).toBe(true);
     expect(artifacts.some((item) => item.record.type === "qa-execution-report")).toBe(true);
     await workspace.close();
+  });
+
+  it("rejects a runtime execution whose adapter supplies no declared case-bound evidence artifact", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-postcondition-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const tester = createQaTester({ browserManagers: { chromium: { browser } }, evidencePolicies: { none: { safety: { screenshot: "off", console: "off", network: "off", logs: "off" } } } });
+
+    await expect(tester({ root, mode: "execute", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "none" } })).rejects.toThrow(/postcondition.*result.*evidence|result.*evidence/i);
+    const runIds = await readdir(join(root, "qa-results"));
+    const runId = runIds.find((id) => id !== bundle.sourceRunId)!;
+    const workspace = await RunWorkspace.open(root, runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    expect(artifacts.some((item) => item.record.type === "test-result")).toBe(true);
+    expect(artifacts.some((item) => item.record.type === "evidence" || item.record.type === "evidence-gap" || item.record.type === "qa-execution-report")).toBe(false);
+    await workspace.close();
+  });
+
+  it("imports a terminal bundle for regression, executes only checksum-bound selected cases, and preserves its source bytes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-regression-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const sourceManifestPath = join(root, "qa-results", bundle.sourceRunId, "artifact-manifest.json");
+    const sourceBytes = await readFile(sourceManifestPath);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+      changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }, { id: "CHANGE-UNMAPPED", requirementIds: ["REQ-NONE"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "abc..def" } } },
+    });
+
+    const result = await tester({ root, mode: "regression", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const selection = artifacts.find((item) => item.record.type === "regression-selection");
+    const attempts = artifacts.filter((item) => item.record.type === "test-result");
+
+    expect(result.operationOrder).toEqual(["select-regression", "execute-browser-test", "collect-evidence", "generate-qa-report"]);
+    expect(selection?.value).toMatchObject({ complete: false, selected: [{ testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME" }], unmappedChangeRisks: [{ changeId: "CHANGE-UNMAPPED" }] });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.value).toMatchObject({ testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", status: "PASSED" });
+    expect(artifacts.filter((item) => item.record.type === "evidence").every((item) => (item.value.provenance as { testcaseId?: string }).testcaseId === "TC-RUNTIME")).toBe(true);
+    expect(artifacts.some((item) => item.record.type === "qa-execution-report")).toBe(true);
+    expect(result.validation.valid).toBe(true);
+    expect(await readFile(sourceManifestPath)).toEqual(sourceBytes);
+    await workspace.close();
+  });
+
+  it("retests an immutable source bug before independent regression and derives FIXED from registered attempts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-retest-")); roots.push(root);
+    const bundle = await sourceBundle(root, { sourceBug: true });
+    if (!bundle.sourceBug) throw new Error("Expected source bug reference");
+    const sourceManifestPath = join(root, "qa-results", bundle.sourceRunId, "artifact-manifest.json");
+    const sourceBytes = await readFile(sourceManifestPath);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+      changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "fix..head" } } },
+    });
+
+    const result = await tester({ root, mode: "retest", linkedRunId: bundle.sourceRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" }, retest: { sourceBug: { artifactId: bundle.sourceBug.artifactId, sha256: bundle.sourceBug.sha256 } } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const attempts = artifacts.filter((item) => item.record.type === "test-result");
+    const retest = artifacts.find((item) => item.record.type === "retest-result");
+
+    expect(result.operationOrder).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.value).toMatchObject({ testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "PASSED" });
+    expect(retest?.value).toMatchObject({ sourceRunId: bundle.sourceRunId, sourceBugArtifactId: bundle.sourceBug.artifactId, sourceBugArtifactSha256: bundle.sourceBug.sha256, bugId: bundle.sourceBug.bugId, verdict: "FIXED", regressionOutcome: "NOT_RUN" });
+    expect(await readFile(sourceManifestPath)).toEqual(sourceBytes);
+    await workspace.close();
+  });
+
+  it("rejects rechecksummed charter, regression-selection, and retest-verdict tampering on reopen", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-tamper-")); roots.push(root);
+    const bundle = await sourceBundle(root, { sourceBug: true });
+    if (!bundle.sourceBug) throw new Error("Expected source bug reference");
+    const runtime = {
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+      changeScopeSources: { trusted: { changes: [{ id: "CHANGE-SAVE", requirementIds: ["REQ-RUNTIME"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }, { id: "CHANGE-UNMAPPED", requirementIds: ["REQ-NONE"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "git-diff", reference: "tamper..head" } } },
+    } as const;
+    const tester = createQaTester(runtime);
+
+    await expect(tester({ root, mode: "exploratory", environmentProfile: environment, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } })).rejects.toThrow(/runtime-owned evidence/i);
+    const charterRunId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
+    const charterWorkspace = await RunWorkspace.open(root, charterRunId);
+    const charter = (await charterWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "exploration-charter")!;
+    await rechecksumRegisteredArtifact(charterWorkspace, charter.record.id, (value) => { value.actionBudget = 0; });
+    await charterWorkspace.close();
+    await expect(RunWorkspace.open(root, charterRunId)).rejects.toThrow(/contract|binding|invalid/i);
+
+    const regression = await tester({ root, mode: "regression", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" } });
+    const regressionWorkspace = await RunWorkspace.open(root, regression.runId);
+    const selection = (await regressionWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "regression-selection")!;
+    await rechecksumRegisteredArtifact(regressionWorkspace, selection.record.id, (value) => { value.complete = true; });
+    await regressionWorkspace.close();
+    await expect(RunWorkspace.open(root, regression.runId)).rejects.toThrow(/unmapped|complete|binding/i);
+
+    const retest = await tester({ root, mode: "retest", linkedRunId: bundle.sourceRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" }, retest: { sourceBug: { artifactId: bundle.sourceBug.artifactId, sha256: bundle.sourceBug.sha256 } } });
+    const retestWorkspace = await RunWorkspace.open(root, retest.runId);
+    const retestResult = (await retestWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "retest-result")!;
+    await rechecksumRegisteredArtifact(retestWorkspace, retestResult.record.id, (value) => { value.verdict = "NOT_FIXED"; });
+    await retestWorkspace.close();
+    await expect(RunWorkspace.open(root, retest.runId)).rejects.toThrow(/verdict|retest|binding/i);
   });
 });
