@@ -1,5 +1,8 @@
+import { QaSkillsError } from "./errors.js";
+
 export const artifactProfileNames = ["plan", "execute", "full", "exploratory", "retest", "regression", "cleanup"] as const;
 export type ArtifactProfileName = (typeof artifactProfileNames)[number];
+export const artifactProfileVersion = "1.0.0" as const;
 
 export type ProfileDiagnostic = { code: "REQUIRED_ARTIFACT_MISSING"; artifactType: string; message: string };
 export type ArtifactProfileEvaluation = { valid: boolean; diagnostics: ProfileDiagnostic[] };
@@ -14,7 +17,14 @@ const requirements: Readonly<Record<ArtifactProfileName, readonly (readonly stri
   cleanup: [["run-metadata"], ["environment-profile"], ["test-data-manifest"]],
 };
 
+export function assertArtifactProfileName(profile: string): asserts profile is ArtifactProfileName {
+  if (!(artifactProfileNames as readonly string[]).includes(profile)) {
+    throw new QaSkillsError(`Unknown unaudited artifact profile: ${profile}`, "INVALID_PROFILE");
+  }
+}
+
 export function evaluateArtifactProfile(profile: ArtifactProfileName, artifactTypes: readonly string[]): ArtifactProfileEvaluation {
+  assertArtifactProfileName(profile);
   const present = new Set(artifactTypes);
   const diagnostics = requirements[profile].flatMap((alternatives) => {
     if (alternatives.some((type) => present.has(type))) return [];

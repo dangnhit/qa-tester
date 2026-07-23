@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,5 +22,26 @@ describe("run locks", () => {
 
     const stale = await acquireRunLock(root, { pid: 999_999_999, now: () => new Date("2026-07-23T12:00:00Z") });
     await stale.release();
+  });
+
+  it("gives exactly one concurrent contender ownership of a stale lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-race-"));
+    roots.push(root);
+    await writeFile(join(root, ".run.lock"), JSON.stringify({
+      pid: 999_999_999,
+      createdAt: "2026-07-23T12:00:00.000Z",
+    }), { flag: "wx" });
+
+    const attempts = await Promise.allSettled([
+      acquireRunLock(root),
+      acquireRunLock(root),
+    ]);
+    const owners = attempts.filter((attempt): attempt is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireRunLock>>> => attempt.status === "fulfilled");
+    const refused = attempts.filter((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected");
+
+    expect(owners).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.reason).toMatchObject({ code: "LIVE_LOCK" });
+    await owners[0]?.value.release();
   });
 });

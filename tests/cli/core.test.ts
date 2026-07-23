@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,5 +73,15 @@ describe("CLI core", () => {
     const filePath = join(directory, "not-a-directory");
     await writeFile(filePath, "file");
     expect((await runCli(["init"], { cwd: filePath })).exitCode).toBe(ExitCode.ABORTED_OR_INTERNAL);
+  });
+
+  it("maps path traversal and symlink escapes to the safety-denied exit code", async () => {
+    const directory = await root();
+    expect((await runCli(["validate", "--root", directory, "--run-id", "../../../outside"], { cwd: directory })).exitCode).toBe(ExitCode.SAFETY_DENIED);
+
+    const outside = await root();
+    await mkdir(join(directory, "qa-results"));
+    await symlink(outside, join(directory, "qa-results", "linked-run"));
+    expect((await runCli(["validate", "--root", directory, "--run-id", "linked-run"], { cwd: directory })).exitCode).toBe(ExitCode.SAFETY_DENIED);
   });
 });

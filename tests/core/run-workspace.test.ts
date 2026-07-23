@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { sha256 } from "../../src/core/checksum.js";
+import type { ArtifactProfileName } from "../../src/core/artifact-profiles.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 
 const roots: string[] = [];
@@ -26,7 +27,7 @@ const environmentProfile = {
   productionReadOnly: false,
 } as const;
 
-function metadata(workspace: RunWorkspace) {
+function metadata(workspace: RunWorkspace, overrides: Record<string, unknown> = {}) {
   return {
     artifactType: "run-metadata",
     schemaVersion: "1.0.0",
@@ -36,6 +37,7 @@ function metadata(workspace: RunWorkspace) {
     createdAt: "2026-07-23T12:34:56.000Z",
     mode: workspace.mode,
     environmentProfileId: environmentProfile.environmentProfileId,
+    ...overrides,
   };
 }
 
@@ -125,6 +127,20 @@ describe("RunWorkspace", () => {
     await resumed.close();
   });
 
+  it("invalidates a closed instance before handing the lock to a reopened workspace", async () => {
+    const directory = await root();
+    const stale = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const sourcePath = join(directory, "draft.json");
+    await writeFile(sourcePath, JSON.stringify(metadata(stale)));
+    await stale.close();
+    const current = await RunWorkspace.open(directory, stale.runId);
+
+    await expect(stale.registerArtifact({ type: "run-metadata", sourcePath, relationships: [] })).rejects.toThrow(/closed/i);
+    await expect(stale.transition("RUNNING")).rejects.toThrow(/closed/i);
+    await expect(current.transition("RUNNING")).resolves.toBeUndefined();
+    await current.close();
+  });
+
   it("canonicalizes YAML Agent Drafts into registered JSON artifacts", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
@@ -145,17 +161,18 @@ describe("RunWorkspace", () => {
     expect(JSON.parse(await readFile(registered.absolutePath, "utf8"))).toMatchObject({ artifactType: "run-metadata", runId: workspace.runId });
   });
 
-  it("only permits the declared lifecycle and rejects writes after a terminal outcome", async () => {
+  it("only permits public start and reserves finalizing and terminal transitions for finalize", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
 
     await expect(workspace.transition("FINALIZING")).rejects.toThrow(/transition/i);
     await expect(workspace.transition("ABORTED")).rejects.toThrow(/transition/i);
+    await expect(workspace.transition("COMPLETED")).rejects.toThrow(/transition/i);
     await workspace.transition("RUNNING");
     await expect(workspace.transition("BLOCKED")).rejects.toThrow(/transition/i);
     await expect(workspace.transition("ABORTED")).rejects.toThrow(/transition/i);
-    await workspace.transition("FINALIZING");
-    await workspace.transition("COMPLETED");
+    await expect(workspace.transition("FINALIZING")).rejects.toThrow(/finalize|transition/i);
+    await expect(workspace.finalize("plan")).resolves.toMatchObject({ valid: true });
     await expect(workspace.transition("RUNNING")).rejects.toThrow(/terminal|transition/i);
     await expect(workspace.registerArtifact({ type: "run-metadata", sourcePath: join(directory, "missing.json"), relationships: [] })).rejects.toThrow(/terminal/i);
   });
@@ -168,6 +185,25 @@ describe("RunWorkspace", () => {
     const runningWorkspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
     await runningWorkspace.transition("RUNNING");
     await expect(runningWorkspace.finalize("plan")).resolves.toMatchObject({ valid: true });
+  });
+
+  it("persists the exact audited profile name and version used for finalization", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
+
+    await workspace.finalize("plan");
+    expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({
+      status: "COMPLETED",
+      finalizedProfile: { name: "plan", version: "1.0.0" },
+    });
+  });
+
+  it("rejects an unknown profile before changing lifecycle state", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+
+    await expect(workspace.finalize("invented" as ArtifactProfileName)).rejects.toThrow(/profile/i);
+    expect(JSON.parse(await readFile(join(workspace.path, "run-metadata.json"), "utf8"))).toMatchObject({ status: "CREATED" });
   });
 
   it("requires structured evidence gaps and canonicalizes them atomically", async () => {
@@ -184,11 +220,63 @@ describe("RunWorkspace", () => {
       "producerVersion: 1.0.0",
       `runId: ${workspace.runId}`,
       "reason: Redaction could not safely complete",
+      "affectedClaim: The checkout request completed successfully",
       "",
     ].join("\n"));
     const registered = await workspace.registerArtifact({ type: "evidence-gap", sourcePath: gapPath, relationships: [] });
     expect(JSON.parse(await readFile(registered.absolutePath, "utf8"))).toMatchObject({ artifactType: "evidence-gap", runId: workspace.runId });
     expect((await readdir(join(workspace.path, "inputs"))).some((entry) => entry.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("rejects evidence gaps without an affected claim", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const gapPath = join(directory, "gap.json");
+    await writeFile(gapPath, JSON.stringify({
+      artifactType: "evidence-gap",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: workspace.runId,
+      reason: "The upstream system redacted the response.",
+    }));
+
+    await expect(workspace.registerArtifact({ type: "evidence-gap", sourcePath: gapPath, relationships: [] })).rejects.toThrow(/contract|invalid/i);
+  });
+
+  it("binds run IDs, environment profile IDs, and relationships to this workspace", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const foreignRun = join(directory, "foreign-run.json");
+    await writeFile(foreignRun, JSON.stringify(metadata(workspace, { runId: "20260723T123456Z-a1b2c3" })));
+    await expect(workspace.registerArtifact({ type: "run-metadata", sourcePath: foreignRun, relationships: [] })).rejects.toThrow(/run.*workspace|binding/i);
+
+    const foreignEnvironment = join(directory, "foreign-environment.json");
+    await writeFile(foreignEnvironment, JSON.stringify(metadata(workspace, { environmentProfileId: "env-foreign" })));
+    await expect(workspace.registerArtifact({ type: "run-metadata", sourcePath: foreignEnvironment, relationships: [] })).rejects.toThrow(/environment.*workspace|binding/i);
+
+    const firstPath = join(directory, "related-case.json");
+    await writeFile(firstPath, JSON.stringify(testCase("TC-RELATED")));
+    const first = await workspace.registerArtifact({ type: "test-case", sourcePath: firstPath, relationships: [] });
+    const secondPath = join(directory, "dependent-case.json");
+    await writeFile(secondPath, JSON.stringify(testCase("TC-DEPENDENT")));
+    await expect(workspace.registerArtifact({ type: "test-case", sourcePath: secondPath, relationships: [first.id] })).resolves.toMatchObject({ relationships: [first.id] });
+
+    const unknownRelationshipPath = join(directory, "unknown-related-case.json");
+    await writeFile(unknownRelationshipPath, JSON.stringify(testCase("TC-UNKNOWN")));
+    await expect(workspace.registerArtifact({ type: "test-case", sourcePath: unknownRelationshipPath, relationships: ["unknown-artifact"] })).rejects.toThrow(/relationship|binding/i);
+  });
+
+  it("rejects a conflicting second authoritative environment profile", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const sourcePath = join(directory, "other-environment.json");
+    await writeFile(sourcePath, JSON.stringify({
+      ...environmentProfile,
+      environmentProfileId: "env-other",
+      name: "Other",
+    }));
+
+    await expect(workspace.registerArtifact({ type: "environment-profile", sourcePath, relationships: [] })).rejects.toThrow(/environment.*profile|authoritative|binding/i);
   });
 
   it("allows distinct artifacts of the same type while rejecting an identical canonical artifact", async () => {

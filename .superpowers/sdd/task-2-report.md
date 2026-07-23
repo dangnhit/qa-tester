@@ -61,6 +61,38 @@ Test Files  4 passed (4)
 Tests       21 passed (21)
 ```
 
+### Second review-fix wave RED/GREEN
+
+Focused RED command:
+
+```text
+npm test -- tests/core/run-workspace.test.ts tests/core/run-lock.test.ts tests/core/artifact-profiles.test.ts tests/contracts/validator.test.ts tests/cli/core.test.ts
+```
+
+The initial run failed for the intended missing behavior:
+
+```text
+Test Files  5 failed (5)
+Tests       15 failed | 57 passed (72)
+```
+
+The failures proved:
+
+- Closed workspace objects could still mutate a run after lock handoff.
+- Public lifecycle transitions could bypass finalization and profile validation.
+- Concurrent stale-lock contenders leaked a raw `EEXIST` instead of establishing one atomic owner.
+- Foreign run/environment bindings, unknown relationships, and a second environment profile were accepted.
+- Evidence Gap had no canonical Draft 2020-12 contract and did not require `affectedClaim`.
+- Artifact profiles had no audited version, arbitrary profile names failed accidentally, and finalization did not persist the selected profile/version.
+- CLI path and symlink safety refusals returned invalid-input code `3` rather than safety-denied code `4`.
+
+After the minimal fixes, the focused command passed:
+
+```text
+Test Files  5 passed (5)
+Tests       72 passed (72)
+```
+
 ## Verification
 
 All commands exited successfully:
@@ -70,6 +102,7 @@ npm test -- tests/core/run-workspace.test.ts tests/core/run-lock.test.ts tests/c
 npm test
 npm run typecheck
 npm run lint
+npm run check:generated
 git diff --check
 ```
 
@@ -77,7 +110,7 @@ Final full-suite result:
 
 ```text
 Test Files  7 passed (7)
-Tests       66 passed (66)
+Tests       79 passed (79)
 ```
 
 ## Delivered
@@ -89,6 +122,12 @@ Tests       66 passed (66)
 - Commander CLI core: `init`, `artifact ingest`, `validate`, and `skills list`, with documented exit codes.
 - Standalone run-creation and artifact-validation scripts plus operation wrappers.
 - Focused tests covering workspace security/lifecycle/immutability, lock handling, profiles, and CLI initialization/skill listing/exit code map.
+- Closed-instance invalidation and finalize-only terminal lifecycle control.
+- Atomic stale-lock recovery ownership with token-checked release.
+- Workspace binding for run IDs, environment profile IDs, and manifest relationship IDs.
+- Versioned Draft 2020-12 Evidence Gap schema with required reason and affected claim, including generated TypeScript declarations.
+- Audited artifact-profile versioning persisted in run metadata at finalization.
+- CLI safety-denied mapping for path traversal and symlink escape refusals.
 
 ## Files changed
 

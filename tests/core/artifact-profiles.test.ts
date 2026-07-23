@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import * as artifactProfiles from "../../src/core/artifact-profiles.js";
 import { evaluateArtifactProfile } from "../../src/core/artifact-profiles.js";
 
 describe("artifact profiles", () => {
+  it("publishes a version for the audited profile definitions", () => {
+    expect(artifactProfiles).toHaveProperty("artifactProfileVersion", "1.0.0");
+  });
+
   it("requires artifacts specific to execute mode", () => {
     const result = evaluateArtifactProfile("execute", ["run-metadata", "environment-profile"]);
     expect(result.valid).toBe(false);
@@ -18,5 +23,9 @@ describe("artifact profiles", () => {
     const result = evaluateArtifactProfile("full", ["run-metadata", "environment-profile", "test-case", "test-result", "qa-execution-report"]);
     expect(result.valid).toBe(false);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain("REQUIRED_ARTIFACT_MISSING");
+  });
+
+  it("rejects unknown unaudited profile names", () => {
+    expect(() => evaluateArtifactProfile("invented" as never, [])).toThrow(/profile/i);
   });
 });

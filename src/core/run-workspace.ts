@@ -2,9 +2,15 @@ import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
-import type { ArtifactType, RunStatus } from "../contracts/types.js";
+import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
-import { artifactProfileNames, evaluateArtifactProfile, type ArtifactProfileName } from "./artifact-profiles.js";
+import {
+  artifactProfileNames,
+  artifactProfileVersion,
+  assertArtifactProfileName,
+  evaluateArtifactProfile,
+  type ArtifactProfileName,
+} from "./artifact-profiles.js";
 import { sha256, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
 import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin } from "./fs.js";
@@ -12,11 +18,9 @@ import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
 
-type RegisteredArtifactType = ArtifactType | "evidence-gap";
-
 export type ArtifactRecord = {
   id: string;
-  type: RegisteredArtifactType;
+  type: ArtifactType;
   relativePath: string;
   sha256: string;
   provenance: string;
@@ -32,6 +36,7 @@ type WorkspaceMetadata = {
   createdAt: string;
   mode: ArtifactProfileName;
   environmentProfileId: string;
+  finalizedProfile?: { name: ArtifactProfileName; version: typeof artifactProfileVersion };
   linkedRunId?: string;
 };
 
@@ -41,14 +46,6 @@ type Manifest = {
   producerVersion: string;
   runId: string;
   artifacts: ArtifactRecord[];
-};
-
-type EvidenceGap = {
-  artifactType: "evidence-gap";
-  schemaVersion: "1.0.0";
-  producerVersion: string;
-  runId: string;
-  reason: string;
 };
 
 export type WorkspaceDiagnostic = { code: string; message: string; relativePath?: string };
@@ -66,23 +63,11 @@ const nextStatuses: Readonly<Record<RunStatus, readonly RunStatus[]>> = {
 };
 
 function isArtifactType(value: string): value is ArtifactType {
-  return ["run-metadata", "artifact-manifest", "environment-profile", "test-case", "test-step-result", "test-result", "evidence", "bug-report", "test-data-manifest", "qa-execution-report"].includes(value);
+  return (artifactTypes as readonly string[]).includes(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateEvidenceGap(value: unknown, runId: string): asserts value is EvidenceGap {
-  if (!isRecord(value)
-    || value.artifactType !== "evidence-gap"
-    || value.schemaVersion !== "1.0.0"
-    || typeof value.producerVersion !== "string" || value.producerVersion.length === 0
-    || value.runId !== runId
-    || typeof value.reason !== "string" || value.reason.trim().length === 0
-    || Object.keys(value).some((key) => !["artifactType", "schemaVersion", "producerVersion", "runId", "reason"].includes(key))) {
-    throw new QaSkillsError("Invalid evidence gap artifact", "INVALID_ARTIFACT");
-  }
 }
 
 async function filesUnder(root: string, directory: string): Promise<string[]> {
@@ -112,6 +97,8 @@ export class RunWorkspace {
     private metadata: WorkspaceMetadata,
     private readonly lock: RunLock | undefined,
   ) {}
+
+  private closed = false;
 
   public static async create(options: { root: string; mode: ArtifactProfileName; environmentProfile: Record<string, unknown>; linkedRunId?: string }): Promise<RunWorkspace> {
     if (!(artifactProfileNames as readonly string[]).includes(options.mode)) throw new QaSkillsError("Invalid mode", "INVALID_MODE");
@@ -153,12 +140,13 @@ export class RunWorkspace {
   }
 
   public async resolve(relativePath: string): Promise<string> {
+    this.assertOpen();
     return assertRealpathWithin(this.path, relativePath);
   }
 
-  public async registerArtifact(input: { type: RegisteredArtifactType; sourcePath: string; relationships: string[]; provenance?: string }): Promise<ArtifactRecord & { absolutePath: string }> {
+  public async registerArtifact(input: { type: ArtifactType; sourcePath: string; relationships: string[]; provenance?: string }): Promise<ArtifactRecord & { absolutePath: string }> {
     this.assertWritable();
-    if (!isArtifactType(input.type) && input.type !== "evidence-gap") throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
+    if (!isArtifactType(input.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
     const sourcePath = resolve(input.sourcePath);
     const sourceRelative = relative(this.path, sourcePath);
     if (sourceRelative === "" || (!sourceRelative.startsWith("..") && !sourceRelative.startsWith("/"))) await assertRealpathWithin(this.path, sourceRelative);
@@ -167,19 +155,21 @@ export class RunWorkspace {
     const source = await readFile(sourcePath, "utf8");
     const format = sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml") ? "yaml" : "json";
     const value = parseAuthoringDocument(source, format);
-    if (input.type === "evidence-gap") validateEvidenceGap(value, this.runId);
-    else if (!validateArtifact(input.type, value).valid) throw new QaSkillsError("Artifact does not match its contract", "INVALID_ARTIFACT");
+    if (!validateArtifact(input.type, value).valid) throw new QaSkillsError("Artifact does not match its contract", "INVALID_ARTIFACT");
+    await this.assertArtifactBinding(input.type, value, input.relationships);
     return this.registerCanonicalArtifact(input.type, value, input.relationships, input.provenance ?? "agent-draft");
   }
 
   public async transition(status: RunStatus): Promise<void> {
-    if (!nextStatuses[this.metadata.status].includes(status)) throw new QaSkillsError(`Illegal lifecycle transition: ${this.metadata.status} -> ${status}`, "ILLEGAL_TRANSITION");
-    this.metadata = { ...this.metadata, status };
-    await this.writeMetadata();
-    if (terminalStatuses.has(status)) await this.lock?.release();
+    this.assertWritable();
+    if (status !== "RUNNING" || this.metadata.status !== "CREATED") {
+      throw new QaSkillsError(`Lifecycle transition ${this.metadata.status} -> ${status} is reserved for finalize`, "ILLEGAL_TRANSITION");
+    }
+    await this.transitionInternal(status);
   }
 
   public async validate(profile: ArtifactProfileName = this.mode): Promise<WorkspaceValidation> {
+    this.assertOpen();
     const manifest = await this.readManifest();
     const diagnostics: WorkspaceDiagnostic[] = [];
     const profileResult = evaluateArtifactProfile(profile, ["run-metadata", ...manifest.artifacts.map((artifact) => artifact.type)]);
@@ -203,23 +193,68 @@ export class RunWorkspace {
   }
 
   public async finalize(profile: ArtifactProfileName = this.mode): Promise<WorkspaceValidation> {
-    if (this.metadata.status === "CREATED") await this.transition("RUNNING");
+    this.assertWritable();
+    assertArtifactProfileName(profile);
+    if (this.metadata.status === "CREATED") await this.transitionInternal("RUNNING");
     if (this.metadata.status !== "RUNNING") throw new QaSkillsError(`Cannot finalize a ${this.metadata.status} workspace`, "ILLEGAL_TRANSITION");
-    await this.transition("FINALIZING");
+    this.metadata = { ...this.metadata, finalizedProfile: { name: profile, version: artifactProfileVersion } };
+    await this.writeMetadata();
+    await this.transitionInternal("FINALIZING");
     const result = await this.validate(profile);
-    await this.transition(result.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES");
+    await this.transitionInternal(result.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES");
     return result;
   }
 
   public async close(): Promise<void> {
-    await this.lock?.release();
+    if (!this.closed) {
+      await this.lock?.release();
+      this.closed = true;
+    }
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new QaSkillsError("Workspace is closed", "CLOSED_WORKSPACE");
   }
 
   private assertWritable(): void {
+    this.assertOpen();
     if (terminalStatuses.has(this.metadata.status)) throw new QaSkillsError("Terminal workspace is immutable", "TERMINAL_WORKSPACE");
   }
 
-  private async registerCanonicalArtifact(type: RegisteredArtifactType, value: unknown, relationships: string[], provenance: string): Promise<ArtifactRecord & { absolutePath: string }> {
+  private async assertArtifactBinding(type: ArtifactType, value: unknown, relationships: string[]): Promise<void> {
+    if (!isRecord(value)) throw new QaSkillsError("Artifact binding requires an object", "ARTIFACT_BINDING");
+    if (Object.hasOwn(value, "runId") && value.runId !== this.runId) {
+      throw new QaSkillsError("Artifact run ID does not match this workspace", "ARTIFACT_BINDING");
+    }
+    if (Object.hasOwn(value, "environmentProfileId") && value.environmentProfileId !== this.metadata.environmentProfileId) {
+      throw new QaSkillsError("Artifact environment profile ID does not match this workspace", "ARTIFACT_BINDING");
+    }
+    const manifest = await this.readManifest();
+    if (type === "environment-profile") {
+      if (value.environmentProfileId !== this.metadata.environmentProfileId) {
+        throw new QaSkillsError("Environment profile does not match this workspace", "ARTIFACT_BINDING");
+      }
+      if (manifest.artifacts.some((artifact) => artifact.type === "environment-profile")) {
+        throw new QaSkillsError("The workspace already has an authoritative environment profile", "ARTIFACT_BINDING");
+      }
+    }
+    const knownIds = new Set(manifest.artifacts.map((artifact) => artifact.id));
+    const unknownRelationship = relationships.find((relationship) => !knownIds.has(relationship));
+    if (unknownRelationship) {
+      throw new QaSkillsError(`Relationship ${unknownRelationship} is not registered in this workspace`, "ARTIFACT_BINDING");
+    }
+  }
+
+  private async transitionInternal(status: RunStatus): Promise<void> {
+    if (!nextStatuses[this.metadata.status].includes(status)) {
+      throw new QaSkillsError(`Illegal lifecycle transition: ${this.metadata.status} -> ${status}`, "ILLEGAL_TRANSITION");
+    }
+    this.metadata = { ...this.metadata, status };
+    await this.writeMetadata();
+    if (terminalStatuses.has(status)) await this.lock?.release();
+  }
+
+  private async registerCanonicalArtifact(type: ArtifactType, value: unknown, relationships: string[], provenance: string): Promise<ArtifactRecord & { absolutePath: string }> {
     const canonicalContents = `${JSON.stringify(value, null, 2)}\n`;
     const checksum = sha256Text(canonicalContents);
     const manifest = await this.readManifest();

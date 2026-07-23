@@ -6,6 +6,7 @@ export const artifactTypes = [
   "test-step-result",
   "test-result",
   "evidence",
+  "evidence-gap",
   "bug-report",
   "test-data-manifest",
   "qa-execution-report",

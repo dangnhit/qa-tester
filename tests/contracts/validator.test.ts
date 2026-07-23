@@ -138,6 +138,18 @@ const otherArtifactContracts = [
       summary: "All planned checks completed.",
     },
   },
+  {
+    type: "evidence-gap",
+    requiredField: "affectedClaim",
+    valid: {
+      artifactType: "evidence-gap",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: "20260723T123456Z-a1b2c3",
+      reason: "The upstream system redacted the response.",
+      affectedClaim: "The order was persisted successfully.",
+    },
+  },
 ] as const satisfies readonly {
   type: Exclude<ArtifactType, "run-metadata">;
   requiredField: string;

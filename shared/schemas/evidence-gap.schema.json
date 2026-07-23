@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/evidence-gap.schema.json",
+  "title": "Evidence Gap",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "reason", "affectedClaim"],
+  "properties": {
+    "artifactType": { "const": "evidence-gap" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string", "minLength": 1 },
+    "affectedClaim": { "type": "string", "minLength": 1 }
+  }
+}

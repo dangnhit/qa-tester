@@ -9,5 +9,9 @@ export interface QARunMetadata {
   createdAt: string;
   mode: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression" | "cleanup";
   environmentProfileId: string;
+  finalizedProfile?: {
+    name: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression" | "cleanup";
+    version: "1.0.0";
+  };
   linkedRunId?: string;
 }

@@ -87,7 +87,9 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   } catch (error: unknown) {
     if (error instanceof QaSkillsError) {
       stderr += `${error.message}\n`;
-      exitCode = error.code === "LIVE_LOCK" ? ExitCode.BLOCKED : ExitCode.INVALID_INPUT;
+      if (error.code === "LIVE_LOCK") exitCode = ExitCode.BLOCKED;
+      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE") exitCode = ExitCode.SAFETY_DENIED;
+      else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError) {
       stderr += `${error.message}\n`;
       exitCode = ExitCode.INVALID_INPUT;

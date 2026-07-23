@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import artifactManifestSchema from "../../shared/schemas/artifact-manifest.schema.json" with { type: "json" };
 import bugReportSchema from "../../shared/schemas/bug-report.schema.json" with { type: "json" };
 import environmentProfileSchema from "../../shared/schemas/environment-profile.schema.json" with { type: "json" };
+import evidenceGapSchema from "../../shared/schemas/evidence-gap.schema.json" with { type: "json" };
 import evidenceSchema from "../../shared/schemas/evidence.schema.json" with { type: "json" };
 import qaExecutionReportSchema from "../../shared/schemas/qa-execution-report.schema.json" with { type: "json" };
 import runMetadataSchema from "../../shared/schemas/run-metadata.schema.json" with { type: "json" };
@@ -23,6 +24,7 @@ const schemas: Record<ArtifactType, object> = {
   "test-step-result": testStepResultSchema,
   "test-result": testResultSchema,
   evidence: evidenceSchema,
+  "evidence-gap": evidenceGapSchema,
   "bug-report": bugReportSchema,
   "test-data-manifest": testDataManifestSchema,
   "qa-execution-report": qaExecutionReportSchema,
