@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
-import { createWorkflowRunner } from "../../src/operations/run-workflow.js";
+import { createQaTester, createWorkflowRunner } from "../../src/operations/run-workflow.js";
 
 describe("workflow mode operation plans", () => {
   it("uses the minimal dependency-ordered operations for plan and execute", () => {
@@ -48,6 +48,16 @@ describe("workflow mode operation plans", () => {
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
       })).rejects.toThrow(/approved canonical/i);
       expect(invoked).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("fails safely before finalization when a public full workflow has no configured runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
+    try {
+      await expect(createQaTester({})({
+        root, mode: "full",
+        environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
+      })).rejects.toThrow(/runtime.*configured|configured.*runtime/i);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

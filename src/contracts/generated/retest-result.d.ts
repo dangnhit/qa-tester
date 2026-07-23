@@ -7,6 +7,7 @@ export interface RetestResult {
   runId: string;
   sourceRunId: string;
   sourceBugArtifactId: string;
+  sourceBugArtifactSha256: string;
   bugId: string;
   /**
    * @minItems 1

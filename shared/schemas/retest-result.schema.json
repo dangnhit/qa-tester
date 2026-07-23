@@ -4,10 +4,10 @@
   "title": "Retest Result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "sourceRunId", "sourceBugArtifactId", "bugId", "reproductionAttemptIds", "verdict"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "sourceRunId", "sourceBugArtifactId", "sourceBugArtifactSha256", "bugId", "reproductionAttemptIds", "verdict"],
   "properties": {
     "artifactType": { "const": "retest-result" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 },
-    "runId": { "type": "string", "minLength": 1 }, "sourceRunId": { "type": "string", "minLength": 1 }, "sourceBugArtifactId": { "type": "string", "minLength": 1 }, "bugId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 }, "sourceRunId": { "type": "string", "minLength": 1 }, "sourceBugArtifactId": { "type": "string", "minLength": 1 }, "sourceBugArtifactSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "bugId": { "type": "string", "minLength": 1 },
     "reproductionAttemptIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "verdict": { "enum": ["FIXED", "NOT_FIXED", "PARTIALLY_FIXED", "CANNOT_VERIFY", "INTERMITTENT"] }, "regressionOutcome": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] }
   }

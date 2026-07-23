@@ -26,7 +26,7 @@ The green slices cover mode ordering, bounded exploration charters and non-autho
 
 - `npm run generate:types`
 - `npm test -- tests/orchestration tests/exploratory tests/retest tests/regression`
-- `npm test` — 43 files, 262 tests passed
+- `npm test` — 44 files, 266 tests passed
 - `npm run typecheck`
 - `npm run lint`
 - `git diff --check`
@@ -40,3 +40,11 @@ The green slices cover mode ordering, bounded exploration charters and non-autho
 - Dependency resolution performs a deterministic transitive topological closure and rejects cycles.
 - Canonical change scopes carry a deterministic checksum and declared provenance before they can be used by regression selection.
 - Retest verdicts distinguish partial repair across distinct affected scenarios from intermittent repeat outcomes within one scenario.
+
+## Runtime integration follow-up
+
+- `createQaTester(runtimeRegistry)` is the production public seam. Its input contains only runtime service IDs and checksum-bound source artifact references; it accepts no browsers, callbacks, resolver functions, raw change mappings, attempt IDs, or outcome claims.
+- Canonical plan bundles are imported only from a terminal source run after every named record ID and checksum is reopened. Requirement analyses, plans, testcase revisions, and coverage obligations are copied in dependency order with local relationship remapping and rederived plan approval.
+- Browser execution resolves a closed browser/secret/evidence registry at construction time. Evidence capture and telemetry attachment run while the runtime-owned browser session remains active, then the runtime checks that one result and case-bound evidence or gap were registered.
+- Full runs require a configured browser manager, test-data registry, and canonical bundle. Missing runtime configuration fails before finalization, leaving a nonterminal workspace for an explicit resume rather than fabricating a report.
+- Regression change scopes are registered from a closed source registry and their checksum is recomputed on every workspace reopen. Retest source bugs are checksum-bound and revalidated against the linked immutable source run before an independently derived verdict is persisted.

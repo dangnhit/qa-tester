@@ -492,12 +492,30 @@ async function inspectWorkspaceState(
         if (value.runId !== expectedRunId || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify(expectedIds) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Regression selection must bind every decision to one registered case and expose unmapped risk") || changed;
         }
+      } else if (artifact.record.type === "change-scope") {
+        const expectedChecksum = sha256Text(JSON.stringify({ changes: value.changes, provenance: value.provenance }));
+        if (value.runId !== expectedRunId || value.inputChecksum !== expectedChecksum) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Change scope checksum does not match its registered mapping input") || changed;
+        }
       } else if (artifact.record.type === "retest-result") {
         const attempts = array(value.reproductionAttemptIds).map((id) => valuesOf("test-result").find((attempt) => attempt.value?.attemptId === id));
         const relationships = attempts.map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined).sort();
         const sourceMatchesLink = typeof value.sourceRunId === "string" && value.sourceRunId === metadata.linkedRunId && value.sourceRunId !== expectedRunId;
         const derived = typeof value.bugId === "string" ? deriveRetestVerdict({ originalBugId: value.bugId, reproductionStatuses: attempts.map((attempt) => String(attempt?.value?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) }) : undefined;
-        if (value.runId !== expectedRunId || !sourceMatchesLink || attempts.length === 0 || attempts.some((attempt) => !attempt) || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
+        let sourceBugValid = false;
+        let reproductionMatchesSource = false;
+        if (sourceMatchesLink && typeof value.sourceBugArtifactId === "string" && typeof value.sourceBugArtifactSha256 === "string" && typeof value.bugId === "string") try {
+          const source = await RunWorkspace.open(dirname(dirname(path)), value.sourceRunId as string);
+          try {
+            const sourceRecord = await source.readArtifactRecord(value.sourceBugArtifactId);
+            const sourceArtifacts = await source.readRegisteredArtifacts();
+            const sourceBug = sourceArtifacts.find((candidate) => candidate.record.id === value.sourceBugArtifactId && candidate.record.type === "bug-report");
+            const original = sourceBug === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value.attemptId === sourceBug.value.attemptId);
+            sourceBugValid = sourceRecord.type === "bug-report" && sourceRecord.sha256 === value.sourceBugArtifactSha256 && sourceBug?.value.bugId === value.bugId;
+            reproductionMatchesSource = original !== undefined && attempts.every((attempt) => attempt?.value?.testCaseId === original.value.testCaseId && attempt?.value?.testCaseRevisionId === original.value.testCaseRevisionId && attempt?.value?.testCaseInstanceId === original.value.testCaseInstanceId);
+          } finally { await source.close(); }
+        } catch { sourceBugValid = false; }
+        if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Retest result must bind linked source and exact reproduction artifacts with a derived verdict") || changed;
         }
       }
