@@ -20,13 +20,14 @@ export class ExternalPermitRegistry {
     permits.forEach(validate);
     this.permits = Object.freeze(permits.map((permit) => Object.freeze({ ...permit })));
   }
-  public authorize(step: ExternalStep, environment: PermitEnvironment): PermitDecision {
+  private available(step: ExternalStep, environment: PermitEnvironment): PermitDecision {
     const permit = this.permits.find((candidate) => matches(candidate, step, environment, this.clock()) && (this.consumed.get(candidate.permitId) ?? 0) < candidate.maxUses);
     return permit ? { allowed: true, permitId: permit.permitId } : { allowed: false, reason: "missing-or-exhausted-external-permit" };
   }
-  public consume(step: ExternalStep, environment: PermitEnvironment): Promise<PermitDecision> {
+  /** The only permit decision exposed to action callers; successful authorization consumes one use atomically. */
+  public authorizeAndConsume(step: ExternalStep, environment: PermitEnvironment): Promise<PermitDecision> {
     const operation = this.tail.then(() => {
-      const decision = this.authorize(step, environment);
+      const decision = this.available(step, environment);
       if (decision.allowed && decision.permitId) this.consumed.set(decision.permitId, (this.consumed.get(decision.permitId) ?? 0) + 1);
       return decision;
     });

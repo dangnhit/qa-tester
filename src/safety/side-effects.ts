@@ -6,7 +6,7 @@ export type SafetyStep = Readonly<{ sideEffect: SideEffectClass; action: string;
 export type SafetyDecision = Readonly<{ allowed: boolean; reasons: readonly string[]; permitId?: string }>;
 
 const payment = /(?:payment|charge|refund|card|wallet)/i;
-export function authorizeStep(step: SafetyStep, environment: SafetyEnvironment, permits: readonly unknown[] | ExternalPermitRegistry): SafetyDecision {
+export async function authorizeStep(step: SafetyStep, environment: SafetyEnvironment, permits: readonly unknown[] | ExternalPermitRegistry): Promise<SafetyDecision> {
   if (step.sideEffect === "destructive") return { allowed: false, reasons: ["destructive-actions-are-denied"] };
   if (payment.test(step.action) || payment.test(step.channel ?? "")) return { allowed: false, reasons: ["real-payment-actions-are-denied"] };
   if (environment.classification === "production") {
@@ -15,7 +15,7 @@ export function authorizeStep(step: SafetyStep, environment: SafetyEnvironment, 
   }
   if (step.sideEffect !== "external") return { allowed: true, reasons: [] };
   if (!(permits instanceof ExternalPermitRegistry) || !step.channel || !step.target) return { allowed: false, reasons: ["external-action-requires-exact-permit"] };
-  const decision = permits.authorize(step as ExternalStep, environment);
+  const decision = await permits.authorizeAndConsume(step as ExternalStep, environment);
   return decision.allowed
     ? { allowed: true, reasons: [], ...(decision.permitId === undefined ? {} : { permitId: decision.permitId }) }
     : { allowed: false, reasons: [decision.reason ?? "external-action-denied"] };

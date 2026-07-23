@@ -13,4 +13,10 @@ describe("TestDataHookRegistry", () => {
     await expect(hooks.execute({ hookId: "seed-user", ownerRunId: "run-1", command: ["rm", "-rf", "/"] } as never)).rejects.toThrow(/only hookId|untrusted/i);
     expect(calls).toHaveLength(1);
   });
+
+  it("constructs trusted descriptors only from a strict config snapshot and contains module paths", () => {
+    const registry = TestDataHookRegistry.fromConfig({ configDirectory: "/repo/config", snapshot: { version: 1, hooks: [{ id: "module", kind: "module", modulePath: "hooks/seed.mjs" }] } }, { module: () => Promise.resolve([]) });
+    expect(registry).toBeInstanceOf(TestDataHookRegistry);
+    expect(() => TestDataHookRegistry.fromConfig({ configDirectory: "/repo/config", snapshot: { version: 1, hooks: [{ id: "escape", kind: "module", modulePath: "../escape.mjs" }] } }, { module: () => Promise.resolve([]) })).toThrow(/contain|path/i);
+  });
 });

@@ -8,6 +8,7 @@ import environmentProfileSchema from "../../shared/schemas/environment-profile.s
 import evidenceGapSchema from "../../shared/schemas/evidence-gap.schema.json" with { type: "json" };
 import evidenceSchema from "../../shared/schemas/evidence.schema.json" with { type: "json" };
 import qaExecutionReportSchema from "../../shared/schemas/qa-execution-report.schema.json" with { type: "json" };
+import qaConfigSchema from "../../shared/schemas/qa-config.schema.json" with { type: "json" };
 import planningActionSchema from "../../shared/schemas/planning-action.schema.json" with { type: "json" };
 import coverageObligationSchema from "../../shared/schemas/coverage-obligation.schema.json" with { type: "json" };
 import cleanupRunSchema from "../../shared/schemas/cleanup-run.schema.json" with { type: "json" };
@@ -52,6 +53,7 @@ ajv.addSchema(planningActionSchema);
 export const planningActionValidator = ajv.getSchema(planningActionSchema.$id) as ValidateFunction;
 export const browserTestDslValidator = ajv.getSchema(browserTestDslSchema.$id) as ValidateFunction;
 export const annotationValidator = ajv.compile(annotationSchema);
+export const qaConfigValidator = ajv.compile(qaConfigSchema);
 
 export const artifactValidators: Readonly<Record<ArtifactType, ValidateFunction>> = Object.fromEntries(
   Object.entries(schemas).map(([type, schema]) => [type, ajv.compile(schema)]),

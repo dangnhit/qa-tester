@@ -4,28 +4,15 @@
   "title": "Cleanup Run",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "sourceRunId", "sourceTestDataManifestArtifactId", "resources"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "sourceRunId", "sourceTestDataManifestArtifactId", "sourceTestDataManifestSha256", "sourceTestDataManifest", "resources"],
   "properties": {
-    "artifactType": { "const": "cleanup-run" },
-    "schemaVersion": { "const": "1.0.0" },
-    "producerVersion": { "type": "string", "minLength": 1 },
-    "runId": { "type": "string", "minLength": 1 },
-    "sourceRunId": { "type": "string", "minLength": 1 },
-    "sourceTestDataManifestArtifactId": { "type": "string", "minLength": 1 },
-    "resources": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "ownerRunId", "cleanupAction", "status"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "ownerRunId": { "type": "string", "minLength": 1 },
-          "cleanupAction": { "type": "string", "minLength": 1 },
-          "status": { "enum": ["cleaned", "failed"] },
-          "message": { "type": "string" }
-        }
-      }
-    }
+    "artifactType": { "const": "cleanup-run" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "sourceRunId": { "type": "string", "minLength": 1 }, "sourceTestDataManifestArtifactId": { "type": "string", "minLength": 1 }, "sourceTestDataManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceTestDataManifest": { "$ref": "#/$defs/testDataManifest" },
+    "resources": { "type": "array", "items": { "$ref": "#/$defs/cleanupResource" } }
+  },
+  "$defs": {
+    "resource": { "type": "object", "additionalProperties": false, "required": ["id", "ownerRunId", "cleanupAction"], "properties": { "id": { "type": "string", "minLength": 1 }, "ownerRunId": { "type": "string", "minLength": 1 }, "cleanupAction": { "type": "string", "minLength": 1 } } },
+    "cleanupResource": { "type": "object", "additionalProperties": false, "required": ["id", "ownerRunId", "cleanupAction", "status"], "properties": { "id": { "type": "string", "minLength": 1 }, "ownerRunId": { "type": "string", "minLength": 1 }, "cleanupAction": { "type": "string", "minLength": 1 }, "status": { "enum": ["cleaned", "failed"] }, "message": { "type": "string" } } },
+    "testDataManifest": { "type": "object", "additionalProperties": false, "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "resources"], "properties": { "artifactType": { "const": "test-data-manifest" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "resources": { "type": "array", "items": { "$ref": "#/$defs/resource" } } } }
   }
 }

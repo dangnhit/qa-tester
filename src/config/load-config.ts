@@ -2,6 +2,7 @@ import { access, readFile, realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
+import { validateQaConfig } from "../contracts/validator.js";
 
 export type QaConfig = Readonly<{
   configPath?: string;
@@ -61,7 +62,7 @@ export async function loadQaConfig(options: { cwd?: string; configPath?: string 
   if (!(await exists(selected))) throw new Error(`QA configuration does not exist: ${selected}`);
   const configPath = await realpath(selected);
   const parsed = parseAuthoringDocument(await readFile(configPath, "utf8"), configFormat(configPath));
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || (parsed as Record<string, unknown>).version !== 1) throw new Error("QA configuration must be a declarative version 1 object");
+  if (!validateQaConfig(parsed).valid) throw new Error("QA configuration does not match the strict declarative schema");
   const snapshot = freeze(JSON.parse(JSON.stringify(parsed)) as Record<string, unknown>);
   const configDirectory = dirname(configPath);
   const configuredDirectory = typeof snapshot.artifactDirectory === "string" ? snapshot.artifactDirectory : "qa-results";

@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
@@ -85,6 +85,42 @@ function isArtifactType(value: string): value is ArtifactType {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameResourceIdentity(left: unknown, right: unknown): boolean {
+  return isRecord(left) && isRecord(right)
+    && left.id === right.id && left.ownerRunId === right.ownerRunId && left.cleanupAction === right.cleanupAction;
+}
+
+function uniqueResourceIds(resources: unknown): resources is Record<string, unknown>[] {
+  return Array.isArray(resources)
+    && resources.every(isRecord)
+    && new Set(resources.map((resource) => resource.id)).size === resources.length;
+}
+
+/** Reopens source evidence by explicit ID and checksum, making a cleanup artifact independently auditable. */
+async function assertCleanupProvenance(cleanupPath: string, value: Record<string, unknown>): Promise<void> {
+  const sourceRunId = value.sourceRunId;
+  const artifactId = value.sourceTestDataManifestArtifactId;
+  const expectedSha = value.sourceTestDataManifestSha256;
+  const snapshot = value.sourceTestDataManifest;
+  const cleanupResources = value.resources;
+  if (typeof sourceRunId !== "string" || typeof artifactId !== "string" || typeof expectedSha !== "string" || !isRecord(snapshot) || !Array.isArray(cleanupResources)) throw new Error("Cleanup provenance is incomplete");
+  const root = dirname(dirname(cleanupPath));
+  const sourcePath = await assertRealpathWithin(root, join("qa-results", sourceRunId));
+  const sourceMetadata = JSON.parse(await readFile(await assertRealpathWithin(sourcePath, "run-metadata.json"), "utf8")) as unknown;
+  if (!validateArtifact("run-metadata", sourceMetadata).valid || !isRecord(sourceMetadata) || !terminalStatuses.has(sourceMetadata.status as RunStatus)) throw new Error("Cleanup source run must be immutable and terminal");
+  const sourceManifest = JSON.parse(await readFile(await assertRealpathWithin(sourcePath, "artifact-manifest.json"), "utf8")) as Manifest;
+  if (!validateArtifact("artifact-manifest", sourceManifest).valid || sourceManifest.runId !== sourceRunId) throw new Error("Cleanup source manifest is invalid");
+  const sourceRecord = sourceManifest.artifacts.find((record) => record.id === artifactId && record.type === "test-data-manifest");
+  if (!sourceRecord || sourceRecord.sha256 !== expectedSha) throw new Error("Cleanup source test-data artifact ID or checksum is invalid");
+  const sourceArtifactPath = await assertRealpathWithin(sourcePath, sourceRecord.relativePath);
+  if (await sha256(sourceArtifactPath) !== expectedSha) throw new Error("Cleanup source test-data artifact checksum no longer matches");
+  const sourceValue = JSON.parse(await readFile(sourceArtifactPath, "utf8")) as unknown;
+  if (!validateArtifact("test-data-manifest", sourceValue).valid || !isRecord(sourceValue) || sourceValue.runId !== sourceRunId) throw new Error("Cleanup source test-data artifact is invalid");
+  if (JSON.stringify(sourceValue) !== JSON.stringify(snapshot)) throw new Error("Cleanup source snapshot does not equal the immutable source artifact");
+  const sourceResources = sourceValue.resources;
+  if (!uniqueResourceIds(sourceResources) || !uniqueResourceIds(cleanupResources) || sourceResources.length !== cleanupResources.length || !sourceResources.every((resource) => cleanupResources.some((candidate) => sameResourceIdentity(resource, candidate)))) throw new Error("Cleanup resources do not exactly match source resource ownership");
 }
 
 function matchingDimensions(value: unknown, dimensions: { width: number; height: number }): boolean {
@@ -364,12 +400,16 @@ async function inspectWorkspaceState(
         }
       } else if (artifact.record.type === "test-data-manifest") {
         const resources = value.resources;
-        if (!Array.isArray(resources) || !resources.every((resource) => isRecord(resource) && resource.ownerRunId === expectedRunId)) {
+        if (!uniqueResourceIds(resources) || !resources.every((resource) => resource.ownerRunId === expectedRunId)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test data resource owner run does not match this workspace") || changed;
         }
       } else if (artifact.record.type === "cleanup-run") {
         if (value.runId !== expectedRunId || typeof value.sourceRunId !== "string" || value.sourceRunId === expectedRunId || value.sourceRunId !== metadata.linkedRunId) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Cleanup run must be linked to a distinct immutable source run") || changed;
+        } else try {
+          await assertCleanupProvenance(path, value);
+        } catch (error: unknown) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", error instanceof Error ? error.message : "Cleanup provenance is invalid") || changed;
         }
       }
     }
@@ -979,12 +1019,17 @@ export class RunWorkspace {
       }
     } else if (type === "test-data-manifest") {
       const resources = value.resources;
-      if (!Array.isArray(resources) || !resources.every((resource) => isRecord(resource) && resource.ownerRunId === this.runId)) {
+      if (!uniqueResourceIds(resources) || !resources.every((resource) => resource.ownerRunId === this.runId)) {
         throw new QaSkillsError("Test data resource owner run does not match this workspace", "ARTIFACT_BINDING");
       }
     } else if (type === "cleanup-run") {
       if (value.runId !== this.runId || typeof value.sourceRunId !== "string" || value.sourceRunId === this.runId || value.sourceRunId !== this.metadata.linkedRunId) {
         throw new QaSkillsError("Cleanup run must be linked to a distinct immutable source run", "ARTIFACT_BINDING");
+      }
+      try {
+        await assertCleanupProvenance(this.path, value);
+      } catch (error: unknown) {
+        throw new QaSkillsError(error instanceof Error ? error.message : "Cleanup provenance is invalid", "ARTIFACT_BINDING");
       }
     }
   }

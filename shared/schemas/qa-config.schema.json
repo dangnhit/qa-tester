@@ -3,12 +3,35 @@
   "$id": "https://vigentix.dev/qa-skills/schemas/qa-config.schema.json",
   "title": "QA Skills Declarative Configuration",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": ["version"],
   "properties": {
     "version": { "const": 1 },
     "artifactDirectory": { "type": "string", "minLength": 1 },
-    "hooks": { "type": "array" },
-    "metadata": { "type": "object" }
+    "headers": { "type": "object", "additionalProperties": false, "patternProperties": { "^[A-Za-z][A-Za-z0-9-]*$": { "type": "string", "minLength": 1 } }, "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9-]*$" } },
+    "hooks": { "type": "array", "items": { "$ref": "#/$defs/hook" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "relativeModulePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "hook": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "command", "args"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "command" }, "command": { "type": "string", "minLength": 1 }, "args": { "type": "array", "items": { "type": "string" } } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "fixture"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "api" }, "fixture": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "modulePath"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "const": "module" }, "modulePath": { "$ref": "#/$defs/relativeModulePath" }, "exportName": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    }
   }
 }

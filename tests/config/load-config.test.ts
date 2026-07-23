@@ -27,15 +27,23 @@ describe("loadQaConfig", () => {
 
   it("chooses the nearest supported config without merging and rejects executable TypeScript", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
-    await config(root, "qa.config.yaml", "version: 1\nmetadata:\n  owner: root\n");
-    const nested = await config(root, "packages/shop/qa.config.yaml", "version: 1\nmetadata:\n  owner: shop\n");
+    await config(root, "qa.config.yaml", "version: 1\nartifactDirectory: ./root\n");
+    const nested = await config(root, "packages/shop/qa.config.yaml", "version: 1\nartifactDirectory: ./shop\n");
     await mkdir(join(root, "packages/shop/src"), { recursive: true });
     await config(root, "packages/shop/qa.config.ts", "export default {};\n");
 
     const loaded = await loadQaConfig({ cwd: join(root, "packages/shop/src") });
     expect(loaded.configPath).toBe(await import("node:fs/promises").then(({ realpath }) => realpath(nested)));
-    expect(loaded.snapshot).toMatchObject({ metadata: { owner: "shop" } });
+    expect(loaded.snapshot).toMatchObject({ artifactDirectory: "./shop" });
     await expect(loadQaConfig({ cwd: root, configPath: join(root, "packages/shop/qa.config.ts") })).rejects.toThrow(/executable|typescript|json|yaml/i);
+  });
+
+  it("rejects unknown config fields and malformed trusted hook descriptors", async () => {
+    const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
+    const unknown = await config(root, "unknown.yaml", "version: 1\nunknown: true\n");
+    const malformed = await config(root, "malformed.yaml", "version: 1\nhooks:\n  - id: seed\n    kind: command\n    command: node\n");
+    await expect(loadQaConfig({ cwd: root, configPath: unknown })).rejects.toThrow(/config|schema|unknown/i);
+    await expect(loadQaConfig({ cwd: root, configPath: malformed })).rejects.toThrow(/config|schema|hook/i);
   });
 
   it("keeps secret references in the snapshot and resolves/scrubs only operation memory", async () => {

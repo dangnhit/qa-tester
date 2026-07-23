@@ -1,4 +1,6 @@
 import { ownedResources, type TestResource } from "./resources.js";
+import { relative, resolve } from "node:path";
+import type { QaConfig } from "../config/load-config.js";
 
 export type TestDataHookDescriptor =
   | Readonly<{ id: string; kind: "command"; command: readonly [string, ...string[]] }>
@@ -6,6 +8,12 @@ export type TestDataHookDescriptor =
   | Readonly<{ id: string; kind: "module"; modulePath: string; exportName?: string }>;
 type ProducedResource = Readonly<{ id: string; cleanupAction: string }>;
 type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: TestDataHookDescriptor) => Promise<readonly ProducedResource[]>>>;
+
+function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function contained(directory: string, candidate: string): boolean {
+  const relativePath = relative(directory, candidate);
+  return relativePath !== "" && !relativePath.startsWith("../") && relativePath !== "..";
+}
 
 function freezeDescriptor<T extends TestDataHookDescriptor>(descriptor: T): T {
   if (!descriptor.id) throw new Error("Test data hook ID is required");
@@ -24,6 +32,25 @@ export class TestDataHookRegistry {
       if (this.hooks.has(frozen.id)) throw new Error(`Test data hook ${frozen.id} is duplicated`);
       this.hooks.set(frozen.id, frozen);
     }
+  }
+  public static fromConfig(config: Pick<QaConfig, "configDirectory" | "snapshot">, runners: HookRunners): TestDataHookRegistry {
+    const hooks = config.snapshot.hooks;
+    if (hooks === undefined) return new TestDataHookRegistry([], runners);
+    if (!Array.isArray(hooks)) throw new Error("Config hooks must be an array of trusted descriptors");
+    const descriptors = hooks.map((hook): TestDataHookDescriptor => {
+      if (!record(hook) || typeof hook.id !== "string" || typeof hook.kind !== "string") throw new Error("Config hook descriptor is invalid");
+      if (hook.kind === "command" && typeof hook.command === "string" && Array.isArray(hook.args) && hook.args.every((arg) => typeof arg === "string")) {
+        return { id: hook.id, kind: "command", command: [hook.command, ...hook.args] };
+      }
+      if (hook.kind === "api" && typeof hook.fixture === "string") return { id: hook.id, kind: "api", fixture: hook.fixture };
+      if (hook.kind === "module" && typeof hook.modulePath === "string" && (hook.exportName === undefined || typeof hook.exportName === "string")) {
+        const modulePath = resolve(config.configDirectory, hook.modulePath);
+        if (!contained(config.configDirectory, modulePath)) throw new Error("Configured module hook path must remain contained by the config directory");
+        return { id: hook.id, kind: "module", modulePath, ...(typeof hook.exportName === "string" ? { exportName: hook.exportName } : {}) };
+      }
+      throw new Error("Config hook descriptor is invalid");
+    });
+    return new TestDataHookRegistry(descriptors, runners);
   }
   public async execute(input: Readonly<{ hookId: string; ownerRunId: string }>): Promise<readonly TestResource[]> {
     if (Object.keys(input).some((key) => key !== "hookId" && key !== "ownerRunId")) throw new Error("Testcases may supply only hookId, not untrusted hook commands or module paths");
