@@ -44,7 +44,7 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   if (!dimensions || !input.binary.mediaType) throw new Error("Evidence dimensions and media type are required");
   return {
     artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, pendingAttempt: true,
-    kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id],
+    kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     provenance: { captureType: input.provenance.captureType, dimensions, dpr: input.provenance.dpr, scroll: input.provenance.scroll, clip: input.provenance.clip, ...(input.provenance.cssBoxes === undefined ? {} : { cssBoxes: input.provenance.cssBoxes }), ...(input.provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: input.provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }), url: input.provenance.url, viewport: input.provenance.viewport, browser: input.provenance.browser, build: input.provenance.build, capturedAt: input.provenance.capturedAt, ...(input.provenance.testcaseId === undefined ? {} : { testcaseId: input.provenance.testcaseId }), ...(input.provenance.bugId === undefined ? {} : { bugId: input.provenance.bugId }) },
   };
 }
@@ -64,10 +64,11 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
       const [metadata, metrics] = await Promise.all([sharp(bytes).metadata(), session.page.evaluate(() => { const browser = globalThis as unknown as PageRuntime; return { scroll: { x: browser.scrollX, y: browser.scrollY }, url: browser.location.href, viewport: { width: browser.innerWidth, height: browser.innerHeight } }; })]);
       if (!metadata.width || !metadata.height || metrics.viewport.width <= 0 || metrics.viewport.height <= 0) return registerGap(input.workspace, "Screenshot dimensions could not be verified", "screenshot capture");
       const evidenceId = createEntityId();
-      const binary = await input.workspace.registerBinaryArtifact({ type: "evidence", filename: evidenceFilename(evidenceId, "sanitized-raw"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: metadata.width, height: metadata.height }, relationships: [], provenance: "runtime" });
       const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: "playwright", build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
-      const registered = await input.workspace.registerArtifactValue({ type: "evidence", value: descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary, provenance }), relationships: [binary.id], provenance: "runtime" });
-      return { kind: "evidence", evidenceId, rawPath: binary.absolutePath, binaryArtifactId: binary.id, descriptorArtifactId: registered.id };
+      const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: evidenceFilename(evidenceId, "sanitized-raw"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: metadata.width, height: metadata.height } }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance }), provenance: "runtime" });
+      const binary = bundle.binaries[0];
+      if (!binary) throw new Error("Evidence bundle did not register a screenshot");
+      return { kind: "evidence", evidenceId, rawPath: binary.absolutePath, binaryArtifactId: binary.id, descriptorArtifactId: bundle.descriptor.id };
     } finally { await removeRegionMasks(session, regionIds); }
   } catch (error) {
     return registerGap(input.workspace, `Capture-time redaction could not be completed safely: ${error instanceof Error ? error.message : String(error)}`, "screenshot capture");
@@ -83,9 +84,10 @@ export async function attachEvidence(input: { workspace: RunWorkspace; attemptId
   const payload = input.telemetry === "network" ? { findings, records: session.telemetry.networkRecords.map((record) => redactNetworkRecord(record, secrets)) } : { findings };
   const evidenceId = createEntityId();
   const bytes = Buffer.from(`${JSON.stringify(payload)}\n`);
-  const binary = await input.workspace.registerBinaryArtifact({ type: "evidence", filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry, relationships: [], provenance: "runtime" });
   const now = new Date().toISOString();
   const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "playwright", build: "unknown", capturedAt: now, dimensions: { width: 1, height: 1 }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
-  const registered = await input.workspace.registerArtifactValue({ type: "evidence", value: descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary, provenance }), relationships: [binary.id], provenance: "runtime" });
-  return { kind: "evidence", evidenceId, binaryArtifactId: binary.id, descriptorArtifactId: registered.id, telemetry: findings };
+  const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance }), provenance: "runtime" });
+  const binary = bundle.binaries[0];
+  if (!binary) throw new Error("Evidence bundle did not register telemetry");
+  return { kind: "evidence", evidenceId, binaryArtifactId: binary.id, descriptorArtifactId: bundle.descriptor.id, telemetry: findings };
 }

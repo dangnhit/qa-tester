@@ -21,15 +21,16 @@ describe("annotateScreenshot", () => {
   it("keeps the sanitized raw PNG unchanged and writes a separate annotated PNG with provenance", async () => {
     const directory = await mkdtemp(join(tmpdir(), "qa-evidence-"));
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-annotation", name: "Annotation", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
-    const raw = await workspace.registerBinaryArtifact({ type: "evidence", filename: "sanitized-raw.png", contents: await sharp({ create: { width: 120, height: 80, channels: 4, background: "#ffffff" } }).png().toBuffer(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 }, relationships: [] });
+    const rawBundle = await workspace.registerEvidenceBundle({ binaries: [{ filename: "sanitized-raw.png", contents: await sharp({ create: { width: 120, height: 80, channels: 4, background: "#ffffff" } }).png().toBuffer(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: workspace.runId, attemptId: "attempt-1", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 120, height: 80 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 120, height: 80 }, url: "https://example.test", viewport: { width: 120, height: 80 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:00:00.000Z" } }) });
+    const raw = rawBundle.binaries[0];
+    if (!raw) throw new Error("Expected raw evidence binary");
     const rawPath = raw.absolutePath;
     const checksumBefore = await sha256(rawPath);
 
     const evidence = await annotateScreenshot({
-      rawPath,
       workspace,
+      rawEvidenceDescriptorId: rawBundle.descriptor.id,
       rawBinaryArtifactId: raw.id,
-      provenance: { evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: "run-1", attemptId: "attempt-1", captureType: "screenshot", dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 120, height: 80 }, url: "https://example.test", viewport: { width: 120, height: 80 }, browser: "chromium", build: "build-1", capturedAt: "2026-07-23T00:00:00.000Z" },
       annotations: [{ id: "one", x: 10, y: 10, width: 30, height: 20, label: "Input", cssBox: { x: 10, y: 10, width: 30, height: 20 } }],
     });
 

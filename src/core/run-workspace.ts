@@ -330,6 +330,7 @@ async function inspectWorkspaceState(
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test step result must reference one registered attempt and test case step") || changed;
         }
       } else if (artifact.record.type === "evidence") {
+        if (value.pendingAttempt === true) continue;
         const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
         if (matches.length !== 1) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference exactly one registered attempt") || changed;
@@ -353,6 +354,29 @@ async function inspectWorkspaceState(
         }
       }
     }
+  }
+
+  const evidenceDescriptors = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "evidence" && artifact.value !== undefined);
+  const binaryRecords = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "evidence" && artifact.record.mediaType !== undefined);
+  for (const descriptor of evidenceDescriptors) {
+    const ids = descriptor.value?.binaryArtifactIds;
+    const details = descriptor.value?.binaryArtifacts;
+    if (!Array.isArray(ids) || !Array.isArray(details) || ids.length !== details.length || new Set(ids).size !== ids.length) {
+      invalidate(descriptor, diagnostics, "INVALID_REFERENCE", "Evidence descriptor binary references are invalid");
+      continue;
+    }
+    for (const detail of details) {
+      if (!isRecord(detail) || typeof detail.id !== "string" || typeof detail.relativePath !== "string" || typeof detail.sha256 !== "string" || typeof detail.mediaType !== "string" || !ids.includes(detail.id)) {
+        invalidate(descriptor, diagnostics, "INVALID_REFERENCE", "Evidence descriptor binary metadata is invalid");
+        continue;
+      }
+      const binary = binaryRecords.find((candidate) => candidate.record.id === detail.id);
+      if (!binary || binary.record.relativePath !== detail.relativePath || binary.record.sha256 !== detail.sha256 || binary.record.mediaType !== detail.mediaType) invalidate(descriptor, diagnostics, "INVALID_REFERENCE", "Evidence descriptor does not match its registered binary");
+    }
+  }
+  for (const binary of binaryRecords) {
+    const references = evidenceDescriptors.filter((descriptor) => Array.isArray(descriptor.value?.binaryArtifactIds) && descriptor.value?.binaryArtifactIds.includes(binary.record.id));
+    if (references.length !== 1) invalidate(binary, diagnostics, "INVALID_REFERENCE", "Evidence binary must be referenced exactly once by a canonical evidence descriptor");
   }
 
   const registered = new Set(manifest.artifacts.map((artifact) => artifact.relativePath));
@@ -558,6 +582,64 @@ export class RunWorkspace {
     }));
   }
 
+  /** Writes evidence media and its canonical descriptor as one serialized manifest transaction. */
+  public registerEvidenceBundle(input: {
+    binaries: readonly {
+      filename: string;
+      contents: Uint8Array;
+      mediaType: string;
+      captureType: "screenshot" | "trace" | "console" | "network" | "log";
+      dimensions?: { width: number; height: number };
+    }[];
+    descriptor: (binaries: readonly ArtifactRecord[]) => unknown;
+    relationships?: string[];
+    provenance?: string;
+  }): Promise<{ binaries: readonly (ArtifactRecord & { absolutePath: string })[]; descriptor: ArtifactRecord & { absolutePath: string } }> {
+    try {
+      this.assertWritable();
+      if (input.binaries.length === 0 || input.binaries.some((binary) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(binary.filename) || binary.contents.byteLength === 0)) throw new QaSkillsError("Evidence bundle binary is invalid", "INVALID_ARTIFACT");
+    } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new Error(String(error))); }
+    return this.trackMutation(() => this.withManifestTransaction(async () => {
+      const manifest = await this.readManifest();
+      const written: string[] = [];
+      try {
+        const binaries = await Promise.all(input.binaries.map(async (binary) => {
+          const id = createEntityId();
+          const relativePath = `evidence/${id}-${binary.filename}`;
+          const absolutePath = resolveWithin(this.path, relativePath);
+          await atomicWriteFile(this.path, absolutePath, binary.contents);
+          written.push(absolutePath);
+          const record: ArtifactRecord = { id, type: "evidence", relativePath, sha256: await sha256(absolutePath), mediaType: binary.mediaType, captureType: binary.captureType, ...(binary.dimensions === undefined ? {} : { dimensions: { ...binary.dimensions } }), provenance: input.provenance ?? "runtime", relationships: [] };
+          return { ...record, absolutePath };
+        }));
+        const value = input.descriptor(binaries);
+        if (!validateArtifact("evidence", value).valid) throw new QaSkillsError("Evidence descriptor does not match its contract", "INVALID_ARTIFACT");
+        const relationships = [...(input.relationships ?? []), ...binaries.map((binary) => binary.id)];
+        const binaryRecords = binaries.map(({ absolutePath, ...record }) => {
+          void absolutePath;
+          return record;
+        });
+        const withBinaries: Manifest = { ...manifest, artifacts: [...manifest.artifacts, ...binaryRecords] };
+        await this.assertArtifactBinding("evidence", value, relationships, withBinaries);
+        const canonicalContents = `${JSON.stringify(value, null, 2)}\n`;
+        const checksum = sha256Text(canonicalContents);
+        if (manifest.artifacts.some((artifact) => artifact.type === "evidence" && artifact.sha256 === checksum)) throw new QaSkillsError("Completed artifacts are immutable; duplicate artifact", "DUPLICATE_ARTIFACT");
+        const descriptorId = createEntityId();
+        const relativePath = `inputs/${descriptorId}-evidence.json`;
+        const absolutePath = resolveWithin(this.path, relativePath);
+        await this.persistence.writeAtomic(this.path, absolutePath, canonicalContents);
+        written.push(absolutePath);
+        if (await sha256(absolutePath) !== checksum) throw new QaSkillsError("Atomic evidence descriptor write checksum mismatch", "WRITE_FAILURE");
+        const descriptor: ArtifactRecord = { id: descriptorId, type: "evidence", relativePath, sha256: checksum, provenance: input.provenance ?? "runtime", relationships };
+        await this.writeManifest({ ...withBinaries, artifacts: [...withBinaries.artifacts, descriptor] });
+        return { binaries, descriptor: { ...descriptor, absolutePath } };
+      } catch (error) {
+        await Promise.all(written.map((path) => rm(path, { force: true })));
+        throw error;
+      }
+    }));
+  }
+
   private registerArtifactValueInternal(input: {
     type: ArtifactType;
     value: unknown;
@@ -607,6 +689,16 @@ export class RunWorkspace {
     return inspected.artifacts.flatMap((artifact) => artifact.valid && artifact.value
       ? [{ record: artifact.record, value: artifact.value }]
       : []);
+  }
+
+  /** Returns a freshly validated manifest record, including registered evidence binaries. */
+  public async readArtifactRecord(id: string): Promise<Readonly<ArtifactRecord>> {
+    this.assertOpen();
+    const inspected = await inspectWorkspaceState(this.path, this.runId);
+    if (inspected.diagnostics.length > 0) throw new QaSkillsError(`Workspace artifact binding is invalid: ${inspected.diagnostics[0]?.message ?? "unknown error"}`, "ARTIFACT_BINDING");
+    const record = inspected.manifest.artifacts.find((artifact) => artifact.id === id);
+    if (!record) throw new QaSkillsError("Registered artifact was not found", "ARTIFACT_BINDING");
+    return { ...record, relationships: [...record.relationships] };
   }
 
   public finalize(

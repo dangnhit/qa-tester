@@ -120,6 +120,21 @@ afterEach(async () => {
 });
 
 describe("RunWorkspace", () => {
+  it("commits an evidence binary and descriptor together or leaves neither registered", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const bundle = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-PENDING", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      }),
+    });
+    expect(bundle.binaries).toHaveLength(1);
+    expect(bundle.descriptor.type).toBe("evidence");
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { id: string }[] };
+    expect(manifest.artifacts.map((artifact) => artifact.id)).toEqual(expect.arrayContaining([bundle.binaries[0]?.id, bundle.descriptor.id]));
+    await workspace.close();
+  });
   it("copies validated artifacts into immutable inputs and records their checksum", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
@@ -661,6 +676,7 @@ describe("RunWorkspace", () => {
       relativePath: "evidence/log.json",
       mediaType: "application/json",
       binaryArtifactIds: ["binary-1"],
+      binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
       provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
     };
     await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);

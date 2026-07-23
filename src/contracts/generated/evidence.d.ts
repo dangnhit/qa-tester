@@ -16,6 +16,23 @@ export interface EvidenceItem {
    * @minItems 1
    */
   binaryArtifactIds: [string, ...string[]];
+  /**
+   * @minItems 1
+   */
+  binaryArtifacts: [
+    {
+      id: string;
+      relativePath: string;
+      sha256: string;
+      mediaType: string;
+    },
+    ...{
+      id: string;
+      relativePath: string;
+      sha256: string;
+      mediaType: string;
+    }[]
+  ];
   pendingAttempt?: boolean;
   provenance: {
     captureType: "screenshot" | "trace" | "console" | "network" | "log";
