@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
@@ -732,7 +732,12 @@ export class RunWorkspace {
       provenance,
       relationships: [...relationships],
     };
-    await this.writeManifest({ ...manifest, artifacts: [...manifest.artifacts, record] });
+    try {
+      await this.writeManifest({ ...manifest, artifacts: [...manifest.artifacts, record] });
+    } catch (error: unknown) {
+      await rm(absolutePath, { force: true });
+      throw error;
+    }
     return { ...record, absolutePath };
   }
 

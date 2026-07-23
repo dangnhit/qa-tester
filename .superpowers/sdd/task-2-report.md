@@ -161,6 +161,35 @@ Test Files  3 passed (3)
 Tests       91 passed (91)
 ```
 
+### Fifth review-fix wave RED/GREEN
+
+Focused RED commands:
+
+```text
+npm test -- tests/core/run-workspace.test.ts tests/contracts/generated-types.test.ts
+npm run typecheck
+```
+
+The runtime RED run failed in the two intended places:
+
+```text
+Test Files  2 failed (2)
+Tests       2 failed | 41 passed (43)
+```
+
+- A transient manifest write failure left the already-persisted canonical artifact as an `ORPHAN_FILE`.
+- The generated run metadata declaration still exposed `[k: string]` and did not express its lifecycle/mode invariants.
+
+The compile-time RED run reported four unused `@ts-expect-error` directives, proving that active metadata with `finalizedProfile`, terminal metadata without it, a mode/profile mismatch, and an excess property were all incorrectly assignable.
+
+After adding transactional artifact rollback and a schema-derived governed run-metadata declaration, both commands passed:
+
+```text
+Test Files  2 passed (2)
+Tests       43 passed (43)
+Typecheck   passed with all negative type assertions consumed
+```
+
 ## Verification
 
 All commands exited successfully:
@@ -177,8 +206,8 @@ git diff --check
 Final full-suite result:
 
 ```text
-Test Files  7 passed (7)
-Tests       109 passed (109)
+Test Files  8 passed (8)
+Tests       111 passed (111)
 ```
 
 A separate stale-lock stress audit completed 100 iterations with 10 concurrent contenders per iteration and observed exactly one owner in every iteration.
@@ -211,6 +240,8 @@ A separate stale-lock stress audit completed 100 iterations with 10 concurrent c
 - Schema-enforced governed manifest types and terminal finalized-profile/mode coherence.
 - Explicit, validated terminal paths for `COMPLETED`, `COMPLETED_WITH_FAILURES`, `BLOCKED`, and `ABORTED`.
 - Unique quarantine-based stale-lock recovery that is independent of abandoned singleton recovery files.
+- Canonical artifact rollback when manifest persistence fails, allowing an orphan-free retry inside the serialized transaction.
+- Closed, schema-derived `QARunMetadata` lifecycle/mode typing with exact terminal profile names and forbidden active profiles.
 
 ## Files changed
 
@@ -227,6 +258,7 @@ A separate stale-lock stress audit completed 100 iterations with 10 concurrent c
 - `src/cli/program.ts`
 - `src/cli/index.ts`
 - `scripts/create-run.ts`
+- `scripts/generate-types.ts`
 - `scripts/validate-artifacts.ts`
 - `shared/schemas/artifact-manifest.schema.json`
 - `shared/schemas/evidence-gap.schema.json`
@@ -242,6 +274,8 @@ A separate stale-lock stress audit completed 100 iterations with 10 concurrent c
 - `tests/core/run-lock.test.ts`
 - `tests/core/artifact-profiles.test.ts`
 - `tests/cli/core.test.ts`
+- `tests/contracts/generated-types.test.ts`
+- `tests/contracts/run-metadata-types.test-d.ts`
 - `tests/contracts/validator.test.ts`
 
 ## Commits
@@ -251,6 +285,7 @@ A separate stale-lock stress audit completed 100 iterations with 10 concurrent c
 - `08e9fe1` — `fix: close task 2 lifecycle safety gaps`
 - `62d2be3` — `fix: enforce task 2 workspace invariants`
 - `960d468` — `fix: harden task 2 finalization and validation`
+- Final registration recovery and governed metadata typing wave — current commit
 
 ## Residual concerns
 

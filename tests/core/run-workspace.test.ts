@@ -91,6 +91,24 @@ function failMetadataStatusOnce(status: string) {
   };
 }
 
+function failNextManifestWrite() {
+  let armed = false;
+  return {
+    arm(): void {
+      armed = true;
+    },
+    persistence: {
+      async writeAtomic(rootPath: string, path: string, contents: string): Promise<void> {
+        if (armed && path.endsWith("artifact-manifest.json")) {
+          armed = false;
+          throw new Error("Injected artifact manifest write failure");
+        }
+        await atomicWriteFile(rootPath, path, contents);
+      },
+    },
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -496,6 +514,34 @@ describe("RunWorkspace", () => {
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { id: string }[] };
     expect(manifest.artifacts.map((artifact) => artifact.id)).toEqual(expect.arrayContaining([first.id, second.id]));
     expect((await workspace.validate("plan")).diagnostics.map((diagnostic) => diagnostic.code)).not.toContain("ORPHAN_FILE");
+  });
+
+  it("removes a canonical artifact when its manifest transaction fails and permits a clean retry", async () => {
+    const directory = await root();
+    const failure = failNextManifestWrite();
+    const workspace = await RunWorkspace.create({
+      root: directory,
+      mode: "plan",
+      environmentProfile,
+      persistence: failure.persistence,
+    });
+    const sourcePath = join(directory, "manifest-retry.json");
+    await writeFile(sourcePath, JSON.stringify(testCase("TC-MANIFEST-RETRY")));
+    failure.arm();
+
+    await expect(workspace.registerArtifact({
+      type: "test-case",
+      sourcePath,
+      relationships: [],
+    })).rejects.toThrow(/manifest write failure/i);
+    expect((await workspace.validate("plan")).diagnostics.map((diagnostic) => diagnostic.code)).not.toContain("ORPHAN_FILE");
+
+    await expect(workspace.registerArtifact({
+      type: "test-case",
+      sourcePath,
+      relationships: [],
+    })).resolves.toMatchObject({ type: "test-case" });
+    await expect(workspace.validate("plan")).resolves.toMatchObject({ valid: true, diagnostics: [] });
   });
 
   it("rejects persisted artifact relabeling and unknown manifest relationships", async () => {

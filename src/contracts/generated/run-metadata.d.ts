@@ -1,19 +1,33 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export type QARunMetadata = {
-  [k: string]: unknown | undefined;
-} & {
+type QARunMode = "plan" | "execute" | "full" | "exploratory" | "retest" | "regression" | "cleanup";
+type ActiveRunStatus = "CREATED" | "RUNNING" | "FINALIZING";
+type TerminalRunStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
+
+type QARunMetadataBase<M extends QARunMode> = {
   artifactType: "run-metadata";
   schemaVersion: "1.0.0";
   producerVersion: string;
   runId: string;
-  status: "CREATED" | "RUNNING" | "FINALIZING" | "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
   createdAt: string;
-  mode: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression" | "cleanup";
+  mode: M;
   environmentProfileId: string;
-  finalizedProfile?: {
-    name: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression" | "cleanup";
-    version: "1.0.0";
-  };
   linkedRunId?: string;
 };
+
+type ActiveQARunMetadata<M extends QARunMode> = QARunMetadataBase<M> & {
+  status: ActiveRunStatus;
+  finalizedProfile?: never;
+};
+
+type TerminalQARunMetadata<M extends QARunMode> = QARunMetadataBase<M> & {
+  status: TerminalRunStatus;
+  finalizedProfile: {
+    name: M;
+    version: "1.0.0";
+  };
+};
+
+export type QARunMetadata = {
+  [M in QARunMode]: ActiveQARunMetadata<M> | TerminalQARunMetadata<M>;
+}[QARunMode];
