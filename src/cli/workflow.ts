@@ -29,7 +29,13 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
     const value: unknown = JSON.parse(await readFile(join(sourcePath, environment.relativePath as string), "utf8"));
     if (!record(value)) throw new QaSkillsError("Source environment profile is invalid", "INVALID_ARTIFACT");
     environmentProfile = value;
-    bundle = { sourceRunId: options.sourceRunId, artifacts: artifacts.filter((artifact) => artifact.type !== "environment-profile" && artifact.type !== "run-metadata" && artifact.type !== "artifact-manifest").map((artifact) => ({ artifactId: artifact.id as string, sha256: artifact.sha256 as string })) };
+    const planningKinds = new Set(["requirement-analysis", "test-plan", "test-case", "coverage-obligation"]);
+    const infrastructureKinds = new Set(["environment-profile", "run-metadata", "artifact-manifest", "workflow-checkpoint"]);
+    const selected = artifacts.filter((artifact) => planningKinds.has(artifact.type as string));
+    const disallowed = artifacts.filter((artifact) => !planningKinds.has(artifact.type as string) && !infrastructureKinds.has(artifact.type as string));
+    if (disallowed.length > 0) throw new QaSkillsError(`Source run contains non-planning artifact ${String(disallowed[0]?.type)}`, "INVALID_ARTIFACT");
+    for (const required of planningKinds) if (!selected.some((artifact) => artifact.type === required)) throw new QaSkillsError(`Source run lacks required canonical planning artifact ${required}`, "INVALID_ARTIFACT");
+    bundle = { sourceRunId: options.sourceRunId, artifacts: selected.map((artifact) => ({ artifactId: artifact.id as string, sha256: artifact.sha256 as string })) };
   } else if (options.environmentPath) {
     const value: unknown = JSON.parse(await readFile(resolve(options.environmentPath), "utf8"));
     if (!record(value)) throw new QaSkillsError("Environment profile file must contain an object", "INVALID_ARTIFACT");

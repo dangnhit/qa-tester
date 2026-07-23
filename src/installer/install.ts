@@ -44,17 +44,22 @@ async function assertTargetComponents(path: string): Promise<void> {
   }
 }
 
-async function fsyncTree(root: string): Promise<void> {
+export type DirectorySyncOptions = Readonly<{ platform?: NodeJS.Platform; openDirectory?: (path: string) => Promise<Pick<Awaited<ReturnType<typeof open>>, "sync" | "close">> }>;
+
+export async function fsyncTree(root: string, options: DirectorySyncOptions = {}): Promise<void> {
   const { readdir } = await import("node:fs/promises");
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const item = join(root, entry.name);
-    if (entry.isDirectory()) await fsyncTree(item);
+    if (entry.isDirectory()) await fsyncTree(item, options);
     else if (entry.isFile()) { const handle = await open(item, "r"); try { await handle.sync(); } finally { await handle.close(); } }
   }
-  const handle = await open(root, "r"); try { await handle.sync(); } catch (error: unknown) {
+  try {
+    const handle = await (options.openDirectory ?? ((path: string) => open(path, "r")))(root);
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (error: unknown) {
     const code = error instanceof Error && "code" in error ? error.code : undefined;
-    if (process.platform !== "win32" || !["EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
-  } finally { await handle.close(); }
+    if ((options.platform ?? process.platform) !== "win32" || !["EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
+  }
 }
 
 async function restore(root: string, previous: string | undefined, stage: string): Promise<void> {

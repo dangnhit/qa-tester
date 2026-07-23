@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../../src/cli/program.js";
-import { scaffoldWorkflowInput } from "../../src/cli/workflow.js";
+import { runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 
 const roots: string[] = [];
@@ -19,14 +19,23 @@ describe("workflow scaffold", () => {
     const plan = await scaffoldWorkflowInput({ root, mode: "plan", outputPath: planPath, environmentPath: envPath });
     expect(plan).toMatchObject({ root, mode: "plan", environmentProfile: environment });
     const workspace = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment });
-    await workspace.close();
-    const metadataPath = join(root, "qa-results", workspace.runId, "run-metadata.json");
-    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
-    await writeFile(metadataPath, JSON.stringify({ ...metadata, status: "COMPLETED" }));
+    const requirement = await workspace.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: { artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA", statements: [{ requirementId: "REQ", sourceProvenance: { kind: "user", reference: "fixture" }, normalizedText: "User must save", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }] } });
+    const planArtifact = await workspace.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: { artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN", approvalPolicy: { mode: "human-review" }, testCases: [{ testCaseId: "TC", title: "Save", expectedResults: [{ id: "ER", requirementId: "REQ", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }] } });
+    await workspace.registerArtifactValue({ type: "test-case", relationships: [planArtifact.id], value: { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC", revisionId: "REV", instanceId: "INSTANCE", title: "Save", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } } });
+    await workspace.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: { artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true } });
+    await workspace.finalize("plan"); await workspace.close();
     const sourcePath = join(root, "source.json");
     const source = await scaffoldWorkflowInput({ root, mode: "full", outputPath: sourcePath, sourceRoot: root, sourceRunId: workspace.runId });
     expect(source).toMatchObject({ mode: "full", bundle: { sourceRunId: workspace.runId }, environmentProfile: environment });
     expect(JSON.parse(await readFile(sourcePath, "utf8"))).toEqual(source);
+    await scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "runnable-plan.json"), sourceRoot: root, sourceRunId: workspace.runId });
+    await expect(runLocalWorkflow({ cwd: root, inputPath: join(root, "runnable-plan.json") })).resolves.toMatchObject({ mode: "plan", outcome: "COMPLETED" });
+    const empty = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment }); await empty.finalize("plan"); await empty.close();
+    await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "empty.json"), sourceRoot: root, sourceRunId: empty.runId })).rejects.toThrow(/required canonical planning/i);
+    const manifestPath = join(root, "qa-results", workspace.runId, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: unknown[] };
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, artifacts: [...manifest.artifacts, { id: "unexpected", type: "test-result", sha256: "a".repeat(64), relativePath: "artifacts/unexpected.json" }] }));
+    await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "unsafe.json"), sourceRoot: root, sourceRunId: workspace.runId })).rejects.toThrow(/non-planning/i);
     const verified = await runCli(["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], { cwd: root });
     expect(verified.exitCode).toBe(0); expect(JSON.parse(verified.stdout)).toMatchObject({ compatible: true });
   });
