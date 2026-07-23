@@ -46,6 +46,7 @@ export type DemoResult = Readonly<{
   validation: Readonly<{ valid: boolean; diagnostics: readonly unknown[] }>;
   telemetry: Readonly<{ consoleErrors: readonly string[]; failedRequests: readonly string[] }>;
   evidenceByInstance: readonly DemoEvidenceSummary[];
+  screenshotEvidenceGaps: readonly Readonly<{ attemptId: string; reason: string }>[];
   traceEvidenceGaps: readonly Readonly<{ attemptId: string; reason: string }>[];
   cleanup: Readonly<{ status: string; resources: readonly string[] }>;
 }>;
@@ -225,10 +226,11 @@ export async function runDemo(options: Readonly<{ root?: string; protectedEnviro
   assertFixture(testcase, config);
   return withDemoResources({ serve: serveDemoFixture, launch: () => chromium.launch({ headless: config.headless }) }, async ({ server, browser }) => {
     const protectedEnvironment = options.protectedEnvironment === true;
+    const resolveDemoSecret = options.resolvedSecret !== undefined || protectedEnvironment;
     const markerPath = join(root, ".qa-demo-owned-resource");
     const cleanupStatuses: string[] = [];
     try {
-      const bundle = await createSourceBundle(root, server.baseUrl, testcase, protectedEnvironment);
+      const bundle = await createSourceBundle(root, server.baseUrl, testcase, resolveDemoSecret);
       const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "ENV-DEMO-LOCAL", name: "Local intentional-failure fixture", classification: "test", baseUrl: server.baseUrl, productionReadOnly: false };
       const testDataRegistry = new TestDataHookRegistry([{ id: "demo-owned-resource", kind: "api", fixture: "local-marker" }], {
         api: async () => {
@@ -241,8 +243,8 @@ export async function runDemo(options: Readonly<{ root?: string; protectedEnviro
         browserManagers: { demo: { browser, annotateFailures: true } },
         secretResolvers: { demo: () => secret },
         testDataRegistries: { demo: testDataRegistry },
-        evidencePolicies: { demo: { safety: { screenshot: "required", console: "required", network: "required", logs: "required", trace: "required" }, ...(protectedEnvironment ? { protection: { protectedEnvironment: true, domSelectors: ["input"] } } : {}) } },
-      })({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "demo", ...(protectedEnvironment ? { secretResolverId: "demo" } : {}), testDataRegistryId: "demo", testDataHookIds: ["demo-owned-resource"], evidencePolicyId: "demo" } });
+        evidencePolicies: { demo: { safety: { screenshot: "required", console: "required", network: "required", logs: "required", trace: "required" }, ...(protectedEnvironment ? { protection: { protectedEnvironment: true, domSelectors: ["input"], deterministicTelemetryScrubber: true } } : {}) } },
+      })({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "demo", ...(resolveDemoSecret ? { secretResolverId: "demo" } : {}), testDataRegistryId: "demo", testDataHookIds: ["demo-owned-resource"], evidencePolicyId: "demo" } });
       const cleanupRun = await executeCleanupRun({
         root,
         sourceRunId: workflow.runId,
@@ -265,22 +267,39 @@ export async function runDemo(options: Readonly<{ root?: string; protectedEnviro
         const files = await projectEvidence(root, workflow.runId, workspace, records);
         const telemetry = await telemetryFrom(workspace, records);
         const evidenceByInstance = evidenceSummaries(artifacts, attempts);
+        const screenshotEvidenceGaps = artifacts.filter((artifact) => artifact.record.type === "evidence-gap" && artifact.value.affectedClaim === "screenshot capture").map((artifact) => ({ attemptId: String(artifact.value.attemptId), reason: String(artifact.value.reason) }));
         const traceEvidenceGaps = artifacts.filter((artifact) => artifact.record.type === "evidence-gap" && artifact.value.affectedClaim === "trace capture").map((artifact) => ({ attemptId: String(artifact.value.attemptId), reason: String(artifact.value.reason) }));
         const cleanup = { status: cleanupRun.resources.every((resource) => resource.status === "cleaned") ? "COMPLETED" : "COMPLETED_WITH_FAILURES", resources: cleanupStatuses };
-        const result: DemoResult = { root, run: { id: workflow.runId, status: metadata.status }, attempts, files, report: { releaseRecommendation: report.releaseRecommendation }, validation: workflow.validation, telemetry, evidenceByInstance, traceEvidenceGaps, cleanup };
-        const evidenceComplete = result.evidenceByInstance.length === testcase.matrix.length && result.evidenceByInstance.every((evidence) => evidence.rawScreenshots === 1 && evidence.annotatedScreenshots === 1 && (protectedEnvironment ? evidence.console === 0 && evidence.network === 0 : evidence.console === 1 && evidence.network === 1) && evidence.annotation.testCaseRevisionId === testcase.testCase.revisionId && evidence.annotation.testCaseInstanceId === evidence.instanceId && evidence.annotation.testResultRelated && evidence.annotation.locator.length > 0 && evidence.annotation.label.length > 0 && (protectedEnvironment ? evidence.traces === 0 : evidence.traces === 1));
-        const telemetryComplete = protectedEnvironment || (result.telemetry.consoleErrors.includes("QA_DEMO_CONSOLE_ERROR") && result.telemetry.failedRequests.includes("/api/demo-failure"));
-        const traceComplete = protectedEnvironment ? result.traceEvidenceGaps.length === testcase.matrix.length && result.files.every((file) => !file.startsWith("traces/")) : result.traceEvidenceGaps.length === 0 && result.files.some((file) => file.startsWith("traces/"));
+        const result: DemoResult = { root, run: { id: workflow.runId, status: metadata.status }, attempts, files, report: { releaseRecommendation: report.releaseRecommendation }, validation: workflow.validation, telemetry, evidenceByInstance, screenshotEvidenceGaps, traceEvidenceGaps, cleanup };
+        const evidenceComplete = result.evidenceByInstance.length === testcase.matrix.length && result.evidenceByInstance.every((evidence) => {
+          const channelCountsComplete = evidence.console === 1 && evidence.network === 1;
+          if (resolveDemoSecret) return evidence.rawScreenshots === 0 && evidence.annotatedScreenshots === 0 && evidence.traces === 0 && channelCountsComplete;
+          return evidence.rawScreenshots === 1
+            && evidence.annotatedScreenshots === 1
+            && evidence.traces === 1
+            && channelCountsComplete
+            && evidence.annotation.testCaseRevisionId === testcase.testCase.revisionId
+            && evidence.annotation.testCaseInstanceId === evidence.instanceId
+            && evidence.annotation.testResultRelated
+            && evidence.annotation.locator.length > 0
+            && evidence.annotation.label.length > 0;
+        });
+        const telemetryComplete = result.telemetry.consoleErrors.includes("QA_DEMO_CONSOLE_ERROR") && result.telemetry.failedRequests.includes("/api/demo-failure");
+        const screenshotComplete = resolveDemoSecret
+          ? result.screenshotEvidenceGaps.length === testcase.matrix.length && result.files.every((file) => !file.startsWith("screenshots/"))
+          : result.screenshotEvidenceGaps.length === 0 && result.files.some((file) => file.startsWith("screenshots/raw/")) && result.files.some((file) => file.startsWith("screenshots/annotated/"));
+        const traceComplete = resolveDemoSecret
+          ? result.traceEvidenceGaps.length === testcase.matrix.length && result.files.every((file) => !file.startsWith("traces/"))
+          : result.traceEvidenceGaps.length === 0 && result.files.some((file) => file.startsWith("traces/"));
         const valid = result.run.status === "COMPLETED_WITH_FAILURES"
           && result.attempts.length === testcase.matrix.length
           && result.attempts.every((attempt) => attempt.status === "FAILED" && attempt.classification === "PRODUCT_DEFECT")
-          && result.files.some((file) => file.startsWith("screenshots/raw/"))
-          && result.files.some((file) => file.startsWith("screenshots/annotated/"))
           && result.report.releaseRecommendation === "NOT_READY"
           && result.validation.valid
           && telemetryComplete
           && result.cleanup.status === "COMPLETED"
           && evidenceComplete
+          && screenshotComplete
           && traceComplete;
         if (!valid) throw new Error(`Intentional defect was not completely detected: ${JSON.stringify(result)}`);
         return result;

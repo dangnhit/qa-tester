@@ -343,6 +343,7 @@ function capturePolicyForEnvironment(environment: Record<string, unknown>, host:
   const runtime = host.protection ?? {};
   return {
     protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true,
+    deterministicTelemetryScrubber: runtime.deterministicTelemetryScrubber === true,
     redaction: {
       domSelectors: [...new Set([...stringArray(profile.domSelectors), ...stringArray(runtime.domSelectors)])],
       regions: [...redactionRegions(profile.regions), ...redactionRegions(runtime.regions)],
@@ -420,27 +421,36 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
         }
       }
       const attachment = async (telemetry: "console" | "network" | "log") => {
-        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
+        const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, deterministicScrubberRegistered: capturePolicy.deterministicTelemetryScrubber, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
         void evidence;
       };
       if (policy.logs !== "forbidden" && policy.logs !== "off") await attachment("log");
       if (policy.console !== "forbidden" && policy.console !== "off") await attachment("console");
       if (policy.network !== "forbidden" && policy.network !== "off") await attachment("network");
       if (policy.screenshot === "always" || policy.screenshot === "required" || (policy.screenshot === "on-failure" && attempt.status !== "PASSED")) {
-        const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
-        if (manager.annotateFailures === true && attempt.status !== "PASSED" && evidence.kind === "evidence") {
-          const failed = attempt.steps.find((step) => step.status === "FAILED" && step.failedAssertion !== undefined && "locator" in step.failedAssertion);
-          if (failed?.failedAssertion && "locator" in failed.failedAssertion) {
-            const box = await resolveLocator(session.page, failed.failedAssertion.locator).boundingBox();
-            const raw = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === evidence.descriptorArtifactId)?.value;
-            const provenance = record(raw?.provenance) ? raw.provenance : undefined;
-            const dimensions = record(provenance?.dimensions) ? provenance.dimensions : undefined;
-            const scroll = record(provenance?.scroll) ? provenance.scroll : undefined;
-            const clip = record(provenance?.clip) ? provenance.clip : undefined;
-            if (box && dimensions && scroll && clip && typeof dimensions.width === "number" && typeof dimensions.height === "number" && typeof provenance?.dpr === "number" && typeof scroll.x === "number" && typeof scroll.y === "number" && typeof clip.x === "number" && typeof clip.y === "number" && typeof clip.width === "number" && typeof clip.height === "number") {
-              const locator = JSON.stringify(failed.failedAssertion.locator);
-              const annotations = normalizeGeometry({ image: { width: dimensions.width, height: dimensions.height, dpr: provenance.dpr, scrollX: scroll.x, scrollY: scroll.y, clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height } }, annotations: [{ id: `failure-${failed.stepId}`, box, ...(failed.error === undefined ? {} : { label: failed.error }), locator }] });
-              await annotateScreenshot({ workspace, rawEvidenceDescriptorId: evidence.descriptorArtifactId, rawBinaryArtifactId: evidence.binaryArtifactId, annotations });
+        if (session.secrets.size > 0) {
+          await recordEvidenceGap({
+            workspace,
+            attemptId,
+            reason: "Screenshot pixels are unavailable after secret resolution because deterministic secret-derived masking cannot be proven",
+            affectedClaim: "screenshot capture",
+          });
+        } else {
+          const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
+          if (manager.annotateFailures === true && attempt.status !== "PASSED" && evidence.kind === "evidence") {
+            const failed = attempt.steps.find((step) => step.status === "FAILED" && step.failedAssertion !== undefined && "locator" in step.failedAssertion);
+            if (failed?.failedAssertion && "locator" in failed.failedAssertion) {
+              const box = await resolveLocator(session.page, failed.failedAssertion.locator).boundingBox();
+              const raw = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === evidence.descriptorArtifactId)?.value;
+              const provenance = record(raw?.provenance) ? raw.provenance : undefined;
+              const dimensions = record(provenance?.dimensions) ? provenance.dimensions : undefined;
+              const scroll = record(provenance?.scroll) ? provenance.scroll : undefined;
+              const clip = record(provenance?.clip) ? provenance.clip : undefined;
+              if (box && dimensions && scroll && clip && typeof dimensions.width === "number" && typeof dimensions.height === "number" && typeof provenance?.dpr === "number" && typeof scroll.x === "number" && typeof scroll.y === "number" && typeof clip.x === "number" && typeof clip.y === "number" && typeof clip.width === "number" && typeof clip.height === "number") {
+                const locator = JSON.stringify(failed.failedAssertion.locator);
+                const annotations = normalizeGeometry({ image: { width: dimensions.width, height: dimensions.height, dpr: provenance.dpr, scrollX: scroll.x, scrollY: scroll.y, clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height } }, annotations: [{ id: `failure-${failed.stepId}`, box, ...(failed.error === undefined ? {} : { label: failed.error }), locator }] });
+                await annotateScreenshot({ workspace, rawEvidenceDescriptorId: evidence.descriptorArtifactId, rawBinaryArtifactId: evidence.binaryArtifactId, annotations });
+              }
             }
           }
         }

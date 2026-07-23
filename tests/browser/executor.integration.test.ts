@@ -180,7 +180,7 @@ describe("executeTestInstance", () => {
     expect(serialized).not.toContain("NEVER-serialize");
   });
 
-  it("classifies only an assertion bound to an approved authoritative expected result as a product defect", async () => {
+  it("classifies only an assertion bound to an approved authoritative expected result as a product defect and leaves every other failure undetermined", async () => {
     const authoritativeDsl = { steps: [
       { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" },
       { id: "mismatch", action: { kind: "wait", milliseconds: 0 }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Missing", expectedResultId: "ER-BROWSER" }], sideEffect: "none" },
@@ -197,7 +197,7 @@ describe("executeTestInstance", () => {
     const unbound = await governedWorkspace({ dsl: unboundDsl });
     await executeTestInstance({ workspace: unbound.workspace, browser, attemptId: "ATTEMPT-UNBOUND", testCaseArtifactId: unbound.registeredCase.id });
     const unboundResult = (await unbound.workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === "ATTEMPT-UNBOUND");
-    expect(unboundResult?.value.failureClassification).toBe("TEST_DEFECT");
+    expect(unboundResult?.value.failureClassification).toBe("UNDETERMINED");
 
     await expect(governedWorkspace({ dsl: authoritativeDsl, expectedAuthority: "INFERRED" })).rejects.toThrow(/approved|authoritative|auto-approval/i);
   });

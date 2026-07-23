@@ -60,16 +60,34 @@ describe("localhost intentional-failure demo", () => {
     }
   }, 60_000);
 
-  it("records a trace Evidence Gap instead of unsafe trace bytes for a protected secret-resolved attempt", async () => {
+  it("records screenshot and trace Evidence Gaps instead of unsafe bytes for a protected secret-resolved attempt", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-skills-demo-protected-"));
     roots.push(root);
 
     const secret = "never-persist-demo-secret";
     const result = await runDemo({ root, protectedEnvironment: true, resolvedSecret: secret });
 
+    expect(result.files.some((file) => file.startsWith("screenshots/"))).toBe(false);
     expect(result.files.some((file) => file.startsWith("traces/"))).toBe(false);
+    expect(result.screenshotEvidenceGaps).toHaveLength(2);
     expect(result.traceEvidenceGaps).toHaveLength(2);
-    expect(result.traceEvidenceGaps.every((gap) => /protected|secret/i.test(gap.reason))).toBe(true);
+    expect([...result.screenshotEvidenceGaps, ...result.traceEvidenceGaps].every((gap) => /protected|secret/i.test(gap.reason))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    for (const path of await filesUnder(root)) expect(await readFile(path)).not.toContain(Buffer.from(secret));
+  }, 60_000);
+
+  it("never persists screenshot pixels or trace bytes after resolving a visible secret in a non-protected session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-demo-secret-"));
+    roots.push(root);
+
+    const secret = "visible-secret-that-must-never-persist";
+    const result = await runDemo({ root, resolvedSecret: secret });
+
+    expect(result.files.some((file) => file.startsWith("screenshots/"))).toBe(false);
+    expect(result.files.some((file) => file.startsWith("traces/"))).toBe(false);
+    expect(result.screenshotEvidenceGaps).toHaveLength(2);
+    expect(result.traceEvidenceGaps).toHaveLength(2);
+    expect([...result.screenshotEvidenceGaps, ...result.traceEvidenceGaps].every((gap) => /secret/i.test(gap.reason))).toBe(true);
     expect(JSON.stringify(result)).not.toContain(secret);
     for (const path of await filesUnder(root)) expect(await readFile(path)).not.toContain(Buffer.from(secret));
   }, 60_000);

@@ -30,6 +30,7 @@ describe("CLI core", () => {
     await writeFile(join(directory, ".gitignore"), "node_modules/\n");
     const result = await runCli(["init"], { cwd: directory });
     expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
     expect(await readFile(join(directory, "qa.config.yaml"), "utf8")).toContain("version:");
     expect(await readFile(join(directory, ".gitignore"), "utf8")).toContain("node_modules/\nqa-results/\n");
   });
@@ -52,7 +53,9 @@ describe("CLI core", () => {
     const sourcePath = join(directory, "run.json");
     await writeFile(sourcePath, JSON.stringify({ artifactType: "run-metadata", schemaVersion: "1.0.0", producerVersion: "1.0.0", runId: workspace.runId, status: "CREATED", createdAt: "2026-07-23T12:34:56.000Z", mode: "plan", environmentProfileId: "env-test" }));
 
-    expect((await runCli(["artifact", "ingest", "--root", directory, "--run-id", workspace.runId, "--type", "run-metadata", "--file", sourcePath], { cwd: directory })).exitCode).toBe(ExitCode.SUCCESS);
+    const ingested = await runCli(["artifact", "ingest", "--root", directory, "--run-id", workspace.runId, "--type", "run-metadata", "--file", sourcePath], { cwd: directory });
+    expect(ingested.exitCode).toBe(ExitCode.SUCCESS);
+    expect(ingested.stdout).toBe("");
     const valid = await runCli(["validate", "--root", directory, "--run-id", workspace.runId], { cwd: directory });
     expect(valid.exitCode).toBe(ExitCode.SUCCESS);
     expect(JSON.parse(valid.stdout)).toMatchObject({ valid: true, diagnostics: [] });
@@ -61,6 +64,10 @@ describe("CLI core", () => {
     expect(JSON.parse(unmet.stdout)).toMatchObject({ valid: false });
   });
 
+  it("documents the successful init and artifact ingest commands as intentionally silent", async () => {
+    const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("Successful `qa-skill init` and `qa-skill artifact ingest` are intentionally silent on stdout.");
+  });
   it("routes governed planning artifacts through authority validation instead of low-level registration", async () => {
     const directory = await root();
     const environmentProfile = {

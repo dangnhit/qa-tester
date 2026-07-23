@@ -70,6 +70,27 @@ GREEN evidence:
 - Protected-secret test scans every persisted file and confirms that neither trace bytes nor the resolved secret are stored; each attempt receives a trace Evidence Gap.
 - Standard demo acceptance checks raw screenshot, real annotated screenshot, trace, console, and network evidence separately for desktop and mobile, plus the owned-resource Cleanup Run.
 
+## Second re-review fix wave
+
+The remaining screenshot-safety, classification, and CLI-documentation findings were closed with a third RED/GREEN cycle.
+
+RED command:
+
+```text
+npm test -- tests/e2e/demo.test.ts tests/browser/executor.integration.test.ts tests/cli/core.test.ts
+```
+
+Initial result: 3 test files failed, with 4 failing and 15 passing tests. The failures proved that protected and non-protected secret-resolved sessions still produced screenshot files, unbound failures were classified as `TEST_DEFECT`, and README still claimed every command emitted JSON.
+
+GREEN evidence:
+
+- Focused set: 3 files, 19 tests passed.
+- Any session that resolves a secret now registers attempt-bound screenshot and trace Evidence Gaps when deterministic byte-level redaction cannot be proven; no PNG or trace archive is created. The screenshot rule is enforced directly at the collector boundary as well as by the workflow.
+- The non-protected fixture fills a visible input with a resolved secret and scans every persisted file to prove the secret is absent.
+- Protected demo telemetry persists only when the host registers its deterministic telemetry scrubber; the resolved secret is scrubbed before registration.
+- Only failed assertions bound to approved authoritative expected results become `PRODUCT_DEFECT`; all other nonpassing attempts default to `UNDETERMINED` without an evidence-backed diagnosis.
+- README explicitly documents that successful `qa-skill init` and `qa-skill artifact ingest` are silent on stdout, with CLI tests enforcing the behavior.
+
 ## Complete verification
 
 The brief’s exact sequence completed successfully:
@@ -90,21 +111,21 @@ Results:
 - Generated-type drift check: clean.
 - TypeScript: clean.
 - ESLint: clean.
-- Full suite: 53 files, 307 tests passed.
-- Demo: two intentional failures classified as product defects; per-instance raw/annotated PNG, trace ZIP, and console/network evidence verified; owned resource cleaned in a linked run; `NOT_READY`; Full Artifact Profile valid; exit `0`.
+- Full suite: 53 files, 310 tests passed.
+- Demo: two intentional failures classified as product defects; per-instance raw/annotated PNG, trace ZIP, and console/network evidence verified for the no-secret canonical path; owned resource cleaned in a linked run; `NOT_READY`; Full Artifact Profile valid; exit `0`.
 - Build: clean.
 - `npm run scan:secrets`: passed across tracked text files including `package-lock.json`, and confirmed `qa-results/` is ignored.
 
 ## Files changed
 
 - Demo: `fixtures/demo/*`, `scripts/run-demo.ts`, `tests/e2e/demo.test.ts`, `tests/e2e/demo-resources.test.ts`
-- Runtime support: browser assertion authority binding, final attempt-bound evidence/annotation validation, trace-policy protection and Evidence Gaps, validation-aware finalization, and trusted Test Data Hook selection/cleanup lifecycle.
+- Runtime support: browser assertion authority binding and conservative fallback classification, final attempt-bound evidence/annotation validation, secret-aware screenshot/trace Evidence Gaps, explicitly registered protected-telemetry scrubbing, validation-aware finalization, and trusted Test Data Hook selection/cleanup lifecycle.
 - Examples/docs/governance: `examples/*`, `README.md`, `docs/README.vi.md`, `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, `SECURITY.md`
 - CI/tooling: `.github/workflows/ci.yml`, `scripts/check-secrets.ts`, `package.json`, `package-lock.json`, installed CLI smoke coverage, and the Unix CLI shebang.
 
 ## Deviations
 
-The task’s acceptance behavior and review exposed supporting runtime needs beyond the initial harness: canonical viewport propagation, typed authoritative expected-result binding, policy-driven trace retention, final attempt-bound annotations, protected-trace Evidence Gaps, validation-aware terminal status, and public trusted hook selection. These minimal runtime changes keep the demo on the real public QA workflow instead of fabricating artifacts.
+The task’s acceptance behavior and review exposed supporting runtime needs beyond the initial harness: canonical viewport propagation, typed authoritative expected-result binding, conservative undiagnosed-failure classification, policy-driven trace retention, final attempt-bound annotations, secret-aware screenshot/trace Evidence Gaps, registered protected-telemetry scrubbing, validation-aware terminal status, and public trusted hook selection. These minimal runtime changes keep the demo on the real public QA workflow instead of fabricating artifacts.
 
 The run manifest retains canonical evidence paths under `evidence/`. The demo additionally creates ignored human-facing projections under `demo-artifacts/<run-id>/screenshots/{raw,annotated}` and `traces/`; consumers still resolve canonical artifacts through the Run Artifact Manifest.
 

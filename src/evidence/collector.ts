@@ -70,10 +70,11 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   };
 }
 
-/** Captures a screenshot only into the supplied run workspace; protected failures produce registered Evidence Gaps before pixels persist. */
+/** Captures a screenshot only when every required mask can be proven before pixels persist; otherwise registers an Evidence Gap. */
 export async function captureEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; protectedEnvironment: boolean; redaction: Pick<RedactionPlan, "domSelectors" | "regions">; build?: string; testcaseId?: string; bugId?: string }): Promise<EvidenceCaptureResult> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
   if (!session) return registerGap(input.workspace, input.attemptId, "No active caller-owned browser evidence session is available", "screenshot capture");
+  if (session.secrets.size > 0) return registerGap(input.workspace, input.attemptId, "Screenshot pixels are unavailable after secret resolution because deterministic secret-derived masking cannot be proven", "screenshot capture");
   const plan = validateRedactionPlan({ protectedEnvironment: input.protectedEnvironment, domSelectors: input.redaction.domSelectors, regions: input.redaction.regions });
   if (!plan.safe) return registerGap(input.workspace, input.attemptId, plan.gap.reason, plan.gap.affectedClaim);
   try {

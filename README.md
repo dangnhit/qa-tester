@@ -54,11 +54,11 @@ The command exits `0` only when the intentional defect is detected as `FAILED + 
 
 ## CLI reference
 
-All commands print machine-readable JSON unless noted.
+Commands that produce output use machine-readable JSON unless noted. Successful `qa-skill init` and `qa-skill artifact ingest` are intentionally silent on stdout.
 
 | Command | Purpose |
 | --- | --- |
-| `qa-skill init` | Create minimal project config and ignore `qa-results/`. |
+| `qa-skill init` | Create minimal project config and ignore `qa-results/`; success has no stdout. |
 | `qa-skill skills list` | List the orchestrator and standalone Skill Adapters with execution kinds. |
 | `qa-skill skills install --agent <codex\|claude\|cursor> [--target project\|user]` | Install a checksummed copy of the canonical Skill Bundle. |
 | `qa-skill skills verify --agent ...` | Detect missing, modified, or unexpected installed files. |
@@ -67,7 +67,7 @@ All commands print machine-readable JSON unless noted.
 | `qa-skill runtime verify [--range <semver>]` | Verify the local runtime binding and compatibility. |
 | `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
-| `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact. |
+| `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact; success has no stdout. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
 
 Public workflow modes are `plan`, `execute`, `full`, `exploratory`, `retest`, and `regression`. `cleanup` is a linked maintenance-run profile created through the cleanup operation; it is not accepted by the public workflow runner.
@@ -135,7 +135,7 @@ The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--ta
 
 ## Evidence and redaction
 
-Evidence listeners start before the actions they observe. Protected targets persist Sanitized Raw Evidence only; annotations are derived separately. Mandatory selectors or regions are masked before screenshot bytes are registered. If safe capture cannot be proven, the runtime registers an Evidence Gap rather than unsafe pixels.
+Evidence listeners start before the actions they observe. Protected targets persist Sanitized Raw Evidence only; annotations are derived separately. Mandatory selectors or regions are masked before screenshot bytes are registered. After any secret is resolved, screenshots require provable secret-derived masking regardless of environment classification; otherwise the runtime registers an Evidence Gap without creating PNG bytes. Other unsafe captures likewise become Evidence Gaps.
 
 Known secrets are scrubbed from errors and telemetry. Never put resolved credentials, cookies, personal data, or production payloads in testcases, examples, bug reports, or logs. The checked-in `examples/` use fixed synthetic identifiers and `.test`-style data.
 

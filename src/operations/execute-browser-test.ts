@@ -135,7 +135,7 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
               && step.failedAssertion?.expectedResultId !== undefined
               && testCase.authoritativeExpectedResultIds.includes(step.failedAssertion.expectedResultId))
               ? "PRODUCT_DEFECT"
-              : "TEST_DEFECT",
+              : "UNDETERMINED",
           startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
         },
         relationships: [testCase.artifact.record.id],

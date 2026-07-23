@@ -100,6 +100,31 @@ describe("live evidence collector", () => {
     }
   });
 
+  it("registers a screenshot Evidence Gap for a non-protected active session containing a resolved visible secret", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-visible-secret-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-visible-secret", name: "Visible secret", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
+    const browser = await chromium.launch();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const attemptId = "attempt-visible-secret";
+    const secret = "visible-secret-never-in-pixels";
+    await registerAttempt(workspace, attemptId);
+    await page.setContent(`<label>Email <input value="${secret}"></label>`);
+    activeBrowserSessions.set(attemptId, { context, page, secrets: new Set([secret]), telemetry: { findings: [], responseStatuses: new Map(), networkRecords: [] } });
+    try {
+      const result = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: false, redaction: { domSelectors: [], regions: [] } });
+      expect(result).toMatchObject({ kind: "evidence-gap", gap: expect.objectContaining({ affectedClaim: "screenshot capture", reason: expect.stringMatching(/secret/i) }) });
+      const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { type: string }[] };
+      expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence")).toHaveLength(0);
+      expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence-gap")).toHaveLength(1);
+      expect(JSON.stringify(await workspace.readRegisteredArtifacts())).not.toContain(secret);
+    } finally {
+      activeBrowserSessions.delete(attemptId);
+      await context.close();
+      await browser.close();
+      await workspace.close();
+    }
+  });
   it("automatically scrubs active-session secrets from persisted console and network evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-evidence-secrets-"));
     const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-secret", name: "Secret", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });

@@ -2,7 +2,7 @@ export const evidenceModes = ["forbidden", "off", "optional", "on-failure", "alw
 export type EvidenceMode = (typeof evidenceModes)[number];
 export type EvidenceChannel = "logs" | "console" | "network" | "screenshot" | "trace" | "video";
 export type EvidencePolicyLayer = Partial<Record<EvidenceChannel, EvidenceMode>>;
-export type EvidenceRedactionPolicy = Readonly<{ protectedEnvironment?: boolean; domSelectors?: readonly string[]; regions?: readonly { x: number; y: number; width: number; height: number }[] }>;
+export type EvidenceRedactionPolicy = Readonly<{ protectedEnvironment?: boolean; domSelectors?: readonly string[]; regions?: readonly { x: number; y: number; width: number; height: number }[]; deterministicTelemetryScrubber?: boolean }>;
 export type EvidencePolicyLayers = {
   safety?: EvidencePolicyLayer;
   profile?: EvidencePolicyLayer;
