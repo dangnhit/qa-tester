@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/coverage-obligation.schema.json",
+  "title": "Coverage Obligation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "obligationId", "requirementId", "role", "behavior", "browser", "viewport", "accessibilityMethod", "risk", "required", "outcome"],
+  "properties": {
+    "artifactType": { "const": "coverage-obligation" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "obligationId": { "type": "string", "minLength": 1 },
+    "requirementId": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "behavior": { "type": "string", "minLength": 1 },
+    "browser": { "type": "string", "minLength": 1 },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "accessibilityMethod": { "type": ["string", "null"] },
+    "risk": { "enum": ["low", "medium", "high", "critical"] },
+    "required": { "type": "boolean" },
+    "outcome": { "type": "string", "minLength": 1 }
+  }
+}

@@ -10,6 +10,9 @@ export const artifactTypes = [
   "bug-report",
   "test-data-manifest",
   "qa-execution-report",
+  "requirement-analysis",
+  "coverage-obligation",
+  "test-plan",
 ] as const;
 
 export type ArtifactType = (typeof artifactTypes)[number];

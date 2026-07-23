@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/requirement-analysis.schema.json",
+  "title": "Requirement Analysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "requirementAnalysisId", "statements"],
+  "properties": {
+    "artifactType": { "const": "requirement-analysis" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "requirementAnalysisId": { "type": "string", "minLength": 1 },
+    "statements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirementId", "sourceProvenance", "normalizedText", "authority", "role", "rules", "risks", "assumptions", "openQuestions"],
+        "properties": {
+          "requirementId": { "type": "string", "minLength": 1 },
+          "sourceProvenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference"],
+            "properties": {
+              "kind": { "enum": ["user", "code", "documentation", "agent"] },
+              "reference": { "type": "string", "minLength": 1 },
+              "capturedAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "normalizedText": { "type": "string", "minLength": 1 },
+          "authority": { "enum": ["AUTHORITATIVE", "INFERRED", "ASSUMED", "CONFLICTING"] },
+          "role": { "type": "string", "minLength": 1 },
+          "rules": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "assumptions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    }
+  }
+}

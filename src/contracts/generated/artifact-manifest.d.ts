@@ -18,7 +18,10 @@ export interface RunArtifactManifest {
       | "evidence-gap"
       | "bug-report"
       | "test-data-manifest"
-      | "qa-execution-report";
+      | "qa-execution-report"
+      | "requirement-analysis"
+      | "coverage-obligation"
+      | "test-plan";
     relativePath: string;
     sha256: string;
     provenance: string;
