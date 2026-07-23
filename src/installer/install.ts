@@ -24,13 +24,24 @@ export function defaultBundleRoot(): string {
 async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }
 async function inject(options: InstallOptions, phase: FailurePhase): Promise<void> { await options.failureInjector?.(phase); }
 
-async function assertNoSymlinks(root: string): Promise<void> {
-  if (!(await exists(root))) { const parent = dirname(root); if (parent !== root) await assertNoSymlinks(parent); return; }
+async function assertNoSymlinksTree(root: string): Promise<void> {
+  if (!(await exists(root))) return;
   const stat = await lstat(root);
   if (stat.isSymbolicLink()) throw new QaSkillsError(`Skill install path contains a symlink: ${root}`, "INSTALLER_SAFETY");
   if (!stat.isDirectory()) throw new QaSkillsError(`Skill install path is not a directory: ${root}`, "INSTALLER_SAFETY");
   const { readdir } = await import("node:fs/promises");
-  for (const entry of await readdir(root, { withFileTypes: true })) if (entry.isDirectory() || entry.isSymbolicLink()) await assertNoSymlinks(join(root, entry.name));
+  for (const entry of await readdir(root, { withFileTypes: true })) if (entry.isDirectory() || entry.isSymbolicLink()) await assertNoSymlinksTree(join(root, entry.name));
+}
+
+/** Inspect only path components leading to a target, never unrelated project contents. */
+async function assertTargetComponents(path: string): Promise<void> {
+  let current = resolve(path);
+  for (let depth = 0; depth < 3; depth += 1) {
+    try { if ((await lstat(current)).isSymbolicLink()) throw new QaSkillsError(`Skill install path contains a symlink: ${current}`, "INSTALLER_SAFETY"); } catch (error: unknown) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+    const parent = dirname(current); if (parent === current) return; current = parent;
+  }
 }
 
 async function fsyncTree(root: string): Promise<void> {
@@ -40,7 +51,10 @@ async function fsyncTree(root: string): Promise<void> {
     if (entry.isDirectory()) await fsyncTree(item);
     else if (entry.isFile()) { const handle = await open(item, "r"); try { await handle.sync(); } finally { await handle.close(); } }
   }
-  const handle = await open(root, "r"); try { await handle.sync(); } finally { await handle.close(); }
+  const handle = await open(root, "r"); try { await handle.sync(); } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    if (process.platform !== "win32" || !["EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
+  } finally { await handle.close(); }
 }
 
 async function restore(root: string, previous: string | undefined, stage: string): Promise<void> {
@@ -54,7 +68,7 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
   let runtime: Awaited<ReturnType<typeof resolveCompatibleRuntime>>;
   try { runtime = await resolveCompatibleRuntime(options.projectRoot); } catch (error: unknown) { throw new QaSkillsError(error instanceof Error ? error.message : "Local qa-skill setup failed", "INSTALLER_INPUT"); }
   const sourceRoot = resolve(options.sourceRoot ?? defaultBundleRoot());
-  await assertNoSymlinks(sourceRoot); await assertNoSymlinks(root);
+  await assertNoSymlinksTree(sourceRoot); await assertTargetComponents(root); await assertNoSymlinksTree(root);
   const manifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, sourceVersion: options.sourceVersion ?? runtimeVersion });
   const paths = manifest.files.map((file) => validateRelativeFilePath(file.path));
   const contents = await Promise.all(paths.map(async (file) => ({ file, contents: await readFile(join(sourceRoot, file)) })));
@@ -62,11 +76,12 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
     for (const { file } of contents) if (await exists(join(root, file))) throw new QaSkillsError(`Refusing to overwrite unmanaged skill file: ${join(root, file)}`, "INSTALLER_SAFETY");
     if (await exists(join(root, manifestFilename))) throw new QaSkillsError(`QA skills are already installed at ${root}; use update instead`, "INSTALLER_SAFETY");
   }
-  const parent = dirname(root); await mkdir(parent, { recursive: true }); await assertNoSymlinks(parent);
+  const parent = dirname(root); await mkdir(parent, { recursive: true }); await assertTargetComponents(root);
   const stamp = `${process.pid}-${crypto.randomUUID()}`; const stage = join(parent, `.${root.split(/[\\/]/).at(-1)}.qa-skill-stage-${stamp}`); const previous = join(parent, `.${root.split(/[\\/]/).at(-1)}.qa-skill-swap-${stamp}`);
   let originalMoved = false;
   try {
     if (await exists(root)) await cp(root, stage, { recursive: true, dereference: false, errorOnExist: true }); else await mkdir(stage, { recursive: true });
+    await assertNoSymlinksTree(stage);
     await inject(options, "stage:first");
     for (const [index, item] of contents.entries()) {
       if (index === Math.floor(contents.length / 2)) await inject(options, "write:middle");

@@ -15,8 +15,10 @@ Example — full run:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
+"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
 "$QA_SKILL" artifact ingest --root qa-results --run-id RUN_ID --type requirement-analysis --file drafts/requirements.json
-"$QA_SKILL" workflow run --input inputs/full-workflow.json
+"$QA_SKILL" workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+"$QA_SKILL" workflow run --input full-workflow.json
 ```
 
 Expected full outputs include registered attempts, evidence or gaps, bug reports, a release gate, and a QA report. Example — standalone planning: use `requirement-analyzer` to draft and ingest only the analysis.

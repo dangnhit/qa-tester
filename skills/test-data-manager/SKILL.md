@@ -13,7 +13,9 @@ Example — full data-backed run:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" workflow run --input inputs/full-workflow.json
+"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
+"$QA_SKILL" workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+"$QA_SKILL" workflow run --input full-workflow.json
 ```
 
 Expected full outputs include a runtime-owned `test-data-manifest`, attempts, evidence, and report. Example — standalone: declare bindings and ingest planning drafts; do not run setup outside the workflow.

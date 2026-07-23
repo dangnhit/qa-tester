@@ -13,9 +13,11 @@ Example — standalone execution:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" workflow run --input inputs/execute-workflow.json
+"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
+"$QA_SKILL" workflow scaffold --root . --mode execute --output execute-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+"$QA_SKILL" workflow run --input execute-workflow.json
 ```
 
-Expected outputs are registered `test-result` attempts and evidence or gaps. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
+Expected outputs are registered `test-result` attempts and evidence or gaps. Example — full run: scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it.
 
 Example — full run: pass registered attempts and runtime evidence to `qa-report-generator` after `--profile full` validates.

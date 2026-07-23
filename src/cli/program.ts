@@ -8,7 +8,8 @@ import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
-import { runLocalWorkflow } from "./workflow.js";
+import { runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
+import { isRuntimeCompatible, runtimeCompatibility, runtimeVersion } from "../installer/manifest.js";
 import { isAgentName, isInstallTarget } from "../installer/agents.js";
 import { installSkills } from "../installer/install.js";
 import { uninstallSkills } from "../installer/uninstall.js";
@@ -96,9 +97,21 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     stdout += `${JSON.stringify(result)}\n`;
     if (result.leftovers.length > 0) exitCode = ExitCode.UNMET_OBLIGATIONS;
   });
-  program.command("workflow").command("run")
+  const workflowCommand = program.command("workflow");
+  workflowCommand.command("run")
     .requiredOption("--input <json>")
     .action(async (commandOptions: { input: string }) => { stdout += `${JSON.stringify(await runLocalWorkflow({ cwd: options.cwd, inputPath: commandOptions.input }))}\n`; });
+  workflowCommand.command("scaffold")
+    .requiredOption("--root <path>").requiredOption("--mode <mode>").requiredOption("--output <path>")
+    .option("--environment-file <json>").option("--source-root <path>").option("--source-run-id <id>")
+    .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string }) => {
+      stdout += `${JSON.stringify(await scaffoldWorkflowInput({ root: commandOptions.root, mode: commandOptions.mode, outputPath: commandOptions.output, ...(commandOptions.environmentFile === undefined ? {} : { environmentPath: commandOptions.environmentFile }), ...(commandOptions.sourceRoot === undefined ? {} : { sourceRoot: commandOptions.sourceRoot }), ...(commandOptions.sourceRunId === undefined ? {} : { sourceRunId: commandOptions.sourceRunId }) }))}\n`;
+    });
+  program.command("runtime").command("verify").option("--range <semver>", "compatible runtime range", runtimeCompatibility)
+    .action((commandOptions: { range: string }) => {
+      if (!isRuntimeCompatible(runtimeVersion, commandOptions.range)) throw new QaSkillsError(`Runtime ${runtimeVersion} is not compatible with ${commandOptions.range}`, "INVALID_ARTIFACT");
+      stdout += `${JSON.stringify({ executable: process.argv[1], version: runtimeVersion, range: commandOptions.range, compatible: true })}\n`;
+    });
   program.command("artifact").command("ingest")
     .requiredOption("--root <path>")
     .requiredOption("--run-id <id>")

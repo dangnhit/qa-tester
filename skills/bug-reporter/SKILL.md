@@ -13,7 +13,9 @@ Example — standalone execution outcome:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" workflow run --input inputs/full-workflow.json
+"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
+"$QA_SKILL" workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+"$QA_SKILL" workflow run --input full-workflow.json
 ```
 
-Expected outputs are runtime-owned incidents and `bug-report` artifacts only for qualifying failures. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json` to derive reports.
+Expected outputs are runtime-owned incidents and `bug-report` artifacts only for qualifying failures. Example — full run: scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it to derive reports.

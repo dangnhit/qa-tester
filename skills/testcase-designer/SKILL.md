@@ -18,4 +18,4 @@ QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(
 
 Example — standalone: ingest one approved test case and validate the `plan` profile.
 
-Example — full run: register approved cases, then run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
+Example — full run: register approved cases, scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it.

@@ -31,6 +31,7 @@ async function fixture(): Promise<{ sourceRoot: string; projectRoot: string }> {
 describe("portable skill installer", () => {
   it("installs copied files and verifies an unchanged manifest", async () => {
     const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await symlink(join(options.projectRoot, "node_modules", ".bin", "qa-skill"), join(options.projectRoot, "node_modules", ".bin", "linked-tool"));
     const installed = await installSkills(options);
     expect(installed.root).toMatch(/\.codex[\\/]skills$/);
     expect(await readFile(join(installed.root, "qa-tester", "SKILL.md"), "utf8")).toContain("name: qa-tester");

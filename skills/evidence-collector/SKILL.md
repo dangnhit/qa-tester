@@ -13,9 +13,11 @@ Example — standalone evidence capture:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" workflow run --input inputs/execute-workflow.json
+"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
+"$QA_SKILL" workflow scaffold --root . --mode execute --output execute-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
+"$QA_SKILL" workflow run --input execute-workflow.json
 ```
 
-Expected outputs are redacted evidence descriptors/binaries or `evidence-gap` artifacts. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
+Expected outputs are redacted evidence descriptors/binaries or `evidence-gap` artifacts. Example — full run: scaffold with `--mode full --source-root . --source-run-id SOURCE_RUN_ID`, then run the returned JSON.
 
 Example — full run: retain registered evidence or gaps for runtime defect and report generation after validation.

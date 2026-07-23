@@ -16,4 +16,4 @@ QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(
 "$QA_SKILL" artifact ingest --root qa-results --run-id RUN_ID --type requirement-analysis --file drafts/requirement-analysis.json
 ```
 
-Example — full run: hand the registered analysis to `testcase-designer`, then run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
+Example — full run: hand the registered analysis to `testcase-designer`, scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it.
