@@ -1,0 +1,2 @@
+export type ChangeScope = Readonly<{ id: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
+export type RegressionCase = Readonly<{ testCaseId: string; revisionId: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;

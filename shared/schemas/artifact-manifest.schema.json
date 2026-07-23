@@ -36,7 +36,10 @@
               "qa-execution-report",
               "requirement-analysis",
               "coverage-obligation",
-              "test-plan"
+              "test-plan",
+              "exploration-charter",
+              "retest-result",
+              "regression-selection"
             ]
           },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },

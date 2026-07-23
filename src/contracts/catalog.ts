@@ -21,6 +21,9 @@ import testDataManifestSchema from "../../shared/schemas/test-data-manifest.sche
 import testResultSchema from "../../shared/schemas/test-result.schema.json" with { type: "json" };
 import testPlanSchema from "../../shared/schemas/test-plan.schema.json" with { type: "json" };
 import testStepResultSchema from "../../shared/schemas/test-step-result.schema.json" with { type: "json" };
+import explorationCharterSchema from "../../shared/schemas/exploration-charter.schema.json" with { type: "json" };
+import retestResultSchema from "../../shared/schemas/retest-result.schema.json" with { type: "json" };
+import regressionSelectionSchema from "../../shared/schemas/regression-selection.schema.json" with { type: "json" };
 import type { FormatsPlugin } from "ajv-formats";
 import type { Ajv2020 as Ajv2020Instance, ValidateFunction } from "ajv/dist/2020.js";
 
@@ -44,6 +47,9 @@ const schemas: Record<ArtifactType, object> = {
   "requirement-analysis": requirementAnalysisSchema,
   "coverage-obligation": coverageObligationSchema,
   "test-plan": testPlanSchema,
+  "exploration-charter": explorationCharterSchema,
+  "retest-result": retestResultSchema,
+  "regression-selection": regressionSelectionSchema,
 };
 
 const require = createRequire(import.meta.url);

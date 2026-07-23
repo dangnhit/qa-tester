@@ -24,7 +24,10 @@ export interface RunArtifactManifest {
       | "qa-execution-report"
       | "requirement-analysis"
       | "coverage-obligation"
-      | "test-plan";
+      | "test-plan"
+      | "exploration-charter"
+      | "retest-result"
+      | "regression-selection";
     relativePath: string;
     sha256: string;
     mediaType?: string;

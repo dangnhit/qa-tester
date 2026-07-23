@@ -109,9 +109,11 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   const incidents = canonical(valuesOf("incident").map((artifact) => artifact.value), (item) => String(item.incidentId));
   const evidenceGaps = canonical(valuesOf("evidence-gap").map((artifact) => artifact.value), (item) => String(item.evidenceGapId));
   const cleanupLeaks: readonly Record<string, unknown>[] = canonical(valuesOf("cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter(record).filter((resource) => resource.status === "failed")), (item) => String(item.id));
+  const unmappedChangeRisks = canonical(valuesOf("regression-selection").flatMap((artifact) => array(artifact.value.unmappedChangeRisks).filter(record)), (item) => String(item.changeId));
   const sharedBlockers = canonical([
     ...incidents.filter((incident) => incident.kind === "ENVIRONMENT_INCIDENT").map((incident) => `Environment incident ${String(incident.incidentId)}`),
     ...cleanupLeaks.map((leak) => `Cleanup leak ${String(leak.id)}`),
+    ...unmappedChangeRisks.map((risk) => `Unmapped change risk ${String(risk.changeId)}`),
     ...validationDiagnostics.map((diagnostic) => `Validation diagnostic ${diagnostic}`),
   ], (item) => item);
   const ruleInputs = {
@@ -122,6 +124,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     incidents,
     evidenceGaps,
     cleanupLeaks,
+    unmappedChangeRisks,
     validationDiagnostics: canonical(validationDiagnostics, (item) => item),
   };
   const result = evaluateReleaseGate(ruleInputs);

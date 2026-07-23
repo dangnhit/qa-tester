@@ -6,6 +6,7 @@ import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/t
 import { validateArtifact } from "../contracts/validator.js";
 import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
+import { deriveRetestVerdict } from "../retest/verdict.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
@@ -527,14 +528,17 @@ export class RunWorkspace {
   private manifestTail: Promise<void> = Promise.resolve();
 
   private constructor(
-    public readonly root: string,
-    public readonly path: string,
-    public readonly runId: string,
-    public readonly mode: ArtifactProfileName,
+  public readonly root: string,
+  public readonly path: string,
+  public readonly runId: string,
+  public readonly mode: ArtifactProfileName,
     private metadata: WorkspaceMetadata,
     private readonly lock: RunLock | undefined,
     private readonly persistence: WorkspacePersistence,
   ) {}
+
+  /** Immutable source linkage is exposed for linked workflow validation. */
+  public get linkedRunId(): string | undefined { return this.metadata.linkedRunId; }
 
   public static async create(options: {
     root: string;
@@ -1220,6 +1224,39 @@ export class RunWorkspace {
       } catch (error: unknown) {
         throw new QaSkillsError(error instanceof Error ? error.message : "Cleanup provenance is invalid", "ARTIFACT_BINDING");
       }
+    } else if (type === "exploration-charter") {
+      if (value.runId !== this.runId || manifest.artifacts.some((artifact) => artifact.type === "exploration-charter")) {
+        throw new QaSkillsError("An exploratory run requires exactly one runtime-bound charter", "ARTIFACT_BINDING");
+      }
+    } else if (type === "regression-selection") {
+      if (value.runId !== this.runId) throw new QaSkillsError("Regression selection run ID does not match this workspace", "ARTIFACT_BINDING");
+      const cases = await this.readRegisteredValues(manifest, "test-case");
+      const decisions = [...array(value.selected), ...array(value.excluded)];
+      if (!decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId))) {
+        throw new QaSkillsError("Regression selection decisions must bind registered canonical test case revisions", "ARTIFACT_BINDING");
+      }
+      if (value.complete === true && Array.isArray(value.unmappedChangeRisks) && value.unmappedChangeRisks.length > 0) {
+        throw new QaSkillsError("Unmapped change risks prevent a complete regression claim", "ARTIFACT_BINDING");
+      }
+    } else if (type === "retest-result") {
+      if (value.runId !== this.runId || value.sourceRunId !== this.metadata.linkedRunId || typeof value.sourceRunId !== "string" || value.sourceRunId === this.runId) {
+        throw new QaSkillsError("Retest result must bind this linked immutable source run", "ARTIFACT_BINDING");
+      }
+      const source = await RunWorkspace.open(this.root, value.sourceRunId);
+      try {
+        const sourceArtifacts = await source.readRegisteredArtifacts();
+        const bug = sourceArtifacts.find((artifact) => artifact.record.id === value.sourceBugArtifactId && artifact.record.type === "bug-report");
+        if (!bug || bug.value.bugId !== value.bugId || typeof bug.value.attemptId !== "string") throw new QaSkillsError("Retest result source bug is not registered", "ARTIFACT_BINDING");
+        const original = sourceArtifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === bug.value.attemptId);
+        const attempts = await this.readRegisteredValues(manifest, "test-result");
+        const ids = Array.isArray(value.reproductionAttemptIds) ? value.reproductionAttemptIds : [];
+        const reproduced = ids.map((id) => attempts.find((attempt) => attempt.attemptId === id));
+        if (!original || reproduced.length === 0 || reproduced.some((attempt) => !attempt || attempt.testCaseId !== original.value.testCaseId || attempt.testCaseRevisionId !== original.value.testCaseRevisionId || attempt.testCaseInstanceId !== original.value.testCaseInstanceId)) {
+          throw new QaSkillsError("Retest result must use exact registered reproduction attempts", "ARTIFACT_BINDING");
+        }
+        const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: reproduced.map((attempt) => String(attempt?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) });
+        if (value.verdict !== derived.verdict) throw new QaSkillsError("Retest verdict must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
+      } finally { await source.close(); }
     }
   }
 
