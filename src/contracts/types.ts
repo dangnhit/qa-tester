@@ -9,6 +9,7 @@ export const artifactTypes = [
   "evidence-gap",
   "bug-report",
   "test-data-manifest",
+  "cleanup-run",
   "qa-execution-report",
   "requirement-analysis",
   "coverage-obligation",

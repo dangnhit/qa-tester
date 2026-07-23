@@ -10,6 +10,7 @@ import evidenceSchema from "../../shared/schemas/evidence.schema.json" with { ty
 import qaExecutionReportSchema from "../../shared/schemas/qa-execution-report.schema.json" with { type: "json" };
 import planningActionSchema from "../../shared/schemas/planning-action.schema.json" with { type: "json" };
 import coverageObligationSchema from "../../shared/schemas/coverage-obligation.schema.json" with { type: "json" };
+import cleanupRunSchema from "../../shared/schemas/cleanup-run.schema.json" with { type: "json" };
 import requirementAnalysisSchema from "../../shared/schemas/requirement-analysis.schema.json" with { type: "json" };
 import runMetadataSchema from "../../shared/schemas/run-metadata.schema.json" with { type: "json" };
 import testCaseSchema from "../../shared/schemas/test-case.schema.json" with { type: "json" };
@@ -33,6 +34,7 @@ const schemas: Record<ArtifactType, object> = {
   "evidence-gap": evidenceGapSchema,
   "bug-report": bugReportSchema,
   "test-data-manifest": testDataManifestSchema,
+  "cleanup-run": cleanupRunSchema,
   "qa-execution-report": qaExecutionReportSchema,
   "requirement-analysis": requirementAnalysisSchema,
   "coverage-obligation": coverageObligationSchema,

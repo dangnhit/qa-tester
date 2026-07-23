@@ -14,7 +14,7 @@ const requirements: Readonly<Record<ArtifactProfileName, readonly (readonly stri
   exploratory: [["run-metadata"], ["environment-profile"], ["evidence", "evidence-gap"]],
   retest: [["run-metadata"], ["environment-profile"], ["test-result"]],
   regression: [["run-metadata"], ["environment-profile"], ["test-case"], ["test-result"]],
-  cleanup: [["run-metadata"], ["environment-profile"], ["test-data-manifest"]],
+  cleanup: [["run-metadata"], ["environment-profile"], ["cleanup-run"]],
 };
 
 export function assertArtifactProfileName(profile: string): asserts profile is ArtifactProfileName {

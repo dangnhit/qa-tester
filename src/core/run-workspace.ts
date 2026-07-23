@@ -367,6 +367,10 @@ async function inspectWorkspaceState(
         if (!Array.isArray(resources) || !resources.every((resource) => isRecord(resource) && resource.ownerRunId === expectedRunId)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Test data resource owner run does not match this workspace") || changed;
         }
+      } else if (artifact.record.type === "cleanup-run") {
+        if (value.runId !== expectedRunId || typeof value.sourceRunId !== "string" || value.sourceRunId === expectedRunId || value.sourceRunId !== metadata.linkedRunId) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Cleanup run must be linked to a distinct immutable source run") || changed;
+        }
       }
     }
   }
@@ -977,6 +981,10 @@ export class RunWorkspace {
       const resources = value.resources;
       if (!Array.isArray(resources) || !resources.every((resource) => isRecord(resource) && resource.ownerRunId === this.runId)) {
         throw new QaSkillsError("Test data resource owner run does not match this workspace", "ARTIFACT_BINDING");
+      }
+    } else if (type === "cleanup-run") {
+      if (value.runId !== this.runId || typeof value.sourceRunId !== "string" || value.sourceRunId === this.runId || value.sourceRunId !== this.metadata.linkedRunId) {
+        throw new QaSkillsError("Cleanup run must be linked to a distinct immutable source run", "ARTIFACT_BINDING");
       }
     }
   }

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/cleanup-run.schema.json",
+  "title": "Cleanup Run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "sourceRunId", "sourceTestDataManifestArtifactId", "resources"],
+  "properties": {
+    "artifactType": { "const": "cleanup-run" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "sourceRunId": { "type": "string", "minLength": 1 },
+    "sourceTestDataManifestArtifactId": { "type": "string", "minLength": 1 },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ownerRunId", "cleanupAction", "status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "ownerRunId": { "type": "string", "minLength": 1 },
+          "cleanupAction": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["cleaned", "failed"] },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}

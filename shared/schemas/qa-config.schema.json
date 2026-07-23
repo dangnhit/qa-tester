@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/qa-config.schema.json",
+  "title": "QA Skills Declarative Configuration",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "artifactDirectory": { "type": "string", "minLength": 1 },
+    "hooks": { "type": "array" },
+    "metadata": { "type": "object" }
+  }
+}
