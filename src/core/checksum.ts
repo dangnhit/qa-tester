@@ -11,3 +11,7 @@ export async function sha256(path: string): Promise<string> {
   });
   return hash.digest("hex");
 }
+
+export function sha256Text(contents: string): string {
+  return createHash("sha256").update(contents).digest("hex");
+}

@@ -1,7 +1,7 @@
 import { access, appendFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 
 import { artifactTypes, type ArtifactType } from "../contracts/types.js";
 import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact-profiles.js";
@@ -88,9 +88,12 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     if (error instanceof QaSkillsError) {
       stderr += `${error.message}\n`;
       exitCode = error.code === "LIVE_LOCK" ? ExitCode.BLOCKED : ExitCode.INVALID_INPUT;
+    } else if (error instanceof CommanderError) {
+      stderr += `${error.message}\n`;
+      exitCode = ExitCode.INVALID_INPUT;
     } else {
       stderr += `${error instanceof Error ? error.message : "Internal error"}\n`;
-      exitCode = ExitCode.INVALID_INPUT;
+      exitCode = ExitCode.ABORTED_OR_INTERNAL;
     }
   }
   return { exitCode, stdout, stderr };
