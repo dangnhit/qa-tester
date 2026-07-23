@@ -2,6 +2,7 @@ import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
 
 import type { ExecutionStatus, SideEffectClass } from "../contracts/types.js";
 import type { RegisteredWorkspaceArtifact, RunWorkspace } from "../core/run-workspace.js";
+import type { NetworkRecord } from "../evidence/redaction.js";
 
 export type SecretReference = { secretRef: string };
 export type SecretResolver = (reference: SecretReference) => Promise<string> | string;
@@ -69,6 +70,7 @@ export type TelemetryFinding = {
 export type BrowserTelemetry = {
   findings: TelemetryFinding[];
   responseStatuses: Map<string, number[]>;
+  networkRecords: NetworkRecord[];
 };
 
 export type BrowserStepResult = {
@@ -100,6 +102,8 @@ export type ActiveBrowserSession = {
   context: BrowserContext;
   page: Page;
   telemetry: BrowserTelemetry;
+  /** In-memory only; values are never included in attempts or artifacts. */
+  secrets: Set<string>;
 };
 
 type RawExecuteTestInput = {

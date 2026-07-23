@@ -24,6 +24,12 @@ export interface RunArtifactManifest {
       | "test-plan";
     relativePath: string;
     sha256: string;
+    mediaType?: string;
+    captureType?: "screenshot" | "trace" | "console" | "network" | "log";
+    dimensions?: {
+      width: number;
+      height: number;
+    };
     provenance: string;
     relationships: string[];
   }[];

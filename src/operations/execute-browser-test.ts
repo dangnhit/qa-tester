@@ -66,6 +66,7 @@ async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAt
     const value = await input.resolveSecret?.(reference);
     if (typeof value !== "string") throw new Error("Secret resolver returned a non-string value");
     secrets.add(value);
+    session.secrets.add(value);
     return value;
   };
   let priorFailed = false;
@@ -84,6 +85,7 @@ async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAt
     return { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
   } finally {
     activeBrowserSessions.delete(input.attemptId);
+    session.secrets.clear();
     await session.context.close();
   }
 }

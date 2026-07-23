@@ -25,6 +25,9 @@ export type ArtifactRecord = {
   type: ArtifactType;
   relativePath: string;
   sha256: string;
+  mediaType?: string;
+  captureType?: "screenshot" | "trace" | "console" | "network" | "log";
+  dimensions?: { width: number; height: number };
   provenance: string;
   relationships: string[];
 };
@@ -225,6 +228,7 @@ async function inspectWorkspaceState(
       invalidate(loaded, diagnostics, "CHECKSUM_MISMATCH", `Checksum mismatch for ${record.relativePath}`);
       return loaded;
     }
+    if (record.mediaType !== undefined) return loaded;
     let value: unknown;
     try {
       value = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
@@ -352,10 +356,10 @@ async function inspectWorkspaceState(
   }
 
   const registered = new Set(manifest.artifacts.map((artifact) => artifact.relativePath));
-  for (const absolutePath of await filesUnder(path, join(path, "inputs"))) {
-    const relativePath = relative(path, absolutePath);
-    if (!registered.has(relativePath)) {
-      addDiagnostic(diagnostics, { code: "ORPHAN_FILE", message: `Unregistered file ${relativePath}`, relativePath });
+  for (const directory of [join(path, "inputs"), join(path, "evidence")]) {
+    for (const absolutePath of await filesUnder(path, directory)) {
+      const relativePath = relative(path, absolutePath);
+      if (!registered.has(relativePath)) addDiagnostic(diagnostics, { code: "ORPHAN_FILE", message: `Unregistered file ${relativePath}`, relativePath });
     }
   }
   return { metadata, manifest, artifacts, diagnostics };
@@ -511,6 +515,46 @@ export class RunWorkspace {
       value: snapshot,
       relationships,
       ...(input.provenance ? { provenance: input.provenance } : {}),
+    }));
+  }
+
+  /** Atomically writes a media artifact inside the workspace and immediately records it in the authoritative manifest. */
+  public registerBinaryArtifact(input: {
+    type: "evidence";
+    filename: string;
+    contents: Uint8Array;
+    mediaType: string;
+    captureType: "screenshot" | "trace" | "console" | "network" | "log";
+    dimensions?: { width: number; height: number };
+    relationships: string[];
+    provenance?: string;
+  }): Promise<ArtifactRecord & { absolutePath: string }> {
+    try {
+      this.assertWritable();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(input.filename) || input.contents.byteLength === 0) throw new QaSkillsError("Binary artifact filename or contents are invalid", "INVALID_ARTIFACT");
+    } catch (error: unknown) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return this.trackMutation(() => this.withManifestTransaction(async () => {
+      const manifest = await this.readManifest();
+      const unknownRelationship = input.relationships.find((relationship) => !manifest.artifacts.some((artifact) => artifact.id === relationship));
+      if (unknownRelationship) throw new QaSkillsError(`Relationship ${unknownRelationship} is not registered in this workspace`, "ARTIFACT_BINDING");
+      const id = createEntityId();
+      const relativePath = `evidence/${id}-${input.filename}`;
+      const absolutePath = resolveWithin(this.path, relativePath);
+      await atomicWriteFile(this.path, absolutePath, input.contents);
+      const checksum = await sha256(absolutePath);
+      const record: ArtifactRecord = {
+        id, type: input.type, relativePath, sha256: checksum, mediaType: input.mediaType, captureType: input.captureType,
+        ...(input.dimensions === undefined ? {} : { dimensions: { ...input.dimensions } }), provenance: input.provenance ?? "runtime", relationships: [...input.relationships],
+      };
+      try {
+        await this.writeManifest({ ...manifest, artifacts: [...manifest.artifacts, record] });
+      } catch (error) {
+        await rm(absolutePath, { force: true });
+        throw error;
+      }
+      return { ...record, absolutePath };
     }));
   }
 
@@ -739,7 +783,7 @@ export class RunWorkspace {
   }
 
   private async readRegisteredValues(manifest: Manifest, type: ArtifactType): Promise<Record<string, unknown>[]> {
-    return Promise.all(manifest.artifacts.filter((artifact) => artifact.type === type).map(async (artifact) => {
+    return Promise.all(manifest.artifacts.filter((artifact) => artifact.type === type && artifact.mediaType === undefined).map(async (artifact) => {
       const path = await assertRealpathWithin(this.path, artifact.relativePath);
       if (await sha256(path) !== artifact.sha256) {
         throw new QaSkillsError(`Referenced ${type} checksum mismatch`, "ARTIFACT_BINDING");
@@ -795,9 +839,9 @@ export class RunWorkspace {
         throw new QaSkillsError("Test step result references an unregistered step", "ARTIFACT_BINDING");
       }
     } else if (type === "evidence") {
-      const testResults = await this.readRegisteredValues(manifest, "test-result");
-      if (testResults.filter((result) => result.attemptId === value.attemptId).length !== 1) {
-        throw new QaSkillsError("Evidence references an unregistered or ambiguous attempt", "ARTIFACT_BINDING");
+      if (value.pendingAttempt !== true) {
+        const testResults = await this.readRegisteredValues(manifest, "test-result");
+        if (testResults.filter((result) => result.attemptId === value.attemptId).length !== 1) throw new QaSkillsError("Evidence references an unregistered or ambiguous attempt", "ARTIFACT_BINDING");
       }
     } else if (type === "bug-report") {
       const testResults = await this.readRegisteredValues(manifest, "test-result");

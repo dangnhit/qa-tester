@@ -1,122 +1,91 @@
-import { mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
-
-import { attachTelemetry } from "../browser/playwright/telemetry.js";
 import sharp from "sharp";
+
 import type { ActiveBrowserSession, TelemetryFinding } from "../browser/types.js";
+import type { RunWorkspace } from "../core/run-workspace.js";
 import { createEntityId } from "../core/ids.js";
-import { atomicWriteFile, assertPathWithin } from "../core/fs.js";
 import { activeBrowserSessions } from "../operations/execute-browser-test.js";
-import { evidenceFilename, createEvidenceManifest, type EvidenceManifest, type EvidenceProvenance } from "./manifest.js";
-import { redactText, validateRedactionPlan, type CssBox, type EvidenceGap, type RedactionPlan } from "./redaction.js";
+import { evidenceFilename, type EvidenceProvenance } from "./manifest.js";
+import { redactNetworkRecord, redactText, validateRedactionPlan, type CssBox, type EvidenceGap, type RedactionPlan } from "./redaction.js";
 
-type GapResult = { kind: "evidence-gap"; gap: EvidenceGap };
-export type CapturedEvidence = { kind: "evidence"; evidenceId: string; rawPath: string; manifest: EvidenceManifest };
+type GapResult = { kind: "evidence-gap"; gap: EvidenceGap; descriptorArtifactId: string };
+export type CapturedEvidence = { kind: "evidence"; evidenceId: string; rawPath: string; binaryArtifactId: string; descriptorArtifactId: string };
 export type EvidenceCaptureResult = CapturedEvidence | GapResult;
-export type EvidenceAttachment = { kind: "evidence"; telemetry: readonly TelemetryFinding[] } | GapResult;
-type PageRuntime = {
-  document: {
-    createElement(tag: string): { id: string; setAttribute(name: string, value: string): void; style: Record<string, string>; dataset: Record<string, string> };
-    documentElement: { appendChild(node: unknown): void };
-    getElementById(id: string): { remove(): void } | null;
-  };
-  scrollX: number;
-  scrollY: number;
-  innerWidth: number;
-  innerHeight: number;
-  location: { href: string };
-};
-
-function evidenceGap(runId: string, reason: string, affectedClaim: string): GapResult {
-  return { kind: "evidence-gap", gap: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId, reason, affectedClaim } };
-}
+export type EvidenceAttachment = { kind: "evidence"; evidenceId: string; binaryArtifactId: string; descriptorArtifactId: string; telemetry: readonly TelemetryFinding[] } | GapResult;
+type PageRuntime = { document: { createElement(tag: string): { id: string; setAttribute(name: string, value: string): void; style: Record<string, string> }; documentElement: { appendChild(node: unknown): void }; getElementById(id: string): { remove(): void } | null }; scrollX: number; scrollY: number; innerWidth: number; innerHeight: number; location: { href: string } };
 
 function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowserSession | undefined {
-  if (attemptId !== callerAttemptId) return undefined;
-  return activeBrowserSessions.get(attemptId);
+  return attemptId === callerAttemptId ? activeBrowserSessions.get(attemptId) : undefined;
+}
+
+async function registerGap(workspace: RunWorkspace, reason: string, affectedClaim: string): Promise<GapResult> {
+  const record = await workspace.registerArtifactValue({ type: "evidence-gap", value: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, reason, affectedClaim }, relationships: [], provenance: "runtime" });
+  return { kind: "evidence-gap", descriptorArtifactId: record.id, gap: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, reason, affectedClaim } };
 }
 
 async function applyRegionMasks(session: ActiveBrowserSession, regions: readonly CssBox[]): Promise<string[]> {
-  if (regions.length === 0) return [];
-  return session.page.evaluate((boxes) => boxes.map((box, index) => {
+  return session.page.evaluate((boxes) => boxes.map((box) => {
     const browser = globalThis as unknown as PageRuntime;
     const node = browser.document.createElement("div");
     const id = `qa-evidence-mask-${crypto.randomUUID()}`;
     node.id = id;
     node.setAttribute("aria-hidden", "true");
-    Object.assign(node.style, {
-      position: "fixed", left: `${box.x - browser.scrollX}px`, top: `${box.y - browser.scrollY}px`, width: `${box.width}px`, height: `${box.height}px`,
-      background: "#000", zIndex: "2147483647", pointerEvents: "none", display: "block", opacity: "1",
-    });
-    node.dataset.index = String(index);
+    Object.assign(node.style, { position: "fixed", left: `${box.x - browser.scrollX}px`, top: `${box.y - browser.scrollY}px`, width: `${box.width}px`, height: `${box.height}px`, background: "#000", zIndex: "2147483647", pointerEvents: "none", display: "block", opacity: "1" });
     browser.document.documentElement.appendChild(node);
     return id;
   }), regions);
 }
 
 async function removeRegionMasks(session: ActiveBrowserSession, ids: readonly string[]): Promise<void> {
-  await session.page.evaluate((maskIds) => {
-    const browser = globalThis as unknown as PageRuntime;
-    for (const id of maskIds) browser.document.getElementById(id)?.remove();
-  }, [...ids]);
+  await session.page.evaluate((maskIds) => { const browser = globalThis as unknown as PageRuntime; for (const id of maskIds) browser.document.getElementById(id)?.remove(); }, [...ids]);
 }
 
-/** Registers telemetry before actions for direct collector users. Task 4 sessions already do this at creation time. */
-export function beginEvidenceCapture(session: ActiveBrowserSession): void {
-  if (session.telemetry.findings.length === 0 && session.telemetry.responseStatuses.size === 0) attachTelemetry(session.page);
+function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemptId: string; binary: { id: string; relativePath: string; sha256: string; mediaType?: string }; provenance: EvidenceProvenance }) {
+  const dimensions = input.provenance.dimensions;
+  if (!dimensions || !input.binary.mediaType) throw new Error("Evidence dimensions and media type are required");
+  return {
+    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, pendingAttempt: true,
+    kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id],
+    provenance: { captureType: input.provenance.captureType, dimensions, dpr: input.provenance.dpr, scroll: input.provenance.scroll, clip: input.provenance.clip, ...(input.provenance.cssBoxes === undefined ? {} : { cssBoxes: input.provenance.cssBoxes }), ...(input.provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: input.provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }), url: input.provenance.url, viewport: input.provenance.viewport, browser: input.provenance.browser, build: input.provenance.build, capturedAt: input.provenance.capturedAt, ...(input.provenance.testcaseId === undefined ? {} : { testcaseId: input.provenance.testcaseId }), ...(input.provenance.bugId === undefined ? {} : { bugId: input.provenance.bugId }) },
+  };
 }
 
-/** Captures a masked screenshot into a sanitized raw file; a failure to mask produces an Evidence Gap. */
-export async function captureEvidence(input: { attemptId: string; callerAttemptId: string; runId: string; outputDirectory: string; workspaceRoot?: string; protectedEnvironment: boolean; redaction: Pick<RedactionPlan, "domSelectors" | "regions">; build?: string }): Promise<EvidenceCaptureResult> {
+/** Captures a screenshot only into the supplied run workspace; protected failures produce registered Evidence Gaps before pixels persist. */
+export async function captureEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; protectedEnvironment: boolean; redaction: Pick<RedactionPlan, "domSelectors" | "regions">; build?: string; testcaseId?: string; bugId?: string }): Promise<EvidenceCaptureResult> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
-  if (session === undefined) return evidenceGap(input.runId, "No active caller-owned browser evidence session is available", "screenshot capture");
-  const plan: RedactionPlan = { protectedEnvironment: input.protectedEnvironment, domSelectors: input.redaction.domSelectors, regions: input.redaction.regions };
-  const planCheck = validateRedactionPlan(plan);
-  if (!planCheck.safe) return evidenceGap(input.runId, planCheck.gap.reason, planCheck.gap.affectedClaim);
+  if (!session) return registerGap(input.workspace, "No active caller-owned browser evidence session is available", "screenshot capture");
+  const plan = validateRedactionPlan({ protectedEnvironment: input.protectedEnvironment, domSelectors: input.redaction.domSelectors, regions: input.redaction.regions });
+  if (!plan.safe) return registerGap(input.workspace, plan.gap.reason, plan.gap.affectedClaim);
   try {
-    if (input.workspaceRoot !== undefined) await assertPathWithin(input.workspaceRoot, input.outputDirectory);
-    await mkdir(input.outputDirectory, { recursive: true });
-    if (input.workspaceRoot !== undefined) await assertPathWithin(input.workspaceRoot, input.outputDirectory);
-    const selectors = input.protectedEnvironment ? input.redaction.domSelectors : [];
-    const mask = selectors.map((selector) => session.page.locator(selector));
-    // Count first: an invalid selector must fail before a byte reaches disk.
-    for (const locator of mask) await locator.count();
-    const ids = input.protectedEnvironment ? await applyRegionMasks(session, input.redaction.regions) : [];
-    const evidenceId = createEntityId();
-    const rawPath = join(resolve(input.outputDirectory), evidenceFilename(evidenceId, "sanitized-raw"));
-    if (input.workspaceRoot !== undefined) await assertPathWithin(input.workspaceRoot, rawPath);
+    const masks = input.protectedEnvironment ? input.redaction.domSelectors.map((selector) => session.page.locator(selector)) : [];
+    for (const mask of masks) if (await mask.count() === 0) return registerGap(input.workspace, "Configured redaction selector did not match an element", "screenshot capture");
+    const regionIds = input.protectedEnvironment ? await applyRegionMasks(session, input.redaction.regions) : [];
     try {
-      const bytes = await session.page.screenshot({ type: "png", ...(mask.length === 0 ? {} : { mask }) });
-      await atomicWriteFile(input.workspaceRoot ?? input.outputDirectory, rawPath, bytes);
-      const [metadata, pageMetrics] = await Promise.all([
-        sharp(bytes).metadata(),
-        session.page.evaluate(() => {
-          const browser = globalThis as unknown as PageRuntime;
-          return { scroll: { x: browser.scrollX, y: browser.scrollY }, url: browser.location.href, viewport: { width: browser.innerWidth, height: browser.innerHeight } };
-        }),
-      ]);
-      if (metadata.width === undefined || metadata.height === undefined || pageMetrics.viewport.width <= 0 || pageMetrics.viewport.height <= 0) throw new Error("Screenshot dimensions are unavailable");
-      const provenance: EvidenceProvenance = {
-        evidenceId, runId: input.runId, attemptId: input.attemptId, captureType: "screenshot",
-        dpr: metadata.width / pageMetrics.viewport.width, scroll: pageMetrics.scroll,
-        clip: { x: 0, y: 0, width: pageMetrics.viewport.width, height: pageMetrics.viewport.height },
-        url: pageMetrics.url, viewport: pageMetrics.viewport, browser: "playwright", build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height },
-      };
-      const manifest = await createEvidenceManifest({ ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }), rawPath, provenance });
-      return { kind: "evidence", evidenceId, rawPath, manifest };
-    } finally {
-      await removeRegionMasks(session, ids);
-    }
+      const bytes = await session.page.screenshot({ type: "png", ...(masks.length === 0 ? {} : { mask: masks }) });
+      const [metadata, metrics] = await Promise.all([sharp(bytes).metadata(), session.page.evaluate(() => { const browser = globalThis as unknown as PageRuntime; return { scroll: { x: browser.scrollX, y: browser.scrollY }, url: browser.location.href, viewport: { width: browser.innerWidth, height: browser.innerHeight } }; })]);
+      if (!metadata.width || !metadata.height || metrics.viewport.width <= 0 || metrics.viewport.height <= 0) return registerGap(input.workspace, "Screenshot dimensions could not be verified", "screenshot capture");
+      const evidenceId = createEntityId();
+      const binary = await input.workspace.registerBinaryArtifact({ type: "evidence", filename: evidenceFilename(evidenceId, "sanitized-raw"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: metadata.width, height: metadata.height }, relationships: [], provenance: "runtime" });
+      const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: "playwright", build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+      const registered = await input.workspace.registerArtifactValue({ type: "evidence", value: descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary, provenance }), relationships: [binary.id], provenance: "runtime" });
+      return { kind: "evidence", evidenceId, rawPath: binary.absolutePath, binaryArtifactId: binary.id, descriptorArtifactId: registered.id };
+    } finally { await removeRegionMasks(session, regionIds); }
   } catch (error) {
-    return evidenceGap(input.runId, `Capture-time redaction could not be completed safely: ${error instanceof Error ? error.message : String(error)}`, "screenshot capture");
+    return registerGap(input.workspace, `Capture-time redaction could not be completed safely: ${error instanceof Error ? error.message : String(error)}`, "screenshot capture");
   }
 }
 
-/** Returns only scrubbed telemetry from an active session; it never reconstructs closed-session observations. */
-export function attachEvidence(input: { attemptId: string; callerAttemptId: string; runId: string; telemetry: "console" | "network" | "log"; secrets?: readonly string[] }): EvidenceAttachment {
+/** Persists only scrubbed live telemetry into the supplied workspace; closed sessions are never reconstructed. */
+export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
-  if (session === undefined) return evidenceGap(input.runId, "An active caller-owned browser evidence session is required; closed-session telemetry cannot be reconstructed", `${input.telemetry} telemetry`);
-  const secrets = input.secrets ?? [];
-  const telemetry = session.telemetry.findings.filter((finding) => input.telemetry === "log" || finding.kind === input.telemetry).map((finding) => ({ ...finding, message: redactText(finding.message, secrets), ...(finding.url === undefined ? {} : { url: redactText(finding.url, secrets) }) }));
-  return { kind: "evidence", telemetry };
+  if (!session) return registerGap(input.workspace, "An active caller-owned browser evidence session is required; closed-session telemetry cannot be reconstructed", `${input.telemetry} telemetry`);
+  const secrets = [...session.secrets];
+  const findings = session.telemetry.findings.filter((finding) => input.telemetry === "log" || finding.kind === input.telemetry).map((finding) => ({ ...finding, message: redactText(finding.message, secrets), ...(finding.url === undefined ? {} : { url: redactText(finding.url, secrets) }) }));
+  const payload = input.telemetry === "network" ? { findings, records: session.telemetry.networkRecords.map((record) => redactNetworkRecord(record, secrets)) } : { findings };
+  const evidenceId = createEntityId();
+  const bytes = Buffer.from(`${JSON.stringify(payload)}\n`);
+  const binary = await input.workspace.registerBinaryArtifact({ type: "evidence", filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry, relationships: [], provenance: "runtime" });
+  const now = new Date().toISOString();
+  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "playwright", build: "unknown", capturedAt: now, dimensions: { width: 1, height: 1 }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+  const registered = await input.workspace.registerArtifactValue({ type: "evidence", value: descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binary, provenance }), relationships: [binary.id], provenance: "runtime" });
+  return { kind: "evidence", evidenceId, binaryArtifactId: binary.id, descriptorArtifactId: registered.id, telemetry: findings };
 }

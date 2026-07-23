@@ -38,6 +38,14 @@
           },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
           "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "mediaType": { "type": "string", "minLength": 1 },
+          "captureType": { "enum": ["screenshot", "trace", "console", "network", "log"] },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["width", "height"],
+            "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } }
+          },
           "provenance": { "type": "string", "minLength": 1 },
           "relationships": { "type": "array", "items": { "type": "string", "minLength": 1 } }
         }

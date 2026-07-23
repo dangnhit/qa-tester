@@ -4,7 +4,7 @@
   "title": "Evidence Item",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "kind", "capturedAt", "sha256", "relativePath"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "provenance"],
   "properties": {
     "artifactType": { "const": "evidence" },
     "schemaVersion": { "const": "1.0.0" },
@@ -15,6 +15,36 @@
     "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "evidence-gap"] },
     "capturedAt": { "type": "string", "format": "date-time" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" }
+    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
+    "mediaType": { "type": "string", "minLength": 1 },
+    "binaryArtifactIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "pendingAttempt": { "type": "boolean" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["captureType", "dimensions", "dpr", "scroll", "clip", "url", "viewport", "browser", "build", "capturedAt"],
+      "properties": {
+        "captureType": { "enum": ["screenshot", "trace", "console", "network", "log"] },
+        "dimensions": { "$ref": "#/$defs/viewport" },
+        "dpr": { "type": "number", "exclusiveMinimum": 0 },
+        "scroll": { "$ref": "#/$defs/point" },
+        "clip": { "$ref": "#/$defs/box" },
+        "cssBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
+        "pixelBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
+        "locator": { "type": "string" },
+        "url": { "type": "string" },
+        "viewport": { "$ref": "#/$defs/viewport" },
+        "browser": { "type": "string", "minLength": 1 },
+        "build": { "type": "string", "minLength": 1 },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "testcaseId": { "type": "string" },
+        "bugId": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 } } },
+    "box": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } },
+    "viewport": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } } }
   }
 }

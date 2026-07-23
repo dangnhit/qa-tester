@@ -9,7 +9,7 @@ export async function createBrowserAttemptSession(browser: Browser, testCase: Br
   try {
     const page = await context.newPage();
     const telemetry = attachTelemetry(page);
-    return { context, page, telemetry };
+    return { context, page, telemetry, secrets: new Set() };
   } catch (error) {
     await context.close();
     throw error;
