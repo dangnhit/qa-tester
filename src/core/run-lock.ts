@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { QaSkillsError } from "./errors.js";
@@ -10,6 +10,8 @@ export interface RunLock {
   release(): Promise<void>;
 }
 
+const localRecoveryTails = new Map<string, Promise<void>>();
+
 function isLivePid(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -19,110 +21,199 @@ function isLivePid(pid: number): boolean {
   }
 }
 
+function isLockRecord(value: unknown): value is LockRecord {
+  return typeof value === "object"
+    && value !== null
+    && "pid" in value
+    && typeof value.pid === "number"
+    && Number.isInteger(value.pid)
+    && "createdAt" in value
+    && typeof value.createdAt === "string";
+}
+
 async function readRecord(path: string): Promise<LockRecord | undefined> {
   try {
-    return JSON.parse(await readFile(path, "utf8")) as LockRecord;
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    if (!isLockRecord(value)) throw new SyntaxError("Malformed run lock");
+    return value;
   } catch (error: unknown) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-async function acquireRecoveryLease(path: string, reclaimPath: string, record: LockRecord): Promise<() => Promise<void>> {
-  try {
-    await writeFile(path, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-  } catch (error: unknown) {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-    const existing = await readRecord(path);
-    if (!existing?.token || isLivePid(existing.pid)) throw new QaSkillsError("Run lock recovery is already owned", "LIVE_LOCK");
-    try {
-      await mkdir(reclaimPath);
-    } catch (claimError: unknown) {
-      if (claimError instanceof Error && "code" in claimError && claimError.code === "EEXIST") {
-        throw new QaSkillsError("Run lock recovery takeover is already owned", "LIVE_LOCK");
-      }
-      throw claimError;
-    }
-    try {
-      const current = await readRecord(path);
-      if (!current || current.token !== existing.token || isLivePid(current.pid)) {
-        throw new QaSkillsError("Run lock recovery ownership changed", "LIVE_LOCK");
-      }
-      await rm(path);
-      try {
-        await writeFile(path, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-      } catch (writeError: unknown) {
-        if (writeError instanceof Error && "code" in writeError && writeError.code === "EEXIST") {
-          throw new QaSkillsError("Run lock recovery was acquired by another owner", "LIVE_LOCK");
-        }
-        throw writeError;
-      }
-    } finally {
-      await rm(reclaimPath, { recursive: true, force: true });
-    }
-  }
-
-  return async () => {
-    const current = await readRecord(path);
-    if (current?.token === record.token) await rm(path, { force: true });
-  };
+function liveLock(): QaSkillsError {
+  return new QaSkillsError("Run has a live lock", "LIVE_LOCK");
 }
 
-export async function acquireRunLock(root: string, options: { pid?: number; now?: () => Date } = {}): Promise<RunLock> {
+async function withLocalRecovery<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const previous = localRecoveryTails.get(root) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => gate);
+  localRecoveryTails.set(root, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release?.();
+    if (localRecoveryTails.get(root) === tail) localRecoveryTails.delete(root);
+  }
+}
+
+async function collectConcurrentClaims(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 10);
+  });
+}
+
+async function acquireRecoveryClaim(root: string, token: string): Promise<() => Promise<void>> {
+  const claimsPath = join(root, ".run.lock.claims");
+  const claimPath = join(claimsPath, `${token}.json`);
+  await assertPathWithin(root, claimsPath);
+  await assertPathWithin(root, claimPath);
+  await mkdir(claimsPath, { recursive: true, mode: 0o700 });
+  await writeFile(claimPath, JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    token,
+  }), { flag: "wx", mode: 0o600 });
+
+  const release = async (): Promise<void> => {
+    await rm(claimPath, { force: true });
+  };
+  try {
+    // Give claims that observed the same stale lock a chance to enter the
+    // deterministic election before any contender moves the shared lock.
+    await collectConcurrentClaims();
+    const activeTokens: string[] = [];
+    for (const entry of await readdir(claimsPath)) {
+      const candidatePath = join(claimsPath, entry);
+      await assertPathWithin(root, candidatePath);
+      let candidate: LockRecord | undefined;
+      try {
+        candidate = await readRecord(candidatePath);
+      } catch {
+        await rm(candidatePath, { force: true });
+        continue;
+      }
+      if (!candidate?.token || !isLivePid(candidate.pid)) {
+        await rm(candidatePath, { force: true });
+        continue;
+      }
+      activeTokens.push(candidate.token);
+    }
+    activeTokens.sort();
+    if (activeTokens[0] !== token) throw liveLock();
+    return release;
+  } catch (error: unknown) {
+    await release();
+    throw error;
+  }
+}
+
+export async function acquireRunLock(
+  root: string,
+  options: { pid?: number; now?: () => Date } = {},
+): Promise<RunLock> {
   const path = join(root, ".run.lock");
-  const recoveryPath = join(root, ".run.lock.recovery");
-  const recoveryReclaimPath = join(root, ".run.lock.recovery.reclaim");
   await assertPathWithin(root, path);
-  await assertPathWithin(root, recoveryPath);
-  await assertPathWithin(root, recoveryReclaimPath);
   const record: LockRecord = {
     pid: options.pid ?? process.pid,
     createdAt: (options.now ?? (() => new Date()))().toISOString(),
     token: crypto.randomUUID(),
   };
-  try {
-    await writeFile(path, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-  } catch (error: unknown) {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+  const contents = JSON.stringify(record);
+
+  for (;;) {
+    try {
+      await writeFile(path, contents, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error: unknown) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
+
     let existing: LockRecord | undefined;
     try {
-      existing = JSON.parse(await readFile(path, "utf8")) as LockRecord;
+      existing = await readRecord(path);
     } catch {
-      // An unreadable lock is not trustworthy and is treated as stale.
+      // Malformed lock data cannot establish live ownership and is reclaimed.
     }
-    if (existing && isLivePid(existing.pid)) throw new QaSkillsError("Run has a live lock", "LIVE_LOCK");
-    const releaseRecovery = await acquireRecoveryLease(recoveryPath, recoveryReclaimPath, record);
-    try {
+    if (existing && isLivePid(existing.pid)) throw liveLock();
+
+    await withLocalRecovery(root, async () => {
       let current: LockRecord | undefined;
       try {
-        current = JSON.parse(await readFile(path, "utf8")) as LockRecord;
-      } catch (readError: unknown) {
-        if (!(readError instanceof Error && "code" in readError && readError.code === "ENOENT")) throw readError;
+        current = await readRecord(path);
+      } catch {
+        // Malformed lock data remains eligible for quarantine.
       }
-      if (current && isLivePid(current.pid)) throw new QaSkillsError("Run has a live lock", "LIVE_LOCK");
-      await rm(path, { force: true });
+      if (current && isLivePid(current.pid)) throw liveLock();
+
+      const releaseClaim = await acquireRecoveryClaim(root, record.token as string);
       try {
-        await writeFile(path, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-      } catch (writeError: unknown) {
-        if (writeError instanceof Error && "code" in writeError && writeError.code === "EEXIST") {
-          throw new QaSkillsError("Run lock was acquired by another owner", "LIVE_LOCK");
+        try {
+          current = await readRecord(path);
+        } catch {
+          current = undefined;
         }
-        throw writeError;
+        if (current && isLivePid(current.pid)) throw liveLock();
+        const quarantinePath = join(root, `.run.lock.stale-${crypto.randomUUID()}`);
+        await assertPathWithin(root, quarantinePath);
+        let quarantined = false;
+        try {
+          await rename(path, quarantinePath);
+          quarantined = true;
+        } catch (error: unknown) {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+        }
+
+        try {
+          if (quarantined) {
+            let quarantinedRecord: LockRecord | undefined;
+            try {
+              quarantinedRecord = await readRecord(quarantinePath);
+            } catch {
+              // Malformed quarantined data is stale.
+            }
+            if (quarantinedRecord && isLivePid(quarantinedRecord.pid)) {
+              try {
+                await link(quarantinePath, path);
+              } catch (error: unknown) {
+                if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+              }
+              throw liveLock();
+            }
+          }
+          try {
+            await writeFile(path, contents, { flag: "wx", mode: 0o600 });
+          } catch (error: unknown) {
+            if (error instanceof Error && "code" in error && error.code === "EEXIST") throw liveLock();
+            throw error;
+          }
+        } finally {
+          if (quarantined) await rm(quarantinePath, { force: true });
+        }
+      } finally {
+        await releaseClaim();
       }
-    } finally {
-      await releaseRecovery();
-    }
+    });
+    break;
   }
+
   let released = false;
   return {
     async release(): Promise<void> {
-      if (!released) {
-        await assertPathWithin(root, path);
-        const current = await readRecord(path);
-        if (current && current.token !== record.token) throw new QaSkillsError("Run lock ownership changed", "LOCK_OWNERSHIP");
-        if (current) await rm(path);
-        released = true;
+      if (released) return;
+      await assertPathWithin(root, path);
+      const current = await readRecord(path);
+      if (current && current.token !== record.token) {
+        throw new QaSkillsError("Run lock ownership changed", "LOCK_OWNERSHIP");
       }
+      if (current) await rm(path);
+      released = true;
     },
   };
 }

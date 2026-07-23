@@ -18,7 +18,21 @@
         "required": ["id", "type", "relativePath", "sha256", "provenance", "relationships"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "type": { "type": "string", "minLength": 1 },
+          "type": {
+            "enum": [
+              "run-metadata",
+              "artifact-manifest",
+              "environment-profile",
+              "test-case",
+              "test-step-result",
+              "test-result",
+              "evidence",
+              "evidence-gap",
+              "bug-report",
+              "test-data-manifest",
+              "qa-execution-report"
+            ]
+          },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
           "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "provenance": { "type": "string", "minLength": 1 },

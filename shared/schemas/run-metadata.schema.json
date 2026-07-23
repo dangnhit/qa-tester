@@ -25,17 +25,49 @@
     },
     "linkedRunId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$" }
   },
-  "if": {
-    "properties": {
-      "status": { "enum": ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"] }
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "enum": ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"] }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "finalizedProfile": true },
+        "required": ["finalizedProfile"]
+      },
+      "else": {
+        "properties": { "finalizedProfile": false }
+      }
     },
-    "required": ["status"]
-  },
-  "then": {
-    "properties": { "finalizedProfile": true },
-    "required": ["finalizedProfile"]
-  },
-  "else": {
-    "properties": { "finalizedProfile": false }
-  }
+    {
+      "if": { "properties": { "mode": { "const": "plan" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "plan" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "execute" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "execute" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "full" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "full" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "exploratory" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "exploratory" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "retest" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "retest" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "regression" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "regression" } } } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "cleanup" } }, "required": ["mode"] },
+      "then": { "properties": { "finalizedProfile": { "type": "object", "properties": { "name": { "const": "cleanup" } } } } }
+    }
+  ]
 }

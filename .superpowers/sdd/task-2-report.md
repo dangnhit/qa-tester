@@ -126,6 +126,41 @@ Test Files  3 passed (3)
 Tests       73 passed (73)
 ```
 
+### Fourth review-fix wave RED/GREEN
+
+Focused RED command:
+
+```text
+npm test -- tests/core/run-workspace.test.ts tests/core/run-lock.test.ts tests/contracts/validator.test.ts
+```
+
+The first run captured the intended fourth-wave gaps:
+
+```text
+Test Files  3 failed (3)
+Tests       19 failed | 72 passed (91)
+Errors      2 expected race-related unhandled rejections
+```
+
+The RED failures demonstrated:
+
+- Concurrent registrations could overwrite one another's manifest updates and leave orphan files.
+- `close()` released the run lock before an already-started registration settled.
+- Finalization did not synchronously exclude late writers or drain registrations that had already entered the workspace.
+- Metadata transition failures mutated in-memory state before durable persistence and could strand a run in `FINALIZING`.
+- Only success/failure-derived terminal states were reachable; explicit `BLOCKED` and `ABORTED` outcomes were absent.
+- Manifest records accepted ungoverned type labels, and persisted payloads were not revalidated against declared types, relationships, or semantic references.
+- Terminal finalized profile names could disagree with the run mode.
+- Test results did not bind to an exact test-case revision, and duplicate attempt definitions were accepted.
+- Malformed or abandoned singleton recovery state could deadlock stale-lock takeover.
+
+After implementing serialized manifest transactions, the synchronous finalization barrier, operation draining, copy-on-write transition persistence, deep persisted inspection, revision/attempt binding, and quarantine-based stale takeover, the same focused command passed:
+
+```text
+Test Files  3 passed (3)
+Tests       91 passed (91)
+```
+
 ## Verification
 
 All commands exited successfully:
@@ -143,8 +178,10 @@ Final full-suite result:
 
 ```text
 Test Files  7 passed (7)
-Tests       91 passed (91)
+Tests       109 passed (109)
 ```
+
+A separate stale-lock stress audit completed 100 iterations with 10 concurrent contenders per iteration and observed exactly one owner in every iteration.
 
 ## Delivered
 
@@ -167,9 +204,17 @@ Tests       91 passed (91)
 - Owner-identified stale recovery leases and retryable ownership-checked release.
 - Conditional terminal-only `finalizedProfile` schema enforcement.
 - Semantic payload reference validation for test cases, attempts, steps, evidence, and test-data ownership.
+- Serialized manifest read/modify/write transactions with a stable finalization artifact set.
+- Synchronous close/finalize admission barriers that drain already-started mutations before releasing or auditing.
+- Copy-on-write metadata transitions with retryable `FINALIZING` and terminal persistence failures.
+- Deep persisted artifact validation for declared type, checksum, relationship, run/environment binding, attempt identity, and exact test-case revision.
+- Schema-enforced governed manifest types and terminal finalized-profile/mode coherence.
+- Explicit, validated terminal paths for `COMPLETED`, `COMPLETED_WITH_FAILURES`, `BLOCKED`, and `ABORTED`.
+- Unique quarantine-based stale-lock recovery that is independent of abandoned singleton recovery files.
 
 ## Files changed
 
+- `.superpowers/sdd/task-2-report.md`
 - `src/core/fs.ts`
 - `src/core/checksum.ts`
 - `src/core/run-workspace.ts`
@@ -183,14 +228,29 @@ Tests       91 passed (91)
 - `src/cli/index.ts`
 - `scripts/create-run.ts`
 - `scripts/validate-artifacts.ts`
+- `shared/schemas/artifact-manifest.schema.json`
+- `shared/schemas/evidence-gap.schema.json`
+- `shared/schemas/run-metadata.schema.json`
+- `shared/schemas/test-result.schema.json`
+- `src/contracts/catalog.ts`
+- `src/contracts/generated/artifact-manifest.d.ts`
+- `src/contracts/generated/evidence-gap.d.ts`
+- `src/contracts/generated/run-metadata.d.ts`
+- `src/contracts/generated/test-result.d.ts`
+- `src/contracts/types.ts`
 - `tests/core/run-workspace.test.ts`
 - `tests/core/run-lock.test.ts`
 - `tests/core/artifact-profiles.test.ts`
 - `tests/cli/core.test.ts`
+- `tests/contracts/validator.test.ts`
 
-## Commit
+## Commits
 
-`7497d06d340043f654eda8df80123d61a4127822` — `feat: add immutable QA run workspaces`
+- `7497d06d340043f654eda8df80123d61a4127822` — `feat: add immutable QA run workspaces`
+- `dc722e3` — `fix: address task 2 review findings`
+- `08e9fe1` — `fix: close task 2 lifecycle safety gaps`
+- `62d2be3` — `fix: enforce task 2 workspace invariants`
+- Fourth review-fix implementation and this report update — current commit
 
 ## Residual concerns
 

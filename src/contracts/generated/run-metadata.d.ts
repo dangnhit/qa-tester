@@ -1,6 +1,8 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export interface QARunMetadata {
+export type QARunMetadata = {
+  [k: string]: unknown | undefined;
+} & {
   artifactType: "run-metadata";
   schemaVersion: "1.0.0";
   producerVersion: string;
@@ -14,4 +16,4 @@ export interface QARunMetadata {
     version: "1.0.0";
   };
   linkedRunId?: string;
-}
+};

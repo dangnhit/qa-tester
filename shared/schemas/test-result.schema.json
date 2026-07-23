@@ -4,7 +4,7 @@
   "title": "Test Result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "status", "failureClassification", "startedAt", "finishedAt"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "testCaseRevisionId", "status", "failureClassification", "startedAt", "finishedAt"],
   "properties": {
     "artifactType": { "const": "test-result" },
     "schemaVersion": { "const": "1.0.0" },
@@ -12,6 +12,7 @@
     "attemptId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
     "testCaseId": { "type": "string", "minLength": 1 },
+    "testCaseRevisionId": { "type": "string", "minLength": 1 },
     "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
     "failureClassification": { "enum": ["PRODUCT_DEFECT", "TEST_DEFECT", "ENVIRONMENT_DEFECT", "UNDETERMINED", "NONE"] },
     "startedAt": { "type": "string", "format": "date-time" },

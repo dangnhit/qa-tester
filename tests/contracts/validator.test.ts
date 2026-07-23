@@ -76,6 +76,7 @@ const otherArtifactContracts = [
       attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
       testCaseId: "TC-1",
+      testCaseRevisionId: "REV-1",
       status: "PASSED",
       failureClassification: "NONE",
       startedAt: "2026-07-23T12:34:56.000Z",
@@ -183,6 +184,31 @@ describe("validateArtifact", () => {
     expect(validateArtifact("run-metadata", { ...validRun, status: "FINALIZING", finalizedProfile }).valid).toBe(false);
     expect(validateArtifact("run-metadata", { ...validRun, status: "COMPLETED" }).valid).toBe(false);
     expect(validateArtifact("run-metadata", { ...validRun, status: "COMPLETED", finalizedProfile }).valid).toBe(true);
+  });
+
+  it("requires a terminal finalized profile name to equal the run mode", () => {
+    expect(validateArtifact("run-metadata", {
+      ...validRun,
+      status: "COMPLETED",
+      finalizedProfile: { name: "plan", version: "1.0.0" },
+    }).valid).toBe(false);
+  });
+
+  it("rejects ungoverned artifact types in manifests", () => {
+    expect(validateArtifact("artifact-manifest", {
+      artifactType: "artifact-manifest",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: validRun.runId,
+      artifacts: [{
+        id: "artifact-1",
+        type: "unknown-type",
+        relativePath: "inputs/unknown.json",
+        sha256: "a".repeat(64),
+        provenance: "agent-draft",
+        relationships: [],
+      }],
+    }).valid).toBe(false);
   });
 
   describe("the remaining canonical schemas", () => {

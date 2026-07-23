@@ -66,6 +66,36 @@ describe("run locks", () => {
     await owners[0]?.value.release();
   });
 
+  it("ignores abandoned singleton recovery state during stale-lock takeover", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-quarantine-"));
+    roots.push(root);
+    await writeFile(join(root, ".run.lock"), JSON.stringify({
+      pid: 999_999_999,
+      createdAt: "2026-07-23T12:00:00.000Z",
+      token: "stale-main",
+    }));
+    await writeFile(join(root, ".run.lock.recovery"), "{");
+    await writeFile(join(root, ".run.lock.recovery.reclaim"), "abandoned");
+
+    const attempts = await Promise.allSettled([acquireRunLock(root), acquireRunLock(root)]);
+    const owners = attempts.filter((attempt): attempt is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireRunLock>>> => attempt.status === "fulfilled");
+    expect(owners).toHaveLength(1);
+    await owners[0]?.value.release();
+  });
+
+  it("quarantines malformed stale lock data and still elects one owner", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-malformed-"));
+    roots.push(root);
+    await writeFile(join(root, ".run.lock"), "{");
+
+    const attempts = await Promise.allSettled(Array.from({ length: 10 }, () => acquireRunLock(root)));
+    const owners = attempts.filter((attempt): attempt is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireRunLock>>> => attempt.status === "fulfilled");
+    const refused = attempts.filter((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected");
+    expect(owners).toHaveLength(1);
+    expect(refused).toHaveLength(9);
+    await owners[0]?.value.release();
+  });
+
   it("can retry release after a transient ownership-read failure", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-skills-lock-release-retry-"));
     roots.push(root);

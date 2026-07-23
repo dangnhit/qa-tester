@@ -7,6 +7,7 @@ export interface TestResult {
   attemptId: string;
   runId: string;
   testCaseId: string;
+  testCaseRevisionId: string;
   status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
   failureClassification: "PRODUCT_DEFECT" | "TEST_DEFECT" | "ENVIRONMENT_DEFECT" | "UNDETERMINED" | "NONE";
   startedAt: string;
