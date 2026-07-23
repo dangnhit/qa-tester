@@ -13,7 +13,7 @@ import {
   evaluateArtifactProfile,
   type ArtifactProfileName,
 } from "./artifact-profiles.js";
-import { sha256, sha256Text } from "./checksum.js";
+import { sha256, sha256Bytes, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
 import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin } from "./fs.js";
 import { createEntityId, createRunId } from "./ids.js";
@@ -603,23 +603,18 @@ export class RunWorkspace {
       const manifest = await this.readManifest();
       const written: string[] = [];
       try {
-        const binaries = await Promise.all(input.binaries.map(async (binary) => {
+        const planned = input.binaries.map((binary) => {
           const id = createEntityId();
           const relativePath = `evidence/${id}-${binary.filename}`;
-          const absolutePath = resolveWithin(this.path, relativePath);
-          await atomicWriteFile(this.path, absolutePath, binary.contents);
-          written.push(absolutePath);
-          const record: ArtifactRecord = { id, type: "evidence", relativePath, sha256: await sha256(absolutePath), mediaType: binary.mediaType, captureType: binary.captureType, ...(binary.dimensions === undefined ? {} : { dimensions: { ...binary.dimensions } }), provenance: input.provenance ?? "runtime", relationships: [] };
-          return { ...record, absolutePath };
-        }));
-        const value = input.descriptor(binaries);
-        if (!validateArtifact("evidence", value).valid) throw new QaSkillsError("Evidence descriptor does not match its contract", "INVALID_ARTIFACT");
-        const relationships = [...(input.relationships ?? []), ...binaries.map((binary) => binary.id)];
-        const binaryRecords = binaries.map(({ absolutePath, ...record }) => {
-          void absolutePath;
-          return record;
+          return { id, type: "evidence" as const, relativePath, sha256: sha256Bytes(binary.contents), mediaType: binary.mediaType, captureType: binary.captureType, ...(binary.dimensions === undefined ? {} : { dimensions: { ...binary.dimensions } }), provenance: input.provenance ?? "runtime", relationships: [] };
         });
-        const withBinaries: Manifest = { ...manifest, artifacts: [...manifest.artifacts, ...binaryRecords] };
+        const value = input.descriptor(planned);
+        if (!validateArtifact("evidence", value).valid) throw new QaSkillsError("Evidence descriptor does not match its contract", "INVALID_ARTIFACT");
+        const relationships = [...(input.relationships ?? []), ...planned.map((binary) => binary.id)];
+        const details = isRecord(value) ? value.binaryArtifacts : undefined;
+        const ids = isRecord(value) ? value.binaryArtifactIds : undefined;
+        if (!Array.isArray(ids) || !Array.isArray(details) || ids.length !== planned.length || details.length !== planned.length || !planned.every((binary) => ids.includes(binary.id) && details.some((detail) => isRecord(detail) && detail.id === binary.id && detail.relativePath === binary.relativePath && detail.sha256 === binary.sha256 && detail.mediaType === binary.mediaType))) throw new QaSkillsError("Evidence bundle descriptor does not exactly reference its proposed binaries", "ARTIFACT_BINDING");
+        const withBinaries: Manifest = { ...manifest, artifacts: [...manifest.artifacts, ...planned] };
         await this.assertArtifactBinding("evidence", value, relationships, withBinaries);
         const canonicalContents = `${JSON.stringify(value, null, 2)}\n`;
         const checksum = sha256Text(canonicalContents);
@@ -627,6 +622,15 @@ export class RunWorkspace {
         const descriptorId = createEntityId();
         const relativePath = `inputs/${descriptorId}-evidence.json`;
         const absolutePath = resolveWithin(this.path, relativePath);
+        const binaries = await Promise.all(input.binaries.map(async (binary, index) => {
+          const record = planned[index];
+          if (!record) throw new QaSkillsError("Evidence bundle planning failed", "WRITE_FAILURE");
+          const binaryPath = resolveWithin(this.path, record.relativePath);
+          await atomicWriteFile(this.path, binaryPath, binary.contents);
+          written.push(binaryPath);
+          if (await sha256(binaryPath) !== record.sha256) throw new QaSkillsError("Atomic evidence binary write checksum mismatch", "WRITE_FAILURE");
+          return { ...record, absolutePath: binaryPath };
+        }));
         await this.persistence.writeAtomic(this.path, absolutePath, canonicalContents);
         written.push(absolutePath);
         if (await sha256(absolutePath) !== checksum) throw new QaSkillsError("Atomic evidence descriptor write checksum mismatch", "WRITE_FAILURE");

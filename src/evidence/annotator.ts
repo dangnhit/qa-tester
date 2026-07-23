@@ -36,8 +36,18 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
   if (!validateAnnotation(annotationValue).valid) throw new Error("Annotation descriptor does not match its contract");
   const bytes = await sharp(rawPath).composite([{ input: svg({ width: dimensions.width, height: dimensions.height, annotations: input.annotations, provenance }), top: 0, left: 0 }]).png().toBuffer();
   const annotationId = createEntityId();
-  const binary = await input.workspace.registerBinaryArtifact({ type: "evidence", filename: evidenceFilename(annotationId, "annotated"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions, relationships: [input.rawBinaryArtifactId], provenance: "runtime" });
-  const descriptor = await input.workspace.registerArtifactValue({ type: "evidence", value: { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: annotationId, runId: input.workspace.runId, attemptId: provenance.attemptId, pendingAttempt: true, kind: "screenshot", capturedAt: provenance.capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: "image/png", binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: "image/png" }], provenance: { captureType: "screenshot", dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip, cssBoxes: provenance.cssBoxes, pixelBoxes: provenance.normalizedPixelBoxes?.map(({ x, y, width, height }) => ({ x, y, width, height })), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) } }, relationships: [input.rawBinaryArtifactId, binary.id], provenance: "runtime" });
+  const bundle = await input.workspace.registerEvidenceBundle({
+    binaries: [{ filename: evidenceFilename(annotationId, "annotated"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions }],
+    relationships: [input.rawEvidenceDescriptorId, input.rawBinaryArtifactId],
+    provenance: "runtime",
+    descriptor: (binaries) => {
+      const binary = binaries[0];
+      if (!binary?.mediaType) throw new Error("Annotated evidence bundle is missing its binary");
+      return { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: annotationId, runId: input.workspace.runId, attemptId: provenance.attemptId, pendingAttempt: true, kind: "screenshot", capturedAt: provenance.capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "screenshot", dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip, cssBoxes: provenance.cssBoxes, pixelBoxes: provenance.normalizedPixelBoxes?.map(({ x, y, width, height }) => ({ x, y, width, height })), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) } };
+    },
+  });
+  const binary = bundle.binaries[0];
+  if (!binary) throw new Error("Annotated evidence bundle is missing its binary");
   if (provenance.normalizedPixelBoxes !== undefined) Object.freeze(provenance.normalizedPixelBoxes);
-  return { raw: { sha256: rawChecksum }, annotated: { absolutePath: binary.absolutePath, relativePath: binary.relativePath, sha256: binary.sha256, artifactId: binary.id }, descriptorArtifactId: descriptor.id, provenance: Object.freeze(provenance) };
+  return { raw: { sha256: rawChecksum }, annotated: { absolutePath: binary.absolutePath, relativePath: binary.relativePath, sha256: binary.sha256, artifactId: binary.id }, descriptorArtifactId: bundle.descriptor.id, provenance: Object.freeze(provenance) };
 }

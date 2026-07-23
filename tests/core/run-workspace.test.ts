@@ -135,6 +135,28 @@ describe("RunWorkspace", () => {
     expect(manifest.artifacts.map((artifact) => artifact.id)).toEqual(expect.arrayContaining([bundle.binaries[0]?.id, bundle.descriptor.id]));
     await workspace.close();
   });
+
+  it("rejects a malformed evidence bundle before writing any media or descriptor", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "bad.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot" }], descriptor: () => ({ artifactType: "evidence" }) })).rejects.toThrow(/descriptor|contract/i);
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
+    expect(manifest.artifacts).toHaveLength(1);
+    await expect(readdir(join(workspace.path, "evidence"))).rejects.toThrow(/ENOENT/);
+    await workspace.close();
+  });
+
+  it("rolls back evidence files when the single manifest commit fails", async () => {
+    const directory = await root();
+    const failure = failNextManifestWrite();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile, persistence: failure.persistence });
+    failure.arm();
+    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "rollback.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" } }) })).rejects.toThrow(/manifest/i);
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
+    expect(manifest.artifacts).toHaveLength(1);
+    await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
+    await workspace.close();
+  });
   it("copies validated artifacts into immutable inputs and records their checksum", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });

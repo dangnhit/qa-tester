@@ -15,3 +15,7 @@ export async function sha256(path: string): Promise<string> {
 export function sha256Text(contents: string): string {
   return createHash("sha256").update(contents).digest("hex");
 }
+
+export function sha256Bytes(contents: Uint8Array): string {
+  return createHash("sha256").update(contents).digest("hex");
+}
