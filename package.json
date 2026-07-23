@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "skills"
+  ],
   "exports": {
     ".": "./dist/src/orchestration/qa-tester.js",
     "./cli": "./dist/src/cli/index.js"

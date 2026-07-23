@@ -8,6 +8,11 @@ import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
+import { isAgentName, isInstallTarget } from "../installer/agents.js";
+import { installSkills } from "../installer/install.js";
+import { uninstallSkills } from "../installer/uninstall.js";
+import { updateSkills } from "../installer/update.js";
+import { verifySkills } from "../installer/verify.js";
 import { ExitCode, type ExitCode as ExitCodeValue } from "./exit-codes.js";
 
 export type CliResult = { exitCode: ExitCodeValue; stdout: string; stderr: string };
@@ -41,8 +46,21 @@ async function initialize(cwd: string): Promise<void> {
 const skills = [
   { name: "qa-tester", executionKind: "hybrid" },
   { name: "requirement-analyzer", executionKind: "agent-authored" },
+  { name: "testcase-designer", executionKind: "agent-authored" },
+  { name: "test-data-manager", executionKind: "runtime-backed" },
   { name: "browser-test-executor", executionKind: "runtime-backed" },
+  { name: "evidence-collector", executionKind: "runtime-backed" },
+  { name: "bug-reporter", executionKind: "runtime-backed" },
+  { name: "qa-report-generator", executionKind: "runtime-backed" },
 ] as const;
+
+type SkillCommandOptions = { agent: string; target: string; userHome?: string; force?: boolean };
+
+function installerOptions(commandOptions: SkillCommandOptions, cwd: string) {
+  if (!isAgentName(commandOptions.agent)) throw new QaSkillsError("Unsupported agent; use codex, claude, or cursor", "INVALID_ARTIFACT");
+  if (!isInstallTarget(commandOptions.target)) throw new QaSkillsError("Unsupported target; use project or user", "INVALID_ARTIFACT");
+  return { projectRoot: cwd, ...(commandOptions.userHome === undefined ? {} : { userHome: commandOptions.userHome }), agent: commandOptions.agent, target: commandOptions.target };
+}
 
 export async function runCli(argv: string[], options: CliOptions): Promise<CliResult> {
   let stdout = "";
@@ -52,7 +70,31 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   program.name("qa-skill").exitOverride();
   program.configureOutput({ writeOut: (value) => { stdout += value; }, writeErr: (value) => { stderr += value; } });
   program.command("init").action(async () => { await initialize(options.cwd); });
-  program.command("skills").command("list").action(() => { stdout += `${skills.map((skill) => JSON.stringify(skill)).join("\n")}\n`; });
+  const skillsCommand = program.command("skills");
+  skillsCommand.command("list").action(() => { stdout += `${skills.map((skill) => JSON.stringify(skill)).join("\n")}\n`; });
+  const configureSkillTarget = (command: Command, includeForce = false): Command => {
+    command.requiredOption("--agent <agent>").option("--target <scope>", "project or user", "project").option("--user-home <path>");
+    if (includeForce) command.option("--force");
+    return command;
+  };
+  configureSkillTarget(skillsCommand.command("install")).action(async (commandOptions: SkillCommandOptions) => {
+    const result = await installSkills(installerOptions(commandOptions, options.cwd));
+    stdout += `${JSON.stringify(result)}\n`;
+  });
+  configureSkillTarget(skillsCommand.command("verify")).action(async (commandOptions: SkillCommandOptions) => {
+    const result = await verifySkills(installerOptions(commandOptions, options.cwd));
+    stdout += `${JSON.stringify(result)}\n`;
+    if (result.status !== "valid") exitCode = ExitCode.UNMET_OBLIGATIONS;
+  });
+  configureSkillTarget(skillsCommand.command("update"), true).action(async (commandOptions: SkillCommandOptions) => {
+    const result = await updateSkills({ ...installerOptions(commandOptions, options.cwd), ...(commandOptions.force ? { force: true } : {}) });
+    stdout += `${JSON.stringify(result)}\n`;
+  });
+  configureSkillTarget(skillsCommand.command("uninstall")).action(async (commandOptions: SkillCommandOptions) => {
+    const result = await uninstallSkills(installerOptions(commandOptions, options.cwd));
+    stdout += `${JSON.stringify(result)}\n`;
+    if (result.leftovers.length > 0) exitCode = ExitCode.UNMET_OBLIGATIONS;
+  });
   program.command("artifact").command("ingest")
     .requiredOption("--root <path>")
     .requiredOption("--run-id <id>")
