@@ -7,10 +7,18 @@ describe("parseAuthoringDocument", () => {
     expect(parseAuthoringDocument("mode: full", "yaml")).toEqual({ mode: "full" });
   });
 
+  it("parses an object-shaped JSON authoring document", () => {
+    expect(parseAuthoringDocument('{"mode":"full"}', "json")).toEqual({ mode: "full" });
+  });
+
   it("rejects non-object roots and YAML multi-document input", () => {
     expect(() => parseAuthoringDocument("[]", "json")).toThrow(/object/i);
     expect(() => parseAuthoringDocument("mode: full\n---\nmode: plan", "yaml")).toThrow(
       /multi-document/i,
     );
+  });
+
+  it("rejects malformed JSON authoring input", () => {
+    expect(() => parseAuthoringDocument('{"mode":', "json")).toThrow(/invalid json/i);
   });
 });

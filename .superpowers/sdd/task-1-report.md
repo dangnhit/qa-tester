@@ -64,3 +64,43 @@ The schema header review also exited `0` and confirmed all 10 schemas declare Dr
 - Verified AJV is configured without coercion/default application, so validation does not mutate caller input.
 - Verified generated declarations are current and tracked by the drift check.
 - No outstanding Task 1 concerns found.
+
+## Review fix: contract coverage gap
+
+### Files changed
+
+- `tests/contracts/validator.test.ts`
+- `tests/contracts/authoring.test.ts`
+- `.superpowers/sdd/task-1-report.md`
+
+### Added coverage
+
+- Added valid-minimal, missing-required-field, and top-level additional-property rejection tests for each of the nine canonical schemas that were previously untested: artifact manifest, environment profile, test case, test step result, test result, evidence, bug report, test data manifest, and QA execution report.
+- Added invalid domain-enum tests for environment classification, side-effect class, execution status, failure classification, evidence kind, bug-report triage/severity, and release recommendation.
+- Added successful JSON object parsing and malformed JSON rejection coverage for authoring documents.
+
+### TDD / verification evidence
+
+The new tests were added before changing implementation. The first focused coverage run exited `0` immediately because the existing implementation already enforced every newly specified behavior; no production/schema change was warranted and schemas were not weakened:
+
+```text
+npm test -- tests/contracts/validator.test.ts tests/contracts/authoring.test.ts
+# 2 files passed; 42 tests passed
+```
+
+The first full verification exposed a TypeScript error in the new test fixture's union-key deletion (`TS7053` at `validator.test.ts:175`). The test declaration was minimally typed as `Record<string, unknown>`, then the focused GREEN command exited `0`:
+
+```text
+npm test -- tests/contracts/validator.test.ts tests/contracts/authoring.test.ts
+# 2 files passed; 42 tests passed
+```
+
+Final verification all exited `0` with no warnings:
+
+```text
+npm test                 # 3 files passed; 45 tests passed
+npm run typecheck
+npm run lint
+npm run check:generated
+git diff --check
+```

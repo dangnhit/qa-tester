@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { validateArtifact } from "../../src/contracts/validator.js";
+import type { ArtifactType } from "../../src/contracts/types.js";
 
 const validRun = {
   artifactType: "run-metadata",
@@ -12,6 +13,136 @@ const validRun = {
   mode: "full",
   environmentProfileId: "env-staging",
 };
+
+const otherArtifactContracts = [
+  {
+    type: "artifact-manifest",
+    requiredField: "runId",
+    valid: {
+      artifactType: "artifact-manifest",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: "20260723T123456Z-a1b2c3",
+      artifacts: [],
+    },
+  },
+  {
+    type: "environment-profile",
+    requiredField: "name",
+    valid: {
+      artifactType: "environment-profile",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      environmentProfileId: "env-staging",
+      name: "Staging",
+      classification: "staging",
+      baseUrl: "https://staging.example.test",
+      productionReadOnly: false,
+    },
+  },
+  {
+    type: "test-case",
+    requiredField: "steps",
+    valid: {
+      artifactType: "test-case",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      testCaseId: "TC-1",
+      revisionId: "REV-1",
+      title: "A valid test case",
+      steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
+    },
+  },
+  {
+    type: "test-step-result",
+    requiredField: "durationMs",
+    valid: {
+      artifactType: "test-step-result",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      stepId: "step-1",
+      status: "PASSED",
+      durationMs: 0,
+    },
+  },
+  {
+    type: "test-result",
+    requiredField: "failureClassification",
+    valid: {
+      artifactType: "test-result",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      runId: "20260723T123456Z-a1b2c3",
+      testCaseId: "TC-1",
+      status: "PASSED",
+      failureClassification: "NONE",
+      startedAt: "2026-07-23T12:34:56.000Z",
+      finishedAt: "2026-07-23T12:35:56.000Z",
+    },
+  },
+  {
+    type: "evidence",
+    requiredField: "sha256",
+    valid: {
+      artifactType: "evidence",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      runId: "20260723T123456Z-a1b2c3",
+      attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      kind: "log",
+      capturedAt: "2026-07-23T12:34:56.000Z",
+      sha256: "a".repeat(64),
+      relativePath: "evidence/log.json",
+    },
+  },
+  {
+    type: "bug-report",
+    requiredField: "actual",
+    valid: {
+      artifactType: "bug-report",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      bugId: "BUG-LOGIN-A1B2C3-001",
+      runId: "20260723T123456Z-a1b2c3",
+      attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+      triageStatus: "NEEDS_TRIAGE",
+      expected: "A successful sign in",
+      actual: "The sign in request failed",
+      evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"],
+    },
+  },
+  {
+    type: "test-data-manifest",
+    requiredField: "resources",
+    valid: {
+      artifactType: "test-data-manifest",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: "20260723T123456Z-a1b2c3",
+      resources: [],
+    },
+  },
+  {
+    type: "qa-execution-report",
+    requiredField: "summary",
+    valid: {
+      artifactType: "qa-execution-report",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      runId: "20260723T123456Z-a1b2c3",
+      generatedAt: "2026-07-23T12:34:56.000Z",
+      releaseRecommendation: "READY",
+      summary: "All planned checks completed.",
+    },
+  },
+] as const satisfies readonly {
+  type: Exclude<ArtifactType, "run-metadata">;
+  requiredField: string;
+  valid: Record<string, unknown>;
+}[];
 
 describe("validateArtifact", () => {
   it("accepts a valid run metadata envelope", () => {
@@ -31,5 +162,44 @@ describe("validateArtifact", () => {
       ]),
     );
     expect(invalidRun).toEqual(beforeValidation);
+  });
+
+  describe("the remaining canonical schemas", () => {
+    for (const contract of otherArtifactContracts) {
+      it(`accepts a minimal valid ${contract.type} artifact`, () => {
+        expect(validateArtifact(contract.type, contract.valid).valid).toBe(true);
+      });
+
+      it(`rejects a ${contract.type} artifact missing ${contract.requiredField}`, () => {
+        const invalid: Record<string, unknown> = { ...contract.valid };
+        delete invalid[contract.requiredField];
+
+        expect(validateArtifact(contract.type, invalid).errors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+        );
+      });
+
+      it(`rejects additional properties on ${contract.type} artifacts`, () => {
+        expect(validateArtifact(contract.type, { ...contract.valid, unexpected: true }).errors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ keyword: "additionalProperties" })]),
+        );
+      });
+    }
+
+    it.each([
+      ["environment profile classification", "environment-profile", { ...otherArtifactContracts[1].valid, classification: "preview" }],
+      ["test case side-effect class", "test-case", { ...otherArtifactContracts[2].valid, steps: [{ id: "step-1", action: "navigate", sideEffect: "unsafe" }] }],
+      ["test step result status", "test-step-result", { ...otherArtifactContracts[3].valid, status: "SUCCESS" }],
+      ["test result execution status", "test-result", { ...otherArtifactContracts[4].valid, status: "SUCCESS" }],
+      ["test result failure classification", "test-result", { ...otherArtifactContracts[4].valid, failureClassification: "UNKNOWN" }],
+      ["evidence kind", "evidence", { ...otherArtifactContracts[5].valid, kind: "video" }],
+      ["bug report triage status", "bug-report", { ...otherArtifactContracts[6].valid, triageStatus: "OPEN" }],
+      ["bug report severity", "bug-report", { ...otherArtifactContracts[6].valid, severity: "Urgent" }],
+      ["QA report release recommendation", "qa-execution-report", { ...otherArtifactContracts[8].valid, releaseRecommendation: "GO" }],
+    ] as const)("rejects invalid %s enum values", (_label, type, artifact) => {
+      expect(validateArtifact(type, artifact).errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ keyword: "enum" })]),
+      );
+    });
   });
 });
