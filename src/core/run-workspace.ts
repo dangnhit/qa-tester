@@ -143,6 +143,7 @@ function assertPersistedPlanningSemantics(artifact: LoadedArtifact, artifacts: r
       if (!isRecord(expected) || typeof expected.requirementId !== "string") throw new Error("Test plan expected result is invalid");
       const matches = requirements.get(expected.requirementId) ?? [];
       if (matches.length !== 1) throw new Error("Test plan has an orphan or ambiguous expected result requirement");
+      if (expected.authority !== matches[0]) throw new Error("Test plan expected authority does not match its registered requirement");
       return { authority: matches[0] ?? "ASSUMED" };
     });
     if (approvalPolicy.mode === "auto-approve-safe") {
@@ -509,16 +510,25 @@ export class RunWorkspace {
     relationships: string[];
     provenance?: string;
   }): Promise<ArtifactRecord & { absolutePath: string }> {
+    let snapshot: unknown;
+    let relationships: string[];
     try {
+      snapshot = JSON.parse(JSON.stringify(input.value)) as unknown;
+      relationships = [...input.relationships];
       this.assertWritable();
       if (!isArtifactType(input.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
-      if (!validateArtifact(input.type, input.value).valid) {
+      if (!validateArtifact(input.type, snapshot).valid) {
         throw new QaSkillsError("Artifact does not match its contract", "INVALID_ARTIFACT");
       }
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
-    return this.trackMutation(() => this.registerArtifactValueInternal(input));
+    return this.trackMutation(() => this.registerArtifactValueInternal({
+      type: input.type,
+      value: snapshot,
+      relationships,
+      ...(input.provenance ? { provenance: input.provenance } : {}),
+    }));
   }
 
   private registerArtifactValueInternal(input: {
@@ -757,6 +767,8 @@ export class RunWorkspace {
       }
     } else if (type === "test-plan") {
       await this.assertTestPlanPolicy(value, manifest);
+    } else if (type === "coverage-obligation") {
+      await this.assertCoverageObligationBinding(value, manifest);
     } else if (type === "test-result") {
       const testCases = await this.readRegisteredValues(manifest, "test-case");
       if (testCases.filter((testCase) =>
@@ -808,6 +820,21 @@ export class RunWorkspace {
     }
   }
 
+  private async assertCoverageObligationBinding(value: Record<string, unknown>, manifest: Manifest): Promise<void> {
+    if (typeof value.requirementId !== "string" || typeof value.requirementAnalysisArtifactId !== "string") {
+      throw new QaSkillsError("Coverage obligation requirement binding is invalid", "ARTIFACT_BINDING");
+    }
+    const record = manifest.artifacts.find((artifact) => artifact.id === value.requirementAnalysisArtifactId && artifact.type === "requirement-analysis");
+    if (!record) throw new QaSkillsError("Coverage obligation references an orphan requirement analysis artifact", "ARTIFACT_BINDING");
+    const analyses = await this.readRegisteredValues(manifest, "requirement-analysis");
+    const index = manifest.artifacts.filter((artifact) => artifact.type === "requirement-analysis").findIndex((artifact) => artifact.id === record.id);
+    const analysis = analyses[index];
+    const statements = analysis?.statements;
+    if (!Array.isArray(statements) || statements.filter((statement) => isRecord(statement) && statement.requirementId === value.requirementId).length !== 1) {
+      throw new QaSkillsError("Coverage obligation references an orphan or ambiguous requirement", "ARTIFACT_BINDING");
+    }
+  }
+
   private async assertTestPlanPolicy(value: Record<string, unknown>, manifest: Manifest): Promise<void> {
     const testCases = value.testCases;
     const approvalPolicy = value.approvalPolicy;
@@ -847,6 +874,9 @@ export class RunWorkspace {
         const matches = byRequirementId.get(expected.requirementId) ?? [];
         if (matches.length !== 1) {
           throw new QaSkillsError("Test plan has an orphan or ambiguous expected result requirement", "ARTIFACT_BINDING");
+        }
+        if (expected.authority !== matches[0]?.authority) {
+          throw new QaSkillsError("Test plan expected authority does not match its registered requirement", "ARTIFACT_BINDING");
         }
         return { authority: matches[0]?.authority ?? "ASSUMED" };
       });

@@ -8,6 +8,7 @@ import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { sha256Text } from "../../src/core/checksum.js";
 import { ingestRequirementAnalysis } from "../../src/operations/ingest-requirement-analysis.js";
 import { ingestTestCases } from "../../src/operations/ingest-testcases.js";
+import { ingestCoverageObligation } from "../../src/operations/ingest-coverage-obligation.js";
 
 const roots: string[] = [];
 
@@ -77,10 +78,7 @@ describe("planning ingestion", () => {
     const fixture = await setup();
     const requirementPath = join(fixture.root, "requirements.json");
     const planPath = join(fixture.root, "plan.json");
-    await writeFile(requirementPath, JSON.stringify(requirementAnalysis({
-      sourceProvenance: { kind: "code", reference: "controller.ts" },
-      authority: "INFERRED",
-    })));
+    await writeFile(requirementPath, JSON.stringify(requirementAnalysis()));
     await writeFile(planPath, JSON.stringify(testPlan()));
 
     const requirement = await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
@@ -176,7 +174,22 @@ describe("planning ingestion", () => {
     await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
 
     await expect(ingestTestCases({ ...fixture, sourcePath: planPath, policy: { mode: "auto-approve-safe" } }))
-      .rejects.toThrow(/unsafe auto-approval.*non-authoritative/i);
+      .rejects.toThrow(/expected authority.*registered requirement|authority.*mismatch/i);
+  });
+
+  it("rejects a human-review testcase whose claimed authority differs from its registered requirement", async () => {
+    const fixture = await setup();
+    const requirementPath = join(fixture.root, "inferred-requirement.json");
+    const planPath = join(fixture.root, "human-mismatch-plan.json");
+    await writeFile(requirementPath, JSON.stringify(requirementAnalysis({
+      sourceProvenance: { kind: "code", reference: "controller.ts" },
+      authority: "INFERRED",
+    })));
+    await writeFile(planPath, JSON.stringify(testPlan()));
+    await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
+
+    await expect(ingestTestCases({ ...fixture, sourcePath: planPath }))
+      .rejects.toThrow(/expected authority.*registered requirement|authority.*mismatch/i);
   });
 
   it("rejects a direct test-plan registration that would self-approve against an inferred requirement", async () => {
@@ -194,7 +207,7 @@ describe("planning ingestion", () => {
     const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
 
     await expect(workspace.registerArtifact({ type: "test-plan", sourcePath: planPath, relationships: [] }))
-      .rejects.toThrow(/unsafe auto-approval.*non-authoritative/i);
+      .rejects.toThrow(/expected authority.*registered requirement|authority.*mismatch/i);
     await workspace.close();
   });
 
@@ -254,5 +267,32 @@ describe("planning ingestion", () => {
     await workspace.close();
 
     expect(JSON.parse(await readFile(registered.absolutePath, "utf8"))).toEqual(valid);
+  });
+
+  it("snapshots a value before its queued manifest transaction can observe caller mutation", async () => {
+    const fixture = await setup();
+    const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
+    const value = requirementAnalysis();
+    const registered = workspace.registerArtifactValue({ type: "requirement-analysis", value, relationships: [] });
+    const statement = value.statements[0];
+    if (!statement) throw new Error("Expected requirement statement");
+    statement.normalizedText = "Users might see something else.";
+    statement.authority = "ASSUMED";
+    const result = await registered;
+    await workspace.close();
+
+    expect(JSON.parse(await readFile(result.absolutePath, "utf8"))).toEqual(requirementAnalysis());
+  });
+
+  it("rejects an orphan coverage obligation instead of accepting its self-attested requirement", async () => {
+    const fixture = await setup();
+    const sourcePath = join(fixture.root, "orphan-coverage.json");
+    await writeFile(sourcePath, JSON.stringify({
+      artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+      obligationId: "COV-1", requirementId: "REQ-ORPHAN", requirementAnalysisArtifactId: "missing-artifact",
+      role: "member", behavior: "sign in", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+    }));
+
+    await expect(ingestCoverageObligation({ ...fixture, sourcePath })).rejects.toThrow(/orphan|requirement/i);
   });
 });

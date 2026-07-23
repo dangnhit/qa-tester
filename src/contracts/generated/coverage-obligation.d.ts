@@ -6,6 +6,7 @@ export interface CoverageObligation {
   producerVersion: string;
   obligationId: string;
   requirementId: string;
+  requirementAnalysisArtifactId: string;
   role: string;
   behavior: string;
   browser: string;

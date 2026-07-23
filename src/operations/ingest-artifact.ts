@@ -5,6 +5,7 @@ import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { ingestRequirementAnalysis } from "./ingest-requirement-analysis.js";
 import { ingestTestCases } from "./ingest-testcases.js";
+import { ingestCoverageObligation } from "./ingest-coverage-obligation.js";
 
 export async function ingestArtifact(options: { root: string; runId: string; type: ArtifactType; sourcePath: string; relationships?: string[] }): Promise<void> {
   if (options.type === "requirement-analysis") {
@@ -13,6 +14,10 @@ export async function ingestArtifact(options: { root: string; runId: string; typ
   }
   if (options.type === "test-plan") {
     await ingestTestCases(options);
+    return;
+  }
+  if (options.type === "coverage-obligation") {
+    await ingestCoverageObligation(options);
     return;
   }
   const source = await readFile(options.sourcePath, "utf8");

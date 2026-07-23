@@ -36,9 +36,10 @@ export type CoverageEvaluation = {
   qualifyingAttemptIds: string[];
 };
 
-function attemptAuthority(attempt: CoverageAttempt): string | undefined {
-  return attempt.authority ?? attempt.expectedResultAuthority ?? attempt.requirementAuthority;
-}
+export type VerifiedCoverageContext = {
+  authoritativeRequirementIds: readonly string[];
+  verifiedAttemptIds: readonly string[];
+};
 
 function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
   return attempt.requirementId === obligation.requirementId
@@ -55,6 +56,7 @@ function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligat
 export function evaluateCoverage(
   obligations: readonly CoverageObligation[],
   attempts: readonly CoverageAttempt[],
+  verification: VerifiedCoverageContext,
 ): CoverageEvaluation {
   const satisfied = new Set<string>();
   const qualifyingAttemptIds = new Set<string>();
@@ -62,12 +64,14 @@ export function evaluateCoverage(
   for (const attempt of attempts) {
     if (
       attempt.status !== "PASSED"
-      || attemptAuthority(attempt) !== "AUTHORITATIVE"
-      || attempt.authorityProvenance !== "registered-requirement-analysis"
+      || !verification.verifiedAttemptIds.includes(attempt.attemptId)
     ) continue;
     const addressed = attempt.obligationIds.filter((id) => {
       const obligation = obligations.find((candidate) => candidate.obligationId === id);
-      return obligationIds.has(id) && obligation !== undefined && matchesObligation(attempt, obligation);
+      return obligationIds.has(id)
+        && obligation !== undefined
+        && verification.authoritativeRequirementIds.includes(obligation.requirementId)
+        && matchesObligation(attempt, obligation);
     });
     if (addressed.length === 0) continue;
     addressed.forEach((id) => satisfied.add(id));

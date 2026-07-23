@@ -34,13 +34,18 @@ function matchingAttempt(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const verifiedAuthoritative = {
+  authoritativeRequirementIds: [obligation.requirementId],
+  verifiedAttemptIds: ["ATTEMPT-PASS"],
+};
+
 describe("evaluateCoverage", () => {
   it("satisfies an obligation only with a passed authoritative attempt addressing it", () => {
     const evaluation = evaluateCoverage([obligation], [
       matchingAttempt({ attemptId: "ATTEMPT-INFERRED", authority: "INFERRED" }),
       matchingAttempt({ attemptId: "ATTEMPT-FAILED", status: "FAILED" }),
       matchingAttempt(),
-    ]);
+    ], verifiedAuthoritative);
 
     expect(evaluation.satisfied).toEqual([obligation.obligationId]);
     expect(evaluation.missing).toEqual([]);
@@ -50,7 +55,7 @@ describe("evaluateCoverage", () => {
   it("reports a required obligation as missing when only non-authoritative passing attempts exist", () => {
     const evaluation = evaluateCoverage([obligation], [
       matchingAttempt({ attemptId: "ATTEMPT-ASSUMED", authority: "ASSUMED" }),
-    ]);
+    ], { authoritativeRequirementIds: [], verifiedAttemptIds: ["ATTEMPT-ASSUMED"] });
 
     expect(evaluation.satisfied).toEqual([]);
     expect(evaluation.missing).toEqual([obligation.obligationId]);
@@ -68,7 +73,10 @@ describe("evaluateCoverage", () => {
     ["outcome", { outcome: "redirected" }],
     ["authority provenance", { authorityProvenance: "agent-claim" }],
   ])("does not satisfy an obligation with a mismatched %s", (_dimension, mismatch) => {
-    const evaluation = evaluateCoverage([obligation], [matchingAttempt(mismatch)]);
+    const evaluation = evaluateCoverage([obligation], [matchingAttempt(mismatch)], {
+      authoritativeRequirementIds: [obligation.requirementId],
+      verifiedAttemptIds: _dimension === "authority provenance" ? [] : ["ATTEMPT-PASS"],
+    });
 
     expect(evaluation.satisfied).toEqual([]);
     expect(evaluation.missing).toEqual([obligation.obligationId]);
