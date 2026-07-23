@@ -1,12 +1,17 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export interface EvidenceItem {
+export type EvidenceItem = {
+  [k: string]: unknown | undefined;
+} & {
   artifactType: "evidence";
   schemaVersion: "1.0.0";
   producerVersion: string;
   evidenceId: string;
   runId: string;
   attemptId: string;
+  testCaseId?: string;
+  testCaseRevisionId?: string;
+  testCaseInstanceId?: string;
   kind: "screenshot" | "trace" | "console" | "network" | "log" | "evidence-gap";
   capturedAt: string;
   sha256: string;
@@ -56,7 +61,8 @@ export interface EvidenceItem {
     testcaseId?: string;
     bugId?: string;
   };
-}
+};
+
 export interface Viewport {
   width: number;
   height: number;

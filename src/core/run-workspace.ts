@@ -25,6 +25,7 @@ import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin 
 import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
+import { operationsForMode, type WorkflowOperationName } from "../orchestration/modes.js";
 
 export type ArtifactRecord = {
   id: string;
@@ -102,6 +103,28 @@ function sameStringOccurrences(left: readonly string[], right: readonly string[]
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
 
+const checkpointOutputTypes: Readonly<Record<WorkflowOperationName, readonly ArtifactType[]>> = {
+  "ingest-requirement-analysis": ["requirement-analysis"],
+  "ingest-testcases": ["test-case"],
+  "ingest-coverage-obligation": ["coverage-obligation"],
+  "prepare-test-data": ["test-data-manifest"],
+  "execute-browser-test": ["test-result"],
+  "collect-evidence": ["evidence", "evidence-gap", "exploratory-finding"],
+  "generate-bug-report": ["bug-report", "incident"],
+  "generate-qa-report": ["release-gate", "qa-execution-report"],
+  "register-exploration-charter": ["exploration-charter"],
+  "reproduce-bug": ["test-result"],
+  "select-regression": ["regression-selection"],
+  "derive-retest-verdict": ["retest-result"],
+};
+
+function checkpointStateChecksum(state: unknown): string { return sha256Text(stableJson(state)); }
+
+function sameCheckpointRefs(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const normalize = (items: readonly unknown[]) => items.map((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" ? `${item.artifactId}:${item.sha256}` : "").sort();
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
 function sameResourceIdentity(left: unknown, right: unknown): boolean {
   return isRecord(left) && isRecord(right)
     && left.id === right.id && left.ownerRunId === right.ownerRunId && left.cleanupAction === right.cleanupAction;
@@ -151,6 +174,23 @@ function matchesEvidencePrimary(value: Record<string, unknown>, primary: Artifac
     && isRecord(provenance)
     && provenance.captureType === primary.captureType
     && (primary.dimensions === undefined || matchingDimensions(provenance.dimensions, primary.dimensions));
+}
+
+/** A final evidence record is meaningful only when its one result relationship
+ * proves the same immutable testcase revision and instance as its payload. */
+function exactAttemptEvidenceBinding(
+  artifact: LoadedArtifact,
+  artifacts: readonly LoadedArtifact[],
+): boolean {
+  const value = artifact.value;
+  if (!value || typeof value.attemptId !== "string") return false;
+  const resultRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.valid && candidate.record.id === id && candidate.record.type === "test-result"));
+  const results = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "test-result" && candidate.value?.attemptId === value.attemptId);
+  const result = results.length === 1 ? results[0] : undefined;
+  if (!result || resultRelationships.length !== 1 || resultRelationships[0] !== result.record.id || value.runId !== result.value?.runId) return false;
+  return value.testCaseId === result.value?.testCaseId
+    && value.testCaseRevisionId === result.value?.testCaseRevisionId
+    && value.testCaseInstanceId === result.value?.testCaseInstanceId;
 }
 
 function errorCode(error: unknown): unknown {
@@ -549,16 +589,53 @@ async function inspectWorkspaceState(
   for (const [index, checkpoint] of checkpoints.entries()) {
     const value = checkpoint.value as Record<string, unknown>;
     const prior = checkpoints[index - 1];
-    const completed = Array.isArray(value.completedOperations) ? value.completedOperations : [];
+    const completed: readonly unknown[] = array(value.completedOperations);
     const outputs = isRecord(value.operationOutputs) ? value.operationOutputs : undefined;
-    const outputReferencesValid = outputs !== undefined && Object.values(outputs).every((items) => Array.isArray(items) && items.every((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" && artifacts.some((artifact) => artifact.record.id === item.artifactId && artifact.record.sha256 === item.sha256)));
+    const operationOrder = typeof value.mode === "string" ? (() => { try { return operationsForMode(value.mode as never); } catch { return undefined; } })() : undefined;
+    const completedPrefix = operationOrder !== undefined && completed.length === index
+      && JSON.stringify(completed) === JSON.stringify(operationOrder.slice(0, index));
+    const outputReferences = outputs === undefined ? [] : Object.entries(outputs);
+    const outputReferencesValid = outputs !== undefined && completedPrefix
+      && JSON.stringify(Object.keys(outputs).sort()) === JSON.stringify([...completed].sort())
+      && outputReferences.every(([operation, items]) => Array.isArray(items)
+        && items.every((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" && artifacts.some((artifact) => artifact.record.id === item.artifactId && artifact.record.sha256 === item.sha256 && checkpointOutputTypes[operation as WorkflowOperationName]?.includes(artifact.record.type))));
     const state = isRecord(value.state) ? value.state : undefined;
     const stateReference = (item: unknown) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" && artifacts.some((artifact) => artifact.record.id === item.artifactId && artifact.record.sha256 === item.sha256);
-    const stateReferencesValid = state !== undefined && ["importedArtifacts", "executionCases", "reproductionAttempts", "regressionAttempts", "exploratoryFindings"].every((key) => Array.isArray(state[key]) && state[key].every(stateReference)) && (state.selection === undefined || stateReference(state.selection)) && (state.charter === undefined || stateReference(state.charter));
+    const stateItems = (key: string): readonly unknown[] => state === undefined ? [] : array(state[key]);
+    const stateTypes = (key: string) => stateItems(key).map((item) => isRecord(item) ? artifacts.find((artifact) => artifact.record.id === item.artifactId && artifact.record.sha256 === item.sha256)?.record.type : undefined);
+    const uniqueRefs = (items: readonly unknown[]) => new Set(items.map((item) => isRecord(item) ? item.artifactId : undefined)).size === items.length;
+    const stateReferencesValid = state !== undefined && checkpointStateChecksum(state) === value.stateChecksum && ["importedArtifacts", "executionCases", "reproductionAttempts", "regressionAttempts", "exploratoryFindings"].every((key) => Array.isArray(state[key]) && state[key].every(stateReference) && uniqueRefs(state[key] as unknown[])) && stateTypes("importedArtifacts").every((type) => ["requirement-analysis", "test-plan", "test-case", "coverage-obligation"].includes(type ?? "")) && stateTypes("executionCases").every((type) => type === "test-case") && stateTypes("reproductionAttempts").every((type) => type === "test-result") && stateTypes("regressionAttempts").every((type) => type === "test-result") && stateTypes("exploratoryFindings").every((type) => type === "exploratory-finding") && (state.selection === undefined || stateReference(state.selection)) && (state.charter === undefined || stateReference(state.charter));
     const validInitial = index !== 0 || (value.revision === 1 && value.supersedesArtifactId === undefined && checkpoint.record.relationships.length === 0);
-    const validSuccessor = index === 0 || (value.revision === index + 1 && value.supersedesArtifactId === prior?.record.id && checkpoint.record.relationships.includes(prior?.record.id ?? "") && Array.isArray(prior?.value?.completedOperations) && prior.value.completedOperations.every((operation) => completed.includes(operation)) && completed.length === prior.value.completedOperations.length + 1);
-    if (value.runId !== expectedRunId || value.inputChecksum === undefined || new Set(completed).size !== completed.length || !outputReferencesValid || !stateReferencesValid || !validInitial || !validSuccessor) {
+    const newOperation = index === 0 || typeof completed.at(-1) !== "string" ? undefined : completed.at(-1) as WorkflowOperationName;
+    const newOutputs: readonly unknown[] = newOperation === undefined || outputs === undefined ? [] : array(outputs[newOperation]);
+    const expectedRelationships = index === 0 ? [] : [prior?.record.id, ...(Array.isArray(newOutputs) ? newOutputs.map((item) => isRecord(item) ? item.artifactId : undefined) : [])].filter((id): id is string => typeof id === "string").sort();
+    const validSuccessor = index === 0 || (value.revision === index + 1 && value.supersedesArtifactId === prior?.record.id && Array.isArray(prior?.value?.completedOperations) && JSON.stringify(completed.slice(0, -1)) === JSON.stringify(prior.value.completedOperations) && JSON.stringify([...checkpoint.record.relationships].sort()) === JSON.stringify(expectedRelationships));
+    const executionResultRefs: readonly unknown[] = outputs === undefined ? [] : array(outputs["execute-browser-test"]);
+    const executionCaseRefs = executionResultRefs.flatMap((reference) => !isRecord(reference) ? [] : artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256)?.record.relationships.map((id) => {
+      const artifact = artifacts.find((candidate) => candidate.record.id === id && candidate.record.type === "test-case");
+      return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
+    }).filter((item): item is { artifactId: string; sha256: string } => item !== undefined) ?? []);
+    const operationStateValid = state !== undefined
+      && (!completed.includes("reproduce-bug") || sameCheckpointRefs(array(state.reproductionAttempts), outputs === undefined ? [] : array(outputs["reproduce-bug"])))
+      && (!completed.includes("execute-browser-test") || value.mode === "retest" || sameCheckpointRefs(array(state.executionCases), executionCaseRefs))
+      && (!completed.includes("select-regression") || state.selection !== undefined);
+    if (value.runId !== expectedRunId || value.mode !== metadata.mode || value.inputChecksum === undefined || value.stateChecksum === undefined || new Set(completed).size !== completed.length || !outputReferencesValid || !stateReferencesValid || !operationStateValid || !validInitial || !validSuccessor) {
       changed = invalidate(checkpoint, diagnostics, "INVALID_REFERENCE", "Workflow checkpoints must form an immutable revision chain with verified operation outputs") || changed;
+    }
+  }
+
+  for (const artifact of artifacts.filter((candidate) => candidate.valid && (candidate.record.type === "evidence" || candidate.record.type === "evidence-gap") && candidate.value !== undefined)) {
+    const value = artifact.value as Record<string, unknown>;
+    if (artifact.record.type === "evidence") {
+      if (value.pendingAttempt !== true && !exactAttemptEvidenceBinding(artifact, artifacts)) {
+        changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must have one exact test-result relationship and matching testcase identity") || changed;
+      }
+    } else if (value.scope === "attempt") {
+      if (!exactAttemptEvidenceBinding(artifact, artifacts)) {
+        changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Attempt-scoped Evidence Gap must have one exact test-result relationship and matching testcase identity") || changed;
+      }
+    } else if (value.scope !== "operational" || value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined || artifact.record.relationships.some((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-result"))) {
+      changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Operational Evidence Gap must not impersonate an attempt-bound observation") || changed;
     }
   }
 
@@ -1169,8 +1246,27 @@ export class RunWorkspace {
       // validation rejects a forever-pending descriptor; final descriptors
       // always require an already-registered exact attempt.
       if (value.pendingAttempt !== true) {
-        const testResults = await this.readRegisteredValues(manifest, "test-result");
-        if (testResults.filter((result) => result.attemptId === value.attemptId).length !== 1) throw new QaSkillsError("Evidence references an unregistered or ambiguous attempt", "ARTIFACT_BINDING");
+        const records = await this.readGateWorkspaceArtifacts(manifest);
+        const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
+        if (result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
+          || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
+          || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
+          throw new QaSkillsError("Evidence binding requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
+        }
+      }
+    } else if (type === "evidence-gap") {
+      if (value.scope === "operational") {
+        if (value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined || relationships.some((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result"))) {
+          throw new QaSkillsError("Operational Evidence Gap must not claim an attempt binding", "ARTIFACT_BINDING");
+        }
+      } else {
+        const records = await this.readGateWorkspaceArtifacts(manifest);
+        const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
+        if (value.scope !== "attempt" || result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
+          || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
+          || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
+          throw new QaSkillsError("Attempt-scoped Evidence Gap requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
+        }
       }
     } else if (type === "bug-report") {
       const testResults = await this.readRegisteredValues(manifest, "test-result");

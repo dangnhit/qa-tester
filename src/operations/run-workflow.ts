@@ -199,6 +199,13 @@ function emptyWorkflowState(): WorkflowStateSnapshot {
   return { importedArtifacts: [], executionCases: [], reproductionAttempts: [], regressionAttempts: [], exploratoryFindings: [] };
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (record(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+function workflowStateChecksum(state: WorkflowStateSnapshot): string { return sha256Text(canonicalJson(state)); }
+
 function registeredRef(artifacts: readonly RegisteredWorkspaceArtifact[], id: string | undefined): RegisteredArtifactRef | undefined {
   const artifact = id === undefined ? undefined : artifacts.find((item) => item.record.id === id);
   return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
@@ -235,7 +242,7 @@ async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInpu
   }
   const created = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
-    inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState(), ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
+    inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState(), stateChecksum: workflowStateChecksum(emptyWorkflowState()), ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [], provenance: "runtime" });
   return { record: created, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState() };
 }
@@ -244,12 +251,13 @@ async function advanceCheckpoint(workspace: RunWorkspace, input: QaWorkflowInput
   if (previous.completedOperations.includes(operation)) return previous;
   const records: readonly ArtifactRecord[] = Array.isArray(output) ? output.filter(artifactRecord) : artifactRecord(output) ? [output] : [];
   const operationOutputs: Record<string, readonly RegisteredArtifactRef[]> = { ...previous.operationOutputs, [operation]: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
+  const snapshot = await snapshotWorkflowState(state);
   const registered = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode, inputChecksum: workflowInputChecksum(input), revision: Number((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === previous.record.id)?.value.revision) + 1,
-    supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: await snapshotWorkflowState(state),
+    supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: snapshot, stateChecksum: workflowStateChecksum(snapshot),
     ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [previous.record.id, ...records.map((artifact) => artifact.id)], provenance: "runtime" });
-  return { record: registered, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: await snapshotWorkflowState(state) };
+  return { record: registered, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: snapshot };
 }
 
 function missingRuntimeLabel(runtime: QaRuntimeRegistry, input: QaWorkflowInput): string | undefined {
@@ -674,7 +682,11 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
     // exactly the metadata order for the selected public mode.
     for (const name of order) {
       const adapter = adapters[name];
-      if (state.checkpoint.completedOperations.includes(name)) { await hydrateCheckpointOutput(state, name); continue; }
+      if (state.checkpoint.completedOperations.includes(name)) {
+        await hydrateCheckpointOutput(state, name);
+        await adapter.assertPostcondition(workspace, state.outputs[name] as never);
+        continue;
+      }
       const output = await adapter.execute(state);
       await adapter.assertPostcondition(workspace, output as never);
       state.outputs[name] = output as never;

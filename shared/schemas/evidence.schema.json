@@ -11,7 +11,7 @@
     "producerVersion": { "type": "string", "minLength": 1 },
     "evidenceId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "runId": { "type": "string", "minLength": 1 },
-    "attemptId": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 },
     "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "evidence-gap"] },
     "capturedAt": { "type": "string", "format": "date-time" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
@@ -44,6 +44,9 @@
       }
     }
   },
+  "allOf": [
+    { "if": { "properties": { "pendingAttempt": { "const": true } }, "required": ["pendingAttempt"] }, "then": {}, "else": { "properties": { "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } }, "required": ["testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } }
+  ],
   "$defs": {
     "point": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 } } },
     "box": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number", "minimum": 0 }, "y": { "type": "number", "minimum": 0 }, "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } },

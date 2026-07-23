@@ -35,7 +35,12 @@ describe("workflow mode operation plans", () => {
   });
 
   it("makes a retest reproduce its target before selecting regression", () => {
-    expect(operationsForMode("retest")).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
+    expect(operationsForMode("retest")).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "derive-retest-verdict"]);
+  });
+
+  it("disposes failed attempts before every regression report or retest verdict", () => {
+    expect(operationsForMode("regression")).toEqual(["select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"]);
+    expect(operationsForMode("retest").indexOf("generate-bug-report")).toBeLessThan(operationsForMode("retest").indexOf("derive-retest-verdict"));
   });
 
   it("runs typed exploratory operations in order and never requires a skill shell", async () => {

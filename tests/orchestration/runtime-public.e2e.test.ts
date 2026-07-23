@@ -66,10 +66,10 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean | "inte
   } });
   let sourceBug: { artifactId: string; sha256: string; bugId: string } | undefined;
   if (options.sourceBug) {
-    await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
+    const sourceAttempt = await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } });
     if (options.sourceBug === "intermittent") await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-REPEAT", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
     if (options.sourceBug === "partial" && second) await source.registerArtifactValue({ type: "test-result", relationships: [second.id], value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATT-SOURCE-BUG-SECOND", runId: source.runId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME-SECOND", status: "FAILED", failureClassification: "PRODUCT_DEFECT", startedAt: "2026-07-23T00:02:00.000Z", finishedAt: "2026-07-23T00:03:00.000Z" } });
-    await source.registerEvidenceBundle({ binaries: [{ filename: "source-bug.txt", contents: Buffer.from("source browser failure"), mediaType: "text/plain", captureType: "log" }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: source.runId, attemptId: "ATT-SOURCE-BUG", kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "source browser failure" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: baseUrl, viewport: { width: 1, height: 1 }, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" } }) });
+    await source.registerEvidenceBundle({ binaries: [{ filename: "source-bug.txt", contents: Buffer.from("source browser failure"), mediaType: "text/plain", captureType: "log" }], relationships: [sourceAttempt.id], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: source.runId, attemptId: "ATT-SOURCE-BUG", testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), telemetryFindings: [{ kind: "console", level: "error", message: "source browser failure" }], provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: baseUrl, viewport: { width: 1, height: 1 }, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" } }) });
     const generated = await generateBugReport({ workspace: source, attemptId: "ATT-SOURCE-BUG", unsafeRerunReason: "Source fixture preserves a single captured production defect observation." });
     if (generated.kind !== "BUG") throw new Error("Expected source product bug");
     sourceBug = { artifactId: generated.record.id, sha256: generated.record.sha256, bugId: String((await source.readRegisteredArtifacts()).find((item) => item.record.id === generated.record.id)?.value.bugId) };
@@ -187,6 +187,10 @@ describe("public runtime QA Tester", () => {
     const result = await resumed({ root, mode: "full", resumeRunId: runId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
     expect(result.operationOrder).toEqual(["ingest-requirement-analysis", "ingest-testcases", "ingest-coverage-obligation", "prepare-test-data", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"]);
     expect(resumedTrace).toEqual([
+      "ingest-requirement-analysis:postcondition",
+      "ingest-testcases:postcondition",
+      "ingest-coverage-obligation:postcondition",
+      "prepare-test-data:postcondition",
       "execute-browser-test:adapter", "execute-browser-test:postcondition",
       "collect-evidence:adapter", "collect-evidence:postcondition",
       "generate-bug-report:adapter", "generate-bug-report:postcondition",
@@ -229,7 +233,7 @@ describe("public runtime QA Tester", () => {
     const selection = artifacts.find((item) => item.record.type === "regression-selection");
     const attempts = artifacts.filter((item) => item.record.type === "test-result");
 
-    expect(result.operationOrder).toEqual(["select-regression", "execute-browser-test", "collect-evidence", "generate-qa-report"]);
+    expect(result.operationOrder).toEqual(["select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"]);
     expect(selection?.value).toMatchObject({ complete: false, selected: [{ testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME" }], excluded: [{ testCaseId: "TC-EXCLUDED", revisionId: "REV-EXCLUDED" }], unmappedChangeRisks: [{ changeId: "CHANGE-UNMAPPED" }] });
     expect(attempts).toHaveLength(1);
     expect(attempts[0]?.value).toMatchObject({ testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", status: "PASSED" });
@@ -258,7 +262,7 @@ describe("public runtime QA Tester", () => {
     const attempts = artifacts.filter((item) => item.record.type === "test-result");
     const retest = artifacts.find((item) => item.record.type === "retest-result");
 
-    expect(result.operationOrder).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
+    expect(result.operationOrder).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "derive-retest-verdict"]);
     expect(attempts).toHaveLength(1);
     expect(attempts[0]?.value).toMatchObject({ testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME", status: "PASSED" });
     expect(retest?.value).toMatchObject({ sourceRunId: bundle.sourceRunId, sourceBugArtifactId: bundle.sourceBug.artifactId, sourceBugArtifactSha256: bundle.sourceBug.sha256, bugId: bundle.sourceBug.bugId, verdict: "FIXED", regressionOutcome: "NOT_RUN" });
@@ -296,7 +300,7 @@ describe("public runtime QA Tester", () => {
     expect(retest.value.verdict).toBe("PARTIALLY_FIXED");
     expect(scenarios).toHaveLength(2); expect(new Set(scenarios.map((scenario) => scenario.scenarioId)).size).toBe(2); expect(new Set(scenarios.map((scenario) => scenario.sourceAttemptArtifactId)).size).toBe(2); expect(new Set(scenarios.map((scenario) => scenario.sourceTestCaseArtifactId)).size).toBe(2); expect(scenarios.map((scenario) => scenario.status).sort()).toEqual(["FAILED", "PASSED"]);
     const checkpoint = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "workflow-checkpoint").at(-1)!;
-    expect(checkpoint.value.completedOperations).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
+    expect(checkpoint.value.completedOperations).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "derive-retest-verdict"]);
     await workspace.close(); expect(await readFile(join(root, "qa-results", bundle.sourceRunId, "artifact-manifest.json"))).toEqual(sourceBytes);
     const reopened = await RunWorkspace.open(root, result.runId); expect((await reopened.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "retest-result")?.value.verdict).toBe("PARTIALLY_FIXED"); await reopened.close();
   });

@@ -10,9 +10,23 @@ export interface WorkflowCheckpoint {
   runId: string;
   mode: "plan" | "execute" | "full" | "exploratory" | "retest" | "regression";
   inputChecksum: string;
+  stateChecksum: string;
   revision: number;
   supersedesArtifactId?: string;
-  completedOperations: string[];
+  completedOperations: (
+    | "ingest-requirement-analysis"
+    | "ingest-testcases"
+    | "ingest-coverage-obligation"
+    | "prepare-test-data"
+    | "execute-browser-test"
+    | "collect-evidence"
+    | "generate-bug-report"
+    | "generate-qa-report"
+    | "register-exploration-charter"
+    | "reproduce-bug"
+    | "select-regression"
+    | "derive-retest-verdict"
+  )[];
   operationOutputs: {
     [k: string]:
       | {

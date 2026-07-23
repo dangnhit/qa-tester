@@ -134,7 +134,7 @@ function failSecondEvidenceBinaryWrite() {
 function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
     provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
     ...overrides,
@@ -152,7 +152,7 @@ describe("RunWorkspace", () => {
     const bundle = await workspace.registerEvidenceBundle({
       binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
       descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-PENDING", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+        artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-PENDING", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
       }),
     });
     expect(bundle.binaries).toHaveLength(1);
@@ -177,7 +177,7 @@ describe("RunWorkspace", () => {
     const failure = failNextManifestWrite();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile, persistence: failure.persistence });
     failure.arm();
-    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "rollback.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" } }) })).rejects.toThrow(/manifest/i);
+    await expect(workspace.registerEvidenceBundle({ binaries: [{ filename: "rollback.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }], descriptor: (binaries) => ({ artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", testCaseId: "pending", testCaseRevisionId: "pending", testCaseInstanceId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: binaries[0]?.sha256, relativePath: binaries[0]?.relativePath, mediaType: "image/png", binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })), provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" } }) })).rejects.toThrow(/manifest/i);
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
     expect(manifest.artifacts).toHaveLength(1);
     await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
@@ -570,7 +570,7 @@ describe("RunWorkspace", () => {
       "producerVersion: 1.0.0",
       "evidenceGapId: GAP-1",
       `runId: ${workspace.runId}`,
-      "attemptId: ATTEMPT-1",
+      "scope: operational",
       "reason: Redaction could not safely complete",
       "affectedClaim: The checkout request completed successfully",
       "",
@@ -777,6 +777,9 @@ describe("RunWorkspace", () => {
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: workspace.runId,
       attemptId: "ATTEMPT-1",
+      testCaseId: "TC-1",
+      testCaseRevisionId: "REV-TC-1",
+      testCaseInstanceId: "TC-1--INSTANCE-1",
       kind: "log",
       capturedAt: "2026-07-23T12:34:56.000Z",
       sha256: "a".repeat(64),
@@ -787,7 +790,7 @@ describe("RunWorkspace", () => {
       provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
     };
     await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
-    const evidenceRecord = await registerDocument(workspace, "evidence", "evidence.json", evidence);
+    const evidenceRecord = await registerDocument(workspace, "evidence", "evidence.json", evidence, [attempt.id]);
 
     const bug = {
       artifactType: "bug-report",

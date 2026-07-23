@@ -30,8 +30,8 @@ const directOperations: Readonly<Record<PublicWorkflowMode, readonly WorkflowOpe
   execute: ["execute-browser-test", "collect-evidence"],
   full: ["ingest-requirement-analysis", "ingest-testcases", "ingest-coverage-obligation", "prepare-test-data", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"],
   exploratory: ["register-exploration-charter", "collect-evidence", "generate-qa-report"],
-  retest: ["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"],
-  regression: ["select-regression", "execute-browser-test", "collect-evidence", "generate-qa-report"],
+  retest: ["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "derive-retest-verdict"],
+  regression: ["select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"],
 };
 
 export function isPublicWorkflowMode(mode: string): mode is PublicWorkflowMode {

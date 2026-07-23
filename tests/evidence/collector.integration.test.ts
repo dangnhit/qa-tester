@@ -48,6 +48,10 @@ describe("live evidence collector", () => {
           expect.objectContaining({ id: result.binaryArtifactId, relativePath: expect.stringMatching(/^evidence\//), mediaType: "image/png" }),
           expect.objectContaining({ id: result.descriptorArtifactId, relativePath: expect.stringMatching(/^inputs\//) }),
         ]));
+        const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === result.descriptorArtifactId);
+        const attempt = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+        expect(descriptor?.record.relationships).toContain(attempt?.record.id);
+        expect(descriptor?.value).toMatchObject({ testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" });
         const [beforePixels, capturedPixels] = await Promise.all([
           sharp(before).ensureAlpha().raw().toBuffer(),
           sharp(await readFile(result.rawPath)).ensureAlpha().raw().toBuffer(),
@@ -85,6 +89,9 @@ describe("live evidence collector", () => {
       const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { type: string }[] };
       expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence")).toHaveLength(0);
       expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence-gap")).toHaveLength(1);
+      const gap = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "evidence-gap");
+      expect(gap?.value).toMatchObject({ scope: "operational" });
+      expect(gap?.value).not.toHaveProperty("attemptId");
     } finally {
       activeBrowserSessions.delete("attempt-gap");
       await context.close();
