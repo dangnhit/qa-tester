@@ -82,6 +82,7 @@ export type BrowserStepResult = {
   action: BrowserAction;
   assertions: readonly BrowserAssertion[];
   error?: string;
+  failureOrigin?: "action" | "assertion";
 };
 
 export type TestAttempt = {

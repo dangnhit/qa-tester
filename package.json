@@ -23,6 +23,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "demo": "tsx scripts/run-demo.ts",
+    "scan:secrets": "tsx scripts/check-secrets.ts",
     "generate:types": "tsx scripts/generate-types.ts",
     "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated"
   },

@@ -58,7 +58,9 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   return {
     artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId,
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
-    ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings.map((finding) => ({ kind: finding.kind, level: finding.level, message: finding.message })) }),
+    ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings
+      .filter((finding) => finding.kind === "console" || finding.kind === "network")
+      .map((finding) => ({ kind: finding.kind, level: finding.level ?? "error", message: finding.message })) }),
     provenance: { captureType: input.provenance.captureType, dimensions, dpr: input.provenance.dpr, scroll: input.provenance.scroll, clip: input.provenance.clip, ...(input.provenance.cssBoxes === undefined ? {} : { cssBoxes: input.provenance.cssBoxes }), ...(input.provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: input.provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }), url: input.provenance.url, viewport: input.provenance.viewport, browser: input.provenance.browser, build: input.provenance.build, capturedAt: input.provenance.capturedAt, ...(input.provenance.testcaseId === undefined ? {} : { testcaseId: input.provenance.testcaseId }), ...(input.provenance.bugId === undefined ? {} : { bugId: input.provenance.bugId }) },
   };
 }

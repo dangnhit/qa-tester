@@ -33,11 +33,16 @@ export async function executeBrowserStep(
   const startedAt = new Date(started).toISOString();
   try {
     await executeAction(page, step.action, resolver);
+  } catch (error) {
+    const finished = Date.now();
+    return { stepId: step.id, status: "FAILED", startedAt, finishedAt: new Date(finished).toISOString(), durationMs: finished - started, action: step.action, assertions: step.assertions ?? [], error: error instanceof Error ? error.message : String(error), failureOrigin: "action" };
+  }
+  try {
     for (const assertion of step.assertions ?? []) await assertBrowserAssertion(page, assertion, telemetry, resolver);
     const finished = Date.now();
     return { stepId: step.id, status: "PASSED", startedAt, finishedAt: new Date(finished).toISOString(), durationMs: finished - started, action: step.action, assertions: step.assertions ?? [] };
   } catch (error) {
     const finished = Date.now();
-    return { stepId: step.id, status: "FAILED", startedAt, finishedAt: new Date(finished).toISOString(), durationMs: finished - started, action: step.action, assertions: step.assertions ?? [], error: error instanceof Error ? error.message : String(error) };
+    return { stepId: step.id, status: "FAILED", startedAt, finishedAt: new Date(finished).toISOString(), durationMs: finished - started, action: step.action, assertions: step.assertions ?? [], error: error instanceof Error ? error.message : String(error), failureOrigin: "assertion" };
   }
 }

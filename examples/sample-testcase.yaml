@@ -1,0 +1,22 @@
+artifactType: test-case
+schemaVersion: "1.0.0"
+producerVersion: "0.1.0"
+testCaseId: TC-PROFILE-SAVE
+revisionId: REV-PROFILE-SAVE-1
+instanceId: INSTANCE-PROFILE-SAVE-DESKTOP
+title: Save a valid profile
+steps:
+  - id: open-profile
+    action: navigate
+    sideEffect: none
+coverage:
+  requirementId: REQ-PROFILE-SAVE
+  role: member
+  behavior: save profile
+  browser: chromium
+  viewport:
+    width: 1280
+    height: 720
+  accessibilityMethod: null
+  risk: high
+  outcome: Profile saved

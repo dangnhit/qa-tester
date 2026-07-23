@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Ubuntu Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run generate:types
+      - run: npm run check:generated
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Unit, schema, and CLI tests
+        run: npm test -- tests/core tests/contracts tests/cli tests/planning tests/defects tests/reporting tests/test-data tests/regression tests/retest tests/exploratory
+
+  windows:
+    name: Windows Node 24
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Unit, path, init, and installer lifecycle tests
+        run: npm test -- tests/core tests/contracts tests/cli tests/installer
+
+  browser-demo:
+    name: Chromium integration and expected-failure demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Browser integration tests
+        run: npm test -- tests/browser tests/evidence/collector.integration.test.ts tests/evidence/annotator.test.ts tests/orchestration/runtime-public.e2e.test.ts tests/e2e/demo.test.ts
+      - name: Expected-failure demo succeeds when the defect is detected
+        run: npm run demo
+
+  secret-scan:
+    name: Deterministic secret and ignore scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run scan:secrets

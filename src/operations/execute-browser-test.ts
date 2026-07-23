@@ -50,6 +50,11 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
     revisionId: artifact.value.revisionId,
     instanceId: artifact.value.instanceId,
     ...(typeof artifact.value.title === "string" ? { title: artifact.value.title } : {}),
+    ...(object(artifact.value.coverage) && object(artifact.value.coverage.viewport)
+      && typeof artifact.value.coverage.viewport.width === "number"
+      && typeof artifact.value.coverage.viewport.height === "number"
+      ? { browser: { viewport: { width: artifact.value.coverage.viewport.width, height: artifact.value.coverage.viewport.height } } }
+      : {}),
     browserDsl: { steps: execution.browserDsl.steps as BrowserTestStep[] }, artifact,
   };
 }
@@ -119,7 +124,11 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
           artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
           attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
           testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
-          failureClassification: attempt.status === "PASSED" ? "NONE" : "UNDETERMINED",
+          failureClassification: attempt.status === "PASSED"
+            ? "NONE"
+            : attempt.steps.some((step) => step.status === "FAILED" && step.failureOrigin === "assertion")
+              ? "PRODUCT_DEFECT"
+              : "UNDETERMINED",
           startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
         },
         relationships: [testCase.artifact.record.id],

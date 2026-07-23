@@ -1,0 +1,18 @@
+schemaVersion: "1.0.0"
+requirement:
+  id: REQ-DEMO-SAVE
+  text: Saving a valid profile must show "Profile saved".
+testCase:
+  id: TC-DEMO-SAVE
+  revisionId: REV-DEMO-SAVE
+  title: Save a valid profile
+  expectedText: Profile saved
+matrix:
+  - instanceId: INSTANCE-DEMO-DESKTOP
+    viewport:
+      width: 1280
+      height: 720
+  - instanceId: INSTANCE-DEMO-MOBILE
+    viewport:
+      width: 390
+      height: 844

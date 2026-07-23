@@ -11,13 +11,16 @@ import type { SecretResolver } from "../browser/types.js";
 import { activeBrowserSessions, executeTestInstance } from "./execute-browser-test.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
 import { attachEvidence, captureEvidence } from "../evidence/collector.js";
+import { annotateScreenshot } from "../evidence/annotator.js";
 import { resolveEvidencePolicy, type EvidencePolicyLayers } from "../evidence/policy.js";
 import { prepareTestData } from "./prepare-test-data.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { registerChangeScope } from "../regression/change-scope.js";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEntityId } from "../core/ids.js";
+import { validateArtifact } from "../contracts/validator.js";
 
 /** Closed operation contracts: the public adapter cannot inject callbacks or untyped objects. */
 export type WorkflowOperationInputMap = {
@@ -71,7 +74,7 @@ export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode;
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
 export type CanonicalPlanBundleRef = Readonly<{ sourceRunId: string; artifacts: readonly RegisteredArtifactRef[] }>;
 export type QaRuntimeRegistry = Readonly<{
-  browserManagers?: Readonly<Record<string, Readonly<{ browser: Browser }>>>;
+  browserManagers?: Readonly<Record<string, Readonly<{ browser: Browser; captureTrace?: boolean; annotateFailures?: boolean }>>>;
   secretResolvers?: Readonly<Record<string, SecretResolver>>;
   testDataRegistries?: Readonly<Record<string, TestDataHookRegistry>>;
   evidencePolicies?: Readonly<Record<string, EvidencePolicyLayers>>;
@@ -368,7 +371,37 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
       results.push(registered.record); continue;
     }
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
-    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), onBeforeSessionClose: async ({ attempt }) => {
+    const tracePath = join(tmpdir(), `qa-skills-${attemptId}.zip`);
+    await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(manager.captureTrace === true ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
+      if (manager.captureTrace === true) {
+        try {
+          await session.context.tracing.stop({ path: tracePath });
+          const bytes = await readFile(tracePath);
+          const resultArtifact = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+          if (!resultArtifact) throw new QaSkillsError("Trace capture requires a registered attempt", "ARTIFACT_BINDING");
+          const evidenceId = createEntityId();
+          const capturedAt = new Date().toISOString();
+          const viewport = session.page.viewportSize() ?? { width: 1, height: 1 };
+          const scroll = await session.page.evaluate(() => {
+            const page = globalThis as unknown as { scrollX: number; scrollY: number };
+            return { x: Math.max(0, page.scrollX), y: Math.max(0, page.scrollY) };
+          });
+          await workspace.registerEvidenceBundle({
+            binaries: [{ filename: `${evidenceId}-trace.zip`, contents: bytes, mediaType: "application/zip", captureType: "trace" }],
+            relationships: [resultArtifact.record.id],
+            provenance: "runtime",
+            descriptor: (binaries) => {
+              const binary = binaries[0]!;
+              const value = { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId, runId: workspace.runId, attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId), kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", dimensions: viewport, dpr: 1, scroll, clip: { x: 0, y: 0, width: viewport.width, height: viewport.height }, url: session.page.url(), viewport, browser: "playwright", build: "demo", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+              const validation = validateArtifact("evidence", value);
+              if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
+              return value;
+            },
+          });
+        } finally {
+          await rm(tracePath, { force: true });
+        }
+      }
       const attachment = async (telemetry: "console" | "network" | "log") => {
         const evidence = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry, protectedEnvironment: capturePolicy.protectedEnvironment, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
         void evidence;
@@ -378,7 +411,12 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
       if (policy.network !== "forbidden" && policy.network !== "off") await attachment("network");
       if (policy.screenshot === "always" || policy.screenshot === "required" || (policy.screenshot === "on-failure" && attempt.status !== "PASSED")) {
         const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
-        void evidence;
+        if (manager.annotateFailures === true && attempt.status !== "PASSED" && evidence.kind === "evidence") {
+          const viewport = session.page.viewportSize() ?? { width: 390, height: 844 };
+          const width = Math.max(1, Math.min(360, viewport.width - 24));
+          const height = Math.max(1, Math.min(90, viewport.height - 24));
+          await annotateScreenshot({ workspace, rawEvidenceDescriptorId: evidence.descriptorArtifactId, rawBinaryArtifactId: evidence.binaryArtifactId, annotations: [{ id: "demo-failure", label: "Missing authoritative validation message", locator: "[data-testid=validation-message]", cssBox: { x: 12, y: 12, width, height }, x: 12, y: 12, width, height }] });
+        }
       }
     } });
     const after = await workspace.readRegisteredArtifacts();
@@ -710,8 +748,10 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
       state.outputs[name] = output as never;
       state.checkpoint = await advanceCheckpoint(workspace, input, state.checkpoint, name, await outputRecords(workspace, output), state);
     }
-    const validation = await workspace.finalize(input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome: validation.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES", operationOrder: order, outputs, validation };
+    const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
+    const outcome = hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : "COMPLETED";
+    const validation = await workspace.finalize(input.mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
   } finally { await workspace.close(); }
 }
 
@@ -861,7 +901,9 @@ async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowR
         await exactRetestReproduction(workspace, input.retest);
       }
     }
-    const validation = await workspace.finalize(input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome: validation.valid ? "COMPLETED" : "COMPLETED_WITH_FAILURES", operationOrder: order, outputs, validation };
+    const hasExecutionFailures = (await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
+    const outcome = hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : "COMPLETED";
+    const validation = await workspace.finalize(input.mode, hasExecutionFailures ? "COMPLETED_WITH_FAILURES" : undefined);
+    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
   } finally { if (ownsWorkspace) await workspace.close(); }
 }

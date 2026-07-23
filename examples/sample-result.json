@@ -1,0 +1,14 @@
+{
+  "artifactType": "test-result",
+  "schemaVersion": "1.0.0",
+  "producerVersion": "0.1.0",
+  "attemptId": "ATT-SAMPLE-REDACTED",
+  "runId": "20260723T000000Z-000000",
+  "testCaseId": "TC-PROFILE-SAVE",
+  "testCaseRevisionId": "REV-PROFILE-SAVE-1",
+  "testCaseInstanceId": "INSTANCE-PROFILE-SAVE-DESKTOP",
+  "status": "FAILED",
+  "failureClassification": "PRODUCT_DEFECT",
+  "startedAt": "2026-07-23T00:00:00.000Z",
+  "finishedAt": "2026-07-23T00:00:01.000Z"
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QA Skills intentional-failure demo</title>
+    <style>
+      :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; }
+      body { margin: 0; background: #f4f7fb; color: #172033; }
+      main { width: min(42rem, calc(100% - 2rem)); margin: 4rem auto; }
+      form { display: grid; gap: 1rem; padding: 2rem; border: 1px solid #cad5e5; border-radius: 1rem; background: white; box-shadow: 0 1rem 2rem #2a47701a; }
+      label { display: grid; gap: .4rem; font-weight: 650; }
+      input, button { min-height: 2.75rem; border-radius: .6rem; font: inherit; }
+      input { border: 1px solid #8292aa; padding: 0 .8rem; }
+      button { border: 0; background: #1d4ed8; color: white; font-weight: 700; cursor: pointer; }
+      small { color: #53637a; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Profile settings</h1>
+      <form data-testid="demo-form">
+        <label>Email <input aria-label="Email" value="qa@example.test" /></label>
+        <button type="button">Save profile</button>
+        <small>The fixture intentionally omits the authoritative success message.</small>
+      </form>
+    </main>
+    <script>
+      document.querySelector("button").addEventListener("click", () => {
+        console.error("QA_DEMO_CONSOLE_ERROR");
+        void fetch("/api/demo-failure").catch(() => {});
+      });
+    </script>
+  </body>
+</html>
