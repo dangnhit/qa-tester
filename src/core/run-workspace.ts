@@ -4,8 +4,8 @@ import { join, relative, resolve } from "node:path";
 import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
-import { evaluateApproval, type ApprovalEnvironment, type ApprovalPolicy } from "../planning/approval.js";
-import { assertRequirementAuthorities, type RequirementAuthority } from "../planning/authority.js";
+import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
+import { assertRequirementAuthorities } from "../planning/authority.js";
 import {
   artifactProfileNames,
   artifactProfileVersion,
@@ -132,47 +132,15 @@ function assertPersistedPlanningSemantics(artifact: LoadedArtifact, artifacts: r
     return;
   }
   if (artifact.record.type !== "test-plan") return;
-  const testCases = value.testCases;
-  const approvalPolicy = value.approvalPolicy;
-  if (!Array.isArray(testCases) || !isRecord(approvalPolicy) || typeof approvalPolicy.mode !== "string") {
-    throw new Error("Test plan policy is invalid");
-  }
-  const requirements = new Map<string, RequirementAuthority[]>();
-  for (const analysis of artifacts.filter((candidate) => candidate.valid && candidate.record.type === "requirement-analysis")) {
-    const statements = analysis.value?.statements;
-    if (!Array.isArray(statements)) continue;
-    for (const statement of statements) {
-      if (!isRecord(statement) || typeof statement.requirementId !== "string" || typeof statement.authority !== "string") continue;
-      requirements.set(statement.requirementId, [...(requirements.get(statement.requirementId) ?? []), statement.authority as RequirementAuthority]);
-    }
-  }
   const environments = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "environment-profile");
   const classification = environments.length === 1 ? environments[0]?.value?.classification : undefined;
   if (typeof classification !== "string") throw new Error("Test plan requires one authoritative environment profile");
-  for (const testCase of testCases) {
-    if (!isRecord(testCase) || !Array.isArray(testCase.expectedResults) || !Array.isArray(testCase.steps) || !Array.isArray(testCase.openQuestions)) {
-      throw new Error("Test plan test case is invalid");
-    }
-    const expectedResults = testCase.expectedResults.map((expected) => {
-      if (!isRecord(expected) || typeof expected.requirementId !== "string") throw new Error("Test plan expected result is invalid");
-      const matches = requirements.get(expected.requirementId) ?? [];
-      if (matches.length !== 1) throw new Error("Test plan has an orphan or ambiguous expected result requirement");
-      if (expected.authority !== matches[0]) throw new Error("Test plan expected authority does not match its registered requirement");
-      return { authority: matches[0] ?? "ASSUMED" };
-    });
-    if (approvalPolicy.mode === "auto-approve-safe") {
-      const decision = evaluateApproval({
-        expectedResults,
-        openQuestions: testCase.openQuestions.filter((question): question is string => typeof question === "string"),
-        steps: testCase.steps.map((step) => isRecord(step) ? {
-          action: step.action,
-          sideEffect: typeof step.sideEffect === "string" ? step.sideEffect : "",
-          ...(isRecord(step.cleanup) && typeof step.cleanup.declared === "boolean" ? { cleanup: { declared: step.cleanup.declared } } : {}),
-        } : { sideEffect: "" }),
-      }, approvalPolicy as ApprovalPolicy, { classification } as ApprovalEnvironment);
-      if (!decision.approved) throw new Error(`Unsafe auto-approval: ${decision.reasons.join(", ")}`);
-    }
-  }
+  const decision = deriveTestPlanApproval({
+    plan: value,
+    requirementAnalyses: artifacts.filter((candidate): candidate is LoadedArtifact & { value: Record<string, unknown> } => candidate.valid && candidate.record.type === "requirement-analysis" && candidate.value !== undefined).map((candidate) => candidate.value),
+    environment: { classification } as ApprovalEnvironment,
+  });
+  if (JSON.stringify(value.approvalDecision) !== JSON.stringify(decision)) throw new Error("Persisted test plan approval decision does not equal the derived decision");
 }
 
 async function filesUnder(root: string, directory: string): Promise<string[]> {
@@ -554,10 +522,13 @@ export class RunWorkspace {
   }): Promise<ArtifactRecord & { absolutePath: string }> {
     return this.withManifestTransaction(async () => {
       const manifest = await this.readManifest();
-      await this.assertArtifactBinding(input.type, input.value, input.relationships, manifest);
+      const value = input.type === "test-plan"
+        ? await this.withDerivedTestPlanApproval(input.value, manifest)
+        : input.value;
+      await this.assertArtifactBinding(input.type, value, input.relationships, manifest);
       return this.registerCanonicalArtifact(
         input.type,
-        input.value,
+        value,
         input.relationships,
         input.provenance ?? "agent-draft",
         manifest,
@@ -863,27 +834,22 @@ export class RunWorkspace {
     }
   }
 
-  private async assertTestPlanPolicy(value: Record<string, unknown>, manifest: Manifest): Promise<void> {
-    const testCases = value.testCases;
-    const approvalPolicy = value.approvalPolicy;
-    if (!Array.isArray(testCases) || !isRecord(approvalPolicy) || typeof approvalPolicy.mode !== "string") {
-      throw new QaSkillsError("Test plan policy is invalid", "ARTIFACT_BINDING");
+  private async withDerivedTestPlanApproval(value: unknown, manifest: Manifest): Promise<Record<string, unknown>> {
+    if (!isRecord(value)) throw new QaSkillsError("Test plan policy is invalid", "ARTIFACT_BINDING");
+    if (value.approvalDecision !== undefined) {
+      throw new QaSkillsError("Test plan approval decision is derived by workspace registration and cannot be self-asserted", "ARTIFACT_BINDING");
     }
+    const decision = await this.assertTestPlanPolicy(value, manifest);
+    return { ...value, approvalDecision: decision };
+  }
+
+  private async assertTestPlanPolicy(value: Record<string, unknown>, manifest: Manifest): Promise<ApprovalDecision> {
     const requirements = await this.readRegisteredValues(manifest, "requirement-analysis");
-    const byRequirementId = new Map<string, { authority: RequirementAuthority }[]>();
     for (const analysis of requirements) {
       try {
         assertRequirementAuthorities(analysis);
       } catch (error: unknown) {
         throw new QaSkillsError(error instanceof Error ? error.message : "Registered requirement authority is invalid", "ARTIFACT_BINDING");
-      }
-      const statements = analysis.statements;
-      if (!Array.isArray(statements)) continue;
-      for (const statement of statements) {
-        if (!isRecord(statement) || typeof statement.requirementId !== "string" || typeof statement.authority !== "string") continue;
-        const authorities = byRequirementId.get(statement.requirementId) ?? [];
-        authorities.push({ authority: statement.authority as RequirementAuthority });
-        byRequirementId.set(statement.requirementId, authorities);
       }
     }
     const environments = await this.readRegisteredValues(manifest, "environment-profile");
@@ -891,39 +857,20 @@ export class RunWorkspace {
       ? { classification: environments[0].classification } as ApprovalEnvironment
       : undefined;
     if (!environment) throw new QaSkillsError("Test plan requires one authoritative environment profile", "ARTIFACT_BINDING");
-    for (const testCase of testCases) {
-      if (!isRecord(testCase) || !Array.isArray(testCase.expectedResults) || !Array.isArray(testCase.steps) || !Array.isArray(testCase.openQuestions)) {
-        throw new QaSkillsError("Test plan test case is invalid", "ARTIFACT_BINDING");
-      }
-      const resolvedExpectedResults = testCase.expectedResults.map((expected) => {
-        if (!isRecord(expected) || typeof expected.requirementId !== "string") {
-          throw new QaSkillsError("Test plan expected result is invalid", "ARTIFACT_BINDING");
-        }
-        const matches = byRequirementId.get(expected.requirementId) ?? [];
-        if (matches.length !== 1) {
-          throw new QaSkillsError("Test plan has an orphan or ambiguous expected result requirement", "ARTIFACT_BINDING");
-        }
-        if (expected.authority !== matches[0]?.authority) {
-          throw new QaSkillsError("Test plan expected authority does not match its registered requirement", "ARTIFACT_BINDING");
-        }
-        return { authority: matches[0]?.authority ?? "ASSUMED" };
-      });
-      const policy = approvalPolicy as ApprovalPolicy;
-      if (policy.mode === "auto-approve-safe") {
-        const decision = evaluateApproval({
-          expectedResults: resolvedExpectedResults,
-          openQuestions: testCase.openQuestions.filter((question): question is string => typeof question === "string"),
-          steps: testCase.steps.map((step) => isRecord(step) ? {
-            action: step.action,
-            sideEffect: typeof step.sideEffect === "string" ? step.sideEffect : "",
-            ...(isRecord(step.cleanup) && typeof step.cleanup.declared === "boolean" ? { cleanup: { declared: step.cleanup.declared } } : {}),
-          } : { sideEffect: "" }),
-        }, policy, environment);
-        if (!decision.approved) {
-          throw new QaSkillsError(`Unsafe auto-approval: ${decision.reasons.join(", ")}`, "UNSAFE_OPERATION");
-        }
-      }
+    let decision: ApprovalDecision;
+    try {
+      decision = deriveTestPlanApproval({ plan: value, requirementAnalyses: requirements, environment });
+    } catch (error: unknown) {
+      throw new QaSkillsError(error instanceof Error ? error.message : "Test plan approval derivation failed", "ARTIFACT_BINDING");
     }
+    const persisted = value.approvalDecision;
+    if (persisted !== undefined && JSON.stringify(persisted) !== JSON.stringify(decision)) {
+      throw new QaSkillsError("Persisted test plan approval decision does not equal the derived decision", "ARTIFACT_BINDING");
+    }
+    if (!decision.approved && isRecord(value.approvalPolicy) && value.approvalPolicy.mode === "auto-approve-safe") {
+      throw new QaSkillsError(`Unsafe auto-approval: ${decision.reasons.join(", ")}`, "UNSAFE_OPERATION");
+    }
+    return decision;
   }
 
   private async registerCanonicalArtifact(

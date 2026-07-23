@@ -8,12 +8,6 @@ export interface TestCase {
   revisionId: string;
   instanceId: string;
   title: string;
-  execution?: {
-    testPlanArtifactId: string;
-    browserDsl: {
-      [k: string]: unknown | undefined;
-    };
-  };
   /**
    * @minItems 1
    */

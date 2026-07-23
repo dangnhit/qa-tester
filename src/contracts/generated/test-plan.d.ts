@@ -41,6 +41,8 @@ export interface TestPlan {
   };
   approvalDecision?: {
     approved: boolean;
+    mode: "AUTO_APPROVED" | "HUMAN_REVIEW";
+    reasons: string[];
   };
   /**
    * @minItems 1
@@ -88,6 +90,14 @@ export interface TestPlan {
         }[]
       ];
       openQuestions: string[];
+      browserExecution?: {
+        revisionId: string;
+        instanceId: string;
+        browserDsl: {
+          [k: string]: unknown | undefined;
+        };
+        browserDslFingerprint: string;
+      };
     },
     ...{
       testCaseId: string;
@@ -131,6 +141,14 @@ export interface TestPlan {
         }[]
       ];
       openQuestions: string[];
+      browserExecution?: {
+        revisionId: string;
+        instanceId: string;
+        browserDsl: {
+          [k: string]: unknown | undefined;
+        };
+        browserDslFingerprint: string;
+      };
     }[]
   ];
 }

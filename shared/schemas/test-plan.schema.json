@@ -16,7 +16,15 @@
       "required": ["mode"],
       "properties": { "mode": { "enum": ["auto-approve-safe", "human-review"] } }
     },
-    "approvalDecision": { "type": "object", "additionalProperties": false, "required": ["approved"], "properties": { "approved": { "type": "boolean" } } },
+    "approvalDecision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approved", "mode", "reasons"],
+      "properties": {
+        "approved": { "type": "boolean" },
+        "mode": { "enum": ["AUTO_APPROVED", "HUMAN_REVIEW"] },
+        "reasons": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "testCases": {
       "type": "array",
       "minItems": 1,
@@ -62,7 +70,17 @@
               }
             }
           },
-          "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "browserExecution": {
+            "type": "object", "additionalProperties": false,
+            "required": ["revisionId", "instanceId", "browserDsl", "browserDslFingerprint"],
+            "properties": {
+              "revisionId": { "type": "string", "minLength": 1 },
+              "instanceId": { "type": "string", "minLength": 1 },
+              "browserDsl": { "type": "object" },
+              "browserDslFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
         }
       }
     }

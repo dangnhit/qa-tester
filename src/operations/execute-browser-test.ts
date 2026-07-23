@@ -5,6 +5,7 @@ import type { ActiveBrowserSession, BrowserStepResult, BrowserTestStep, Canonica
 import { validateBrowserTestDsl } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
+import { sha256Fingerprint } from "../planning/testcase-revision.js";
 
 export const activeBrowserSessions = new Map<string, ActiveBrowserSession>();
 const reservedAttemptIds = new Set<string>();
@@ -19,17 +20,22 @@ function object(value: unknown): value is Record<string, unknown> { return typeo
 function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[], testCaseArtifactId: string): CanonicalBrowserTestCase {
   const artifact = artifacts.find((candidate) => candidate.record.id === testCaseArtifactId && candidate.record.type === "test-case");
   if (!artifact) throw new QaSkillsError("Execution requires an approved registered test case artifact", "ARTIFACT_BINDING");
-  const execution = artifact.value.execution;
-  if (!object(execution) || typeof execution.testPlanArtifactId !== "string" || !object(execution.browserDsl)) {
-    throw new QaSkillsError("Test case is not an approved executable browser instance", "ARTIFACT_BINDING");
-  }
-  const plan = artifacts.find((candidate) => candidate.record.id === execution.testPlanArtifactId && candidate.record.type === "test-plan");
-  if (!plan || !artifact.record.relationships.includes(plan.record.id) || !object(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== true) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
-  const cases = plan.value.testCases;
-  if (!Array.isArray(cases) || !cases.some((candidate) => object(candidate) && candidate.testCaseId === artifact.value.testCaseId)) {
+  const plan = artifacts.find((candidate) => candidate.record.type === "test-plan" && artifact.record.relationships.includes(candidate.record.id));
+  if (!plan || !object(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== true) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
+  const cases: unknown = plan.value.testCases;
+  const planCases: readonly unknown[] = Array.isArray(cases) ? cases as unknown[] : [];
+  const planCase = planCases.find((candidate) => object(candidate) && candidate.testCaseId === artifact.value.testCaseId);
+  if (!object(planCase)) {
     throw new QaSkillsError("Test case does not match its approved registered plan", "ARTIFACT_BINDING");
   }
-  if (!validateBrowserTestDsl(execution.browserDsl).valid || !Array.isArray(execution.browserDsl.steps)) {
+  const execution = planCase.browserExecution;
+  if (!object(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !object(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") {
+    throw new QaSkillsError("Approved test plan entry has no browser execution binding", "ARTIFACT_BINDING");
+  }
+  if (execution.revisionId !== artifact.value.revisionId || execution.instanceId !== artifact.value.instanceId) {
+    throw new QaSkillsError("Approved test plan entry does not match the test case revision and instance", "ARTIFACT_BINDING");
+  }
+  if (sha256Fingerprint(execution.browserDsl) !== execution.browserDslFingerprint || !validateBrowserTestDsl(execution.browserDsl).valid || !Array.isArray(execution.browserDsl.steps)) {
     throw new QaSkillsError("Approved browser test DSL is invalid", "INVALID_ARTIFACT");
   }
   if (typeof artifact.value.testCaseId !== "string" || typeof artifact.value.revisionId !== "string" || typeof artifact.value.instanceId !== "string") {
@@ -94,7 +100,20 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
-    return executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}) });
+    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}) });
+    await input.workspace.registerArtifactValue({
+      type: "test-result",
+      value: {
+        artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
+        attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
+        testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
+        failureClassification: attempt.status === "PASSED" ? "NONE" : "UNDETERMINED",
+        startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
+      },
+      relationships: [testCase.artifact.record.id],
+      provenance: "runtime",
+    });
+    return attempt;
   });
   executionTail = operation.then(() => undefined, () => undefined);
   return operation.finally(() => reservedAttemptIds.delete(input.attemptId));

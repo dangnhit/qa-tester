@@ -31,7 +31,7 @@ export async function ingestTestCases(options: IngestTestCasesOptions): Promise<
   try {
     return await workspace.registerArtifactValue({
       type: "test-plan",
-      value: { ...draft, approvalDecision: { approved: draft.approvalPolicy.mode === "auto-approve-safe" } },
+      value: draft,
       relationships: options.relationships ?? [],
       provenance: "agent-draft",
     });
