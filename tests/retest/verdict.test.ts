@@ -12,4 +12,9 @@ describe("retest verdicts", () => {
   it("recognizes intermittent reproduction without inventing a product conclusion", () => {
     expect(deriveRetestVerdict({ originalBugId: "BUG-LOGIN-001", reproductionStatuses: ["FAILED", "PASSED"] }).verdict).toBe("INTERMITTENT");
   });
+
+  it("distinguishes partial repair across affected scenarios from intermittent repeats of one scenario", () => {
+    expect(deriveRetestVerdict({ originalBugId: "BUG-LOGIN-001", reproductionStatuses: ["PASSED", "FAILED"], scenarioIds: ["password", "oauth"] }).verdict).toBe("PARTIALLY_FIXED");
+    expect(deriveRetestVerdict({ originalBugId: "BUG-LOGIN-001", reproductionStatuses: ["PASSED", "FAILED"], scenarioIds: ["password", "password"] }).verdict).toBe("INTERMITTENT");
+  });
 });

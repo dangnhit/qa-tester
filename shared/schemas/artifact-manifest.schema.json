@@ -39,7 +39,8 @@
               "test-plan",
               "exploration-charter",
               "retest-result",
-              "regression-selection"
+              "regression-selection",
+              "change-scope"
             ]
           },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },

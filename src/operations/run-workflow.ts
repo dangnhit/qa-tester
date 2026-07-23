@@ -18,7 +18,6 @@ export type WorkflowInput = Readonly<{
   charter?: ExplorationCharter;
   regression?: Readonly<{ changes: readonly ChangeScope[]; testCases: readonly RegressionCase[] }>;
   retest?: Readonly<{ sourceBugArtifactId: string; reproductionAttemptIds: readonly string[]; regressionOutcome?: RegressionOutcome }>;
-  operations?: Readonly<Partial<Record<WorkflowOperationName, WorkflowOperation>>>;
 }>;
 export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; operationOrder: readonly WorkflowOperationName[]; outputs: ReadonlyMap<WorkflowOperationName, unknown>; validation: WorkspaceValidation }>;
 
@@ -53,15 +52,21 @@ async function sourceBug(workspace: RunWorkspace, sourceRunId: string, sourceBug
 
 async function registerCharter(workspace: RunWorkspace, charter: ExplorationCharter): Promise<ArtifactRecord> {
   const valid = assertExplorationCharter(charter);
+  const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile");
+  if (!environment) throw new QaSkillsError("Exploration charter requires the registered environment", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "exploration-charter", value: {
     artifactType: "exploration-charter", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, ...valid,
-  }, relationships: [], provenance: "runtime" });
+  }, relationships: [environment.record.id], provenance: "runtime" });
 }
 
 async function registerSelection(workspace: RunWorkspace, selection: RegressionSelection): Promise<ArtifactRecord> {
+  const artifacts = await workspace.readRegisteredArtifacts();
+  const decisions = [...selection.selected, ...selection.excluded];
+  const relationships = decisions.map((decision) => artifacts.filter((artifact) => artifact.record.type === "test-case" && artifact.value.testCaseId === decision.testCaseId && artifact.value.revisionId === decision.revisionId)).flat();
+  if (relationships.length !== decisions.length) throw new QaSkillsError("Regression selection requires every decision to bind one registered canonical test case revision", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "regression-selection", value: {
     artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: "0.1.0", selectionId: `REG-${workspace.runId}`, runId: workspace.runId, ...selection,
-  }, relationships: [], provenance: "runtime" });
+  }, relationships: relationships.map((artifact) => artifact.record.id), provenance: "runtime" });
 }
 
 async function exactRetestReproduction(workspace: RunWorkspace, input: NonNullable<WorkflowInput["retest"]>): Promise<{ sourceRunId: string; source: Awaited<ReturnType<typeof sourceBug>>; statuses: readonly string[] }> {
@@ -86,11 +91,26 @@ async function registerRetestResult(workspace: RunWorkspace, input: NonNullable<
     artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: reproduction.sourceRunId,
     sourceBugArtifactId: input.sourceBugArtifactId, bugId: verdict.bugId, reproductionAttemptIds: [...input.reproductionAttemptIds], verdict: verdict.verdict,
     ...(verdict.regressionOutcome === undefined ? {} : { regressionOutcome: verdict.regressionOutcome }),
-  }, relationships: [], provenance: "runtime" });
+  }, relationships: (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-result" && input.reproductionAttemptIds.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record.id), provenance: "runtime" });
 }
 
 /** Executes only typed, dependency-declared runtime operations. It never invokes shells or Skill Adapters. */
-export async function runWorkflow(input: WorkflowInput): Promise<WorkflowResult> {
+type WorkflowRegistry = Readonly<Partial<Record<WorkflowOperationName, WorkflowOperation>>>;
+
+const runtimeRegistry: WorkflowRegistry = {
+  "generate-qa-report": async ({ workspace }) => (await import("./generate-qa-report.js")).generateQaReport({ workspace }),
+};
+
+/** Test-only factory seam. Public callers cannot inject arbitrary operation callbacks. */
+export function createWorkflowRunner(registry: WorkflowRegistry): (input: WorkflowInput) => Promise<WorkflowResult> {
+  return (input) => runWorkflowWithRegistry(input, registry);
+}
+
+export function runWorkflow(input: WorkflowInput): Promise<WorkflowResult> {
+  return runWorkflowWithRegistry(input, runtimeRegistry);
+}
+
+async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowRegistry): Promise<WorkflowResult> {
   const order = operationsForMode(input.mode);
   if (input.mode === "retest" && !input.linkedRunId) throw new QaSkillsError("Retest creates a linked immutable run", "ARTIFACT_BINDING");
   if (input.mode === "regression" && !input.linkedRunId && input.retest !== undefined) throw new QaSkillsError("Retest regression must retain its linked source run", "ARTIFACT_BINDING");
@@ -118,7 +138,7 @@ export async function runWorkflow(input: WorkflowInput): Promise<WorkflowResult>
         outputs.set(name, await registerRetestResult(workspace, input.retest));
         continue;
       }
-      const operation = input.operations?.[name];
+      const operation = registry[name];
       if (!operation) throw new QaSkillsError(`Workflow operation ${name} requires its typed runtime input`, "ARTIFACT_BINDING");
       outputs.set(name, await operation({ name, workspace, input, outputs }));
       if (name === "reproduce-bug") {

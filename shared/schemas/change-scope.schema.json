@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/change-scope.schema.json",
+  "title": "Canonical Change Scope",
+  "type": "object", "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "changeScopeId", "runId", "changes", "inputChecksum", "provenance"],
+  "properties": {
+    "artifactType": { "const": "change-scope" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "changeScopeId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 },
+    "changes": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "requirementIds", "codeSurfaces", "declaredDependencies", "gitPaths", "userScope"], "properties": { "id": { "type": "string", "minLength": 1 }, "requirementIds": { "$ref": "#/$defs/strings" }, "codeSurfaces": { "$ref": "#/$defs/strings" }, "declaredDependencies": { "$ref": "#/$defs/strings" }, "gitPaths": { "$ref": "#/$defs/strings" }, "userScope": { "$ref": "#/$defs/strings" } } } },
+    "inputChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "provenance": { "type": "object", "additionalProperties": false, "required": ["kind", "reference"], "properties": { "kind": { "enum": ["git-diff", "user-change", "declared-change"] }, "reference": { "type": "string", "minLength": 1 } } }
+  }, "$defs": { "strings": { "type": "array", "items": { "type": "string", "minLength": 1 } } }
+}

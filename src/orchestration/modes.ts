@@ -16,7 +16,7 @@ const definitions: Readonly<Record<WorkflowOperationName, OperationMetadata>> = 
   "ingest-coverage-obligation": { name: "ingest-coverage-obligation", dependsOn: ["ingest-requirement-analysis"] },
   "prepare-test-data": { name: "prepare-test-data", dependsOn: ["ingest-testcases"] },
   "execute-browser-test": { name: "execute-browser-test", dependsOn: [] },
-  "collect-evidence": { name: "collect-evidence", dependsOn: ["execute-browser-test"] },
+  "collect-evidence": { name: "collect-evidence", dependsOn: [] },
   "generate-bug-report": { name: "generate-bug-report", dependsOn: ["collect-evidence"] },
   "generate-qa-report": { name: "generate-qa-report", dependsOn: ["collect-evidence"] },
   "register-exploration-charter": { name: "register-exploration-charter", dependsOn: [] },
@@ -42,15 +42,19 @@ export function isPublicWorkflowMode(mode: string): mode is PublicWorkflowMode {
 export function operationsForMode(mode: PublicWorkflowMode): readonly WorkflowOperationName[] {
   if (!isPublicWorkflowMode(mode)) throw new QaSkillsError(`Unsupported public workflow mode: ${String(mode)}`, "INVALID_MODE");
   const requested = directOperations[mode];
-  const included = new Set(requested);
-  const visiting = new Set<WorkflowOperationName>();
-  const visited = new Set<WorkflowOperationName>();
-  const ordered: WorkflowOperationName[] = [];
-  const visit = (name: WorkflowOperationName): void => {
+  return resolveOperationOrder(requested, definitions);
+}
+
+/** Computes a deterministic transitive dependency closure for runtime metadata. */
+export function resolveOperationOrder<T extends string>(requested: readonly T[], metadata: Readonly<Record<T, Readonly<{ dependsOn: readonly T[] }>>>): readonly T[] {
+  const visiting = new Set<T>();
+  const visited = new Set<T>();
+  const ordered: T[] = [];
+  const visit = (name: T): void => {
     if (visited.has(name)) return;
     if (visiting.has(name)) throw new QaSkillsError("Workflow operation dependency cycle", "ARTIFACT_BINDING");
     visiting.add(name);
-    for (const dependency of definitions[name].dependsOn) if (included.has(dependency)) visit(dependency);
+    for (const dependency of metadata[name].dependsOn) visit(dependency);
     visiting.delete(name); visited.add(name); ordered.push(name);
   };
   for (const name of requested) visit(name);

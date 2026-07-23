@@ -32,3 +32,11 @@ The green slices cover mode ordering, bounded exploration charters and non-autho
 - `git diff --check`
 
 `npm run check:generated` reports the intentionally changed generated manifest union until the generated files are staged; it passes after staging the generated contract output.
+
+## Review hardening
+
+- Workspace reopening now revalidates charter environment binding, regression decision-to-case relationships and complete-claim risk semantics, and retest linked-source/reproduction/verdict relationships.
+- Public `runWorkflow` does not accept caller callbacks. The callback factory is an explicit test seam; the public path uses its closed runtime registry.
+- Dependency resolution performs a deterministic transitive topological closure and rejects cycles.
+- Canonical change scopes carry a deterministic checksum and declared provenance before they can be used by regression selection.
+- Retest verdicts distinguish partial repair across distinct affected scenarios from intermittent repeat outcomes within one scenario.

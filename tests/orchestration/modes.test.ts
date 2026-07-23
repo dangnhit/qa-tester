@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { operationsForMode } from "../../src/orchestration/modes.js";
-import { runWorkflow } from "../../src/operations/run-workflow.js";
+import { operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
+import { createWorkflowRunner } from "../../src/operations/run-workflow.js";
 
 describe("workflow mode operation plans", () => {
   it("uses the minimal dependency-ordered operations for plan and execute", () => {
@@ -16,6 +16,11 @@ describe("workflow mode operation plans", () => {
     expect(() => operationsForMode("cleanup" as never)).toThrow(/unsupported.*mode/i);
   });
 
+  it("takes transitive metadata dependencies and rejects cycles deterministically", () => {
+    expect(resolveOperationOrder(["report"], { report: { dependsOn: ["evidence"] }, evidence: { dependsOn: ["execute"] }, execute: { dependsOn: [] } })).toEqual(["execute", "evidence", "report"]);
+    expect(() => resolveOperationOrder(["a"], { a: { dependsOn: ["b"] }, b: { dependsOn: ["a"] } })).toThrow(/cycle/i);
+  });
+
   it("makes a retest reproduce its target before selecting regression", () => {
     expect(operationsForMode("retest")).toEqual(["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "derive-retest-verdict"]);
   });
@@ -24,11 +29,10 @@ describe("workflow mode operation plans", () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     const calls: string[] = [];
     try {
-      const result = await runWorkflow({
+      const result = await createWorkflowRunner({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); } })({
         root, mode: "exploratory",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
         charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
-        operations: { "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); } },
       });
       expect(result.operationOrder).toEqual(["register-exploration-charter", "collect-evidence"]);
       expect(calls).toEqual(["collect-evidence"]);
@@ -39,10 +43,9 @@ describe("workflow mode operation plans", () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     let invoked = false;
     try {
-      await expect(runWorkflow({
+      await expect(createWorkflowRunner({ "execute-browser-test": () => { invoked = true; return Promise.resolve(); }, "collect-evidence": () => Promise.resolve(undefined) })({
         root, mode: "execute",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
-        operations: { "execute-browser-test": () => { invoked = true; return Promise.resolve(); }, "collect-evidence": () => Promise.resolve(undefined) },
       })).rejects.toThrow(/approved canonical/i);
       expect(invoked).toBe(false);
     } finally { await rm(root, { recursive: true, force: true }); }

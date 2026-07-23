@@ -24,6 +24,7 @@ import testStepResultSchema from "../../shared/schemas/test-step-result.schema.j
 import explorationCharterSchema from "../../shared/schemas/exploration-charter.schema.json" with { type: "json" };
 import retestResultSchema from "../../shared/schemas/retest-result.schema.json" with { type: "json" };
 import regressionSelectionSchema from "../../shared/schemas/regression-selection.schema.json" with { type: "json" };
+import changeScopeSchema from "../../shared/schemas/change-scope.schema.json" with { type: "json" };
 import type { FormatsPlugin } from "ajv-formats";
 import type { Ajv2020 as Ajv2020Instance, ValidateFunction } from "ajv/dist/2020.js";
 
@@ -50,6 +51,7 @@ const schemas: Record<ArtifactType, object> = {
   "exploration-charter": explorationCharterSchema,
   "retest-result": retestResultSchema,
   "regression-selection": regressionSelectionSchema,
+  "change-scope": changeScopeSchema,
 };
 
 const require = createRequire(import.meta.url);

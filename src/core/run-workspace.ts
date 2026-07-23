@@ -478,6 +478,28 @@ async function inspectWorkspaceState(
         } catch (error: unknown) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", error instanceof Error ? error.message : "Cleanup provenance is invalid") || changed;
         }
+      } else if (artifact.record.type === "exploration-charter") {
+        const charters = valuesOf("exploration-charter");
+        const environment = valuesOf("environment-profile")[0];
+        if (value.runId !== expectedRunId || charters.length !== 1 || !environment || artifact.record.relationships.length !== 1 || artifact.record.relationships[0] !== environment.record.id) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Exploration charter must be the sole run-bound charter linked to the environment") || changed;
+        }
+      } else if (artifact.record.type === "regression-selection") {
+        const decisions = [...array(value.selected), ...array(value.excluded)];
+        const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? valuesOf("test-case").filter((testCase) => testCase.value?.testCaseId === decision.testCaseId && testCase.value?.revisionId === decision.revisionId) : []);
+        const relationshipIds = [...artifact.record.relationships].sort();
+        const expectedIds = decisionCases.map((testCase) => testCase.record.id).sort();
+        if (value.runId !== expectedRunId || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify(expectedIds) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Regression selection must bind every decision to one registered case and expose unmapped risk") || changed;
+        }
+      } else if (artifact.record.type === "retest-result") {
+        const attempts = array(value.reproductionAttemptIds).map((id) => valuesOf("test-result").find((attempt) => attempt.value?.attemptId === id));
+        const relationships = attempts.map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined).sort();
+        const sourceMatchesLink = typeof value.sourceRunId === "string" && value.sourceRunId === metadata.linkedRunId && value.sourceRunId !== expectedRunId;
+        const derived = typeof value.bugId === "string" ? deriveRetestVerdict({ originalBugId: value.bugId, reproductionStatuses: attempts.map((attempt) => String(attempt?.value?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) }) : undefined;
+        if (value.runId !== expectedRunId || !sourceMatchesLink || attempts.length === 0 || attempts.some((attempt) => !attempt) || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Retest result must bind linked source and exact reproduction artifacts with a derived verdict") || changed;
+        }
       }
     }
   }
@@ -1225,14 +1247,21 @@ export class RunWorkspace {
         throw new QaSkillsError(error instanceof Error ? error.message : "Cleanup provenance is invalid", "ARTIFACT_BINDING");
       }
     } else if (type === "exploration-charter") {
-      if (value.runId !== this.runId || manifest.artifacts.some((artifact) => artifact.type === "exploration-charter")) {
+      const environment = manifest.artifacts.find((artifact) => artifact.type === "environment-profile");
+      if (value.runId !== this.runId || manifest.artifacts.some((artifact) => artifact.type === "exploration-charter") || !environment || relationships.length !== 1 || relationships[0] !== environment.id) {
         throw new QaSkillsError("An exploratory run requires exactly one runtime-bound charter", "ARTIFACT_BINDING");
       }
     } else if (type === "regression-selection") {
       if (value.runId !== this.runId) throw new QaSkillsError("Regression selection run ID does not match this workspace", "ARTIFACT_BINDING");
       const cases = await this.readRegisteredValues(manifest, "test-case");
       const decisions = [...array(value.selected), ...array(value.excluded)];
-      if (!decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId))) {
+      const caseRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-case");
+      const expectedRelationships = decisions.map((decision) => isRecord(decision) ? caseRecords.find((candidate) => {
+        const index = caseRecords.findIndex((record) => record.id === candidate.id);
+        const testCase = cases[index];
+        return testCase?.testCaseId === decision.testCaseId && testCase?.revisionId === decision.revisionId;
+      })?.id : undefined);
+      if (!decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify(expectedRelationships.filter((id): id is string => id !== undefined).sort())) {
         throw new QaSkillsError("Regression selection decisions must bind registered canonical test case revisions", "ARTIFACT_BINDING");
       }
       if (value.complete === true && Array.isArray(value.unmappedChangeRisks) && value.unmappedChangeRisks.length > 0) {
@@ -1255,7 +1284,12 @@ export class RunWorkspace {
           throw new QaSkillsError("Retest result must use exact registered reproduction attempts", "ARTIFACT_BINDING");
         }
         const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: reproduced.map((attempt) => String(attempt?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) });
-        if (value.verdict !== derived.verdict) throw new QaSkillsError("Retest verdict must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
+        const resultRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-result");
+        const expectedRelationships = ids.map((id) => {
+          const index = attempts.findIndex((attempt) => attempt?.attemptId === id);
+          return index < 0 ? undefined : resultRecords[index]?.id;
+        }).filter((id): id is string => id !== undefined).sort();
+        if (value.verdict !== derived.verdict || JSON.stringify([...relationships].sort()) !== JSON.stringify(expectedRelationships)) throw new QaSkillsError("Retest verdict and relationships must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
       } finally { await source.close(); }
     }
   }

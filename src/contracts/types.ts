@@ -19,6 +19,7 @@ export const artifactTypes = [
   "exploration-charter",
   "retest-result",
   "regression-selection",
+  "change-scope",
 ] as const;
 
 export type ArtifactType = (typeof artifactTypes)[number];

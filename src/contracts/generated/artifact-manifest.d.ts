@@ -27,7 +27,8 @@ export interface RunArtifactManifest {
       | "test-plan"
       | "exploration-charter"
       | "retest-result"
-      | "regression-selection";
+      | "regression-selection"
+      | "change-scope";
     relativePath: string;
     sha256: string;
     mediaType?: string;
