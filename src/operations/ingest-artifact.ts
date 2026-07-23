@@ -1,0 +1,19 @@
+import { parseAuthoringDocument } from "../contracts/authoring.js";
+import type { ArtifactType } from "../contracts/types.js";
+import { validateArtifact } from "../contracts/validator.js";
+import { QaSkillsError } from "../core/errors.js";
+import { RunWorkspace } from "../core/run-workspace.js";
+
+export async function ingestArtifact(options: { root: string; runId: string; type: ArtifactType; sourcePath: string; relationships?: string[] }): Promise<void> {
+  const source = await readFile(options.sourcePath, "utf8");
+  const format = options.sourcePath.endsWith(".yaml") || options.sourcePath.endsWith(".yml") ? "yaml" : "json";
+  const draft = parseAuthoringDocument(source, format);
+  if (!validateArtifact(options.type, draft).valid) throw new QaSkillsError("Agent Draft does not satisfy the artifact contract", "INVALID_ARTIFACT");
+  const workspace = await RunWorkspace.open(options.root, options.runId);
+  try {
+    await workspace.registerArtifact({ type: options.type, sourcePath: options.sourcePath, relationships: options.relationships ?? [], provenance: "agent-draft" });
+  } finally {
+    await workspace.close();
+  }
+}
+import { readFile } from "node:fs/promises";
