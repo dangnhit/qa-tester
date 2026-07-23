@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
-import { createQaTester, createWorkflowRunner } from "../../src/operations/run-workflow.js";
+import { createQaTester, createUnsafeWorkflowRunnerForTests } from "../../src/operations/run-workflow.js";
 
 describe("workflow mode operation plans", () => {
   it("uses the minimal dependency-ordered operations for plan and execute", () => {
@@ -29,7 +29,7 @@ describe("workflow mode operation plans", () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     const calls: string[] = [];
     try {
-      const result = await createWorkflowRunner({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); } })({
+      const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); } })({
         root, mode: "exploratory",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
         charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
@@ -43,7 +43,7 @@ describe("workflow mode operation plans", () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     let invoked = false;
     try {
-      await expect(createWorkflowRunner({ "execute-browser-test": () => { invoked = true; return Promise.resolve(); }, "collect-evidence": () => Promise.resolve(undefined) })({
+      await expect(createUnsafeWorkflowRunnerForTests({ "execute-browser-test": () => { invoked = true; return Promise.resolve(); }, "collect-evidence": () => Promise.resolve(undefined) })({
         root, mode: "execute",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
       })).rejects.toThrow(/approved canonical/i);

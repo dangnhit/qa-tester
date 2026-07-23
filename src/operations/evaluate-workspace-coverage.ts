@@ -56,8 +56,9 @@ function resolveObligation(artifacts: readonly RegisteredWorkspaceArtifact[], va
 }
 
 /** Resolves coverage from revalidated registered workspace records; caller strings only locate that workspace. */
-export async function evaluateWorkspaceCoverage(options: { root: string; runId: string }): Promise<CoverageEvaluation> {
-  const workspace = await RunWorkspace.open(options.root, options.runId);
+export async function evaluateWorkspaceCoverage(options: { root: string; runId: string; /** Internal runtime seam for an already-locked active run. */ workspace?: RunWorkspace }): Promise<CoverageEvaluation> {
+  const workspace = options.workspace ?? await RunWorkspace.open(options.root, options.runId);
+  const ownsWorkspace = options.workspace === undefined;
   try {
     const artifacts = await workspace.readRegisteredArtifacts();
     const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
@@ -77,6 +78,6 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
     });
     return evaluateCoverage(obligations, attempts);
   } finally {
-    await workspace.close();
+    if (ownsWorkspace) await workspace.close();
   }
 }

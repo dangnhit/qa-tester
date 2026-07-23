@@ -14,7 +14,6 @@ import { prepareTestData } from "./prepare-test-data.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { registerChangeScope } from "../regression/change-scope.js";
 import { evaluateWorkspaceCoverage } from "./evaluate-workspace-coverage.js";
-import { deriveTestPlanApproval } from "../planning/approval.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -91,8 +90,7 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
     if (selected.some((item) => !accepted.has(item.record.type))) throw new QaSkillsError("Canonical plan bundle contains a non-planning artifact", "ARTIFACT_BINDING");
     const imported = new Map<string, ArtifactRecord>();
     const environment = (await workspace.readRegisteredArtifacts()).find((item) => item.record.type === "environment-profile")?.value;
-    const classification = environment?.classification;
-    if (typeof classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
+    if (typeof environment?.classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
     const copy = async (type: "requirement-analysis" | "test-plan" | "test-case" | "coverage-obligation", item: (typeof selected)[number]): Promise<void> => {
       const value = JSON.parse(JSON.stringify(item.value)) as Record<string, unknown>;
       if (type === "coverage-obligation") {
@@ -102,8 +100,11 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
         value.requirementAnalysisArtifactId = localAnalysis.id;
       }
       if (type === "test-plan") {
-        const analyses = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "requirement-analysis").map((artifact) => artifact.value);
-        value.approvalDecision = deriveTestPlanApproval({ plan: value, requirementAnalyses: analyses, environment: { classification: classification as "local" | "test" | "staging" | "production" } });
+        // A plan's approval is always re-derived in the target workspace from
+        // its imported requirement analyses and target environment.  Carrying
+        // the source decision across the public boundary would be a
+        // self-asserted value and is rejected by workspace registration.
+        delete value.approvalDecision;
       }
       const relationships = item.record.relationships.map((id) => imported.get(id)?.id).filter((id): id is string => id !== undefined);
       const registered = await workspace.registerArtifactValue({ type, value, relationships, provenance: `runtime-import:${bundle.sourceRunId}:${item.record.id}` });
@@ -262,18 +263,17 @@ async function registerRetestResult(workspace: RunWorkspace, input: NonNullable<
 /** Executes only typed, dependency-declared runtime operations. It never invokes shells or Skill Adapters. */
 type WorkflowRegistry = Readonly<Partial<Record<WorkflowOperationName, WorkflowOperation>>>;
 
-const runtimeRegistry: WorkflowRegistry = {
-  "generate-qa-report": async ({ workspace }) => (await import("./generate-qa-report.js")).generateQaReport({ workspace }),
-};
-
-/** Test-only factory seam. Public callers cannot inject arbitrary operation callbacks. */
-export function createWorkflowRunner(registry: WorkflowRegistry): (input: WorkflowInput) => Promise<WorkflowResult> {
+/**
+ * Unsafe test seam. It is deliberately not part of the QA Tester adapter:
+ * production callers must use createQaTester and its closed runtime registry.
+ */
+export function createUnsafeWorkflowRunnerForTests(registry: WorkflowRegistry): (input: WorkflowInput) => Promise<WorkflowResult> {
   return (input) => runWorkflowWithRegistry(input, registry);
 }
 
 /**
  * Constructs the production QA Tester around a closed, typed host registry.
- * This is deliberately separate from createWorkflowRunner, whose callback
+ * This is deliberately separate from the unsafe test callback factory, whose
  * registry is a test seam and is not exported through a Skill Adapter.
  */
 export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowInput) => Promise<WorkflowResult> {
@@ -354,7 +354,7 @@ export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowIn
             const generated = await (await import("./generate-bug-report.js")).generateBugReport({ workspace, attemptId: asString(attempt.value.attemptId, "attempt ID") });
             outputs.set("generate-bug-report", generated);
           }
-          outputs.set("ingest-coverage-obligation", await evaluateWorkspaceCoverage({ root: workspace.root, runId: workspace.runId }));
+          outputs.set("ingest-coverage-obligation", await evaluateWorkspaceCoverage({ root: workspace.root, runId: workspace.runId, workspace }));
         }
         if (input.mode === "full" || input.mode === "regression") outputs.set("generate-qa-report", await (await import("./generate-qa-report.js")).generateQaReport({ workspace }));
       }
@@ -373,10 +373,6 @@ export function createQaTester(runtime: QaRuntimeRegistry): (input: QaWorkflowIn
       return { runId: workspace.runId, mode: input.mode, operationOrder: order, outputs, validation };
     } finally { if (ownsWorkspace) await workspace.close(); }
   };
-}
-
-export function runWorkflow(input: WorkflowInput): Promise<WorkflowResult> {
-  return runWorkflowWithRegistry(input, runtimeRegistry);
 }
 
 async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowRegistry): Promise<WorkflowResult> {

@@ -48,3 +48,15 @@ The green slices cover mode ordering, bounded exploration charters and non-autho
 - Browser execution resolves a closed browser/secret/evidence registry at construction time. Evidence capture and telemetry attachment run while the runtime-owned browser session remains active, then the runtime checks that one result and case-bound evidence or gap were registered.
 - Full runs require a configured browser manager, test-data registry, and canonical bundle. Missing runtime configuration fails before finalization, leaving a nonterminal workspace for an explicit resume rather than fabricating a report.
 - Regression change scopes are registered from a closed source registry and their checksum is recomputed on every workspace reopen. Retest source bugs are checksum-bound and revalidated against the linked immutable source run before an independently derived verdict is persisted.
+
+## Runtime acceptance evidence (2026-07-23)
+
+- `tests/orchestration/runtime-public.e2e.test.ts` exercises the public `createQaTester` boundary using a real Playwright Chromium fixture and reopened `RunWorkspace` manifests, never a completion callback.
+- The FULL tracer creates a terminal checksum-bound source plan bundle (analysis, safe-derived plan, canonical testcase, coverage obligation), imports it, executes live browser evidence, and verifies exact operation order, passed result, evidence, test-data manifest, coverage result, gate, and QA report.
+- The no-runtime tracer proves rejection occurs before finalization and leaves a resumable workspace with neither a fabricated result nor QA report.
+- Genuine REDs exposed two runtime defects: imported plans carried a self-asserted source approval, and full-mode coverage attempted to reopen its own live-locked workspace. Import now lets the target workspace derive approval, and coverage uses the active workspace.
+- Callback orchestration is explicitly named `createUnsafeWorkflowRunnerForTests`; the public Skill Adapter requires a closed runtime registry.
+
+Verification: focused runtime E2E passed repeatedly (final focused run: 2 tests); `npm test` passed 45 files / 268 tests; `npm run typecheck`, `npm run lint`, `npm run generate:types`, and `git diff --check` passed.
+
+Regression and retest still need equivalent public fixture-backed runtime E2Es before the full Task 8 matrix can be marked complete.
