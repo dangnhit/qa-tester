@@ -9,6 +9,7 @@ import type { ArtifactType } from "../../src/contracts/types.js";
 import type { ArtifactProfileName } from "../../src/core/artifact-profiles.js";
 import { atomicWriteFile } from "../../src/core/fs.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
+import { createBugFingerprint, createRunScopedBugId } from "../../src/defects/fingerprint.js";
 
 const roots: string[] = [];
 
@@ -77,10 +78,10 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
   };
 }
 
-async function registerDocument(workspace: RunWorkspace, type: ArtifactType, name: string, value: unknown) {
+async function registerDocument(workspace: RunWorkspace, type: ArtifactType, name: string, value: unknown, relationships: string[] = []) {
   const sourcePath = join(workspace.root, name);
   await writeFile(sourcePath, JSON.stringify(value));
-  return workspace.registerArtifact({ type, sourcePath, relationships: [] });
+  return workspace.registerArtifact({ type, sourcePath, relationships });
 }
 
 function failMetadataStatusOnce(status: string) {
@@ -765,7 +766,7 @@ describe("RunWorkspace", () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "full", environmentProfile });
     await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
-    await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"));
+    const attempt = await registerDocument(workspace, "test-result", "result.json", { ...testResult(workspace, "TC-1"), status: "FAILED", failureClassification: "PRODUCT_DEFECT" });
 
     const evidence = {
       artifactType: "evidence",
@@ -784,23 +785,26 @@ describe("RunWorkspace", () => {
       provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
     };
     await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
-    await registerDocument(workspace, "evidence", "evidence.json", evidence);
+    const evidenceRecord = await registerDocument(workspace, "evidence", "evidence.json", evidence);
 
     const bug = {
       artifactType: "bug-report",
       schemaVersion: "1.0.0",
       producerVersion: "1.0.0",
-      bugId: "BUG-LOGIN-001",
+      bugId: createRunScopedBugId("TC-1", workspace.runId, 1),
       runId: workspace.runId,
       attemptId: "ATTEMPT-1",
       triageStatus: "NEEDS_TRIAGE",
       expected: "Login succeeds",
       actual: "Login fails",
+      environment: { environmentProfileId: environmentProfile.environmentProfileId, name: environmentProfile.name, classification: environmentProfile.classification, baseUrl: environmentProfile.baseUrl },
+      reproduction: { attemptIds: ["ATTEMPT-1"], attempted: 1, total: 2, rate: "1/2", outcome: "RERUN_OMITTED_UNSAFE", unsafeRerunReason: "Unsafe to retry" },
       evidenceIds: [evidence.evidenceId],
+      affectedAreas: ["TC-1"], openQuestions: [], provenance: { sourceAttemptIds: ["ATTEMPT-1"], evidenceArtifactIds: [evidenceRecord.id] }, fingerprint: createBugFingerprint({ feature: "TC-1", expected: "Login succeeds", actual: "Login fails", affectedAreas: ["TC-1"] }), testPriority: "medium", open: true,
     };
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-attempt.json", { ...bug, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-evidence.json", { ...bug, evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXY0"] })).rejects.toThrow(/evidence|reference|binding/i);
-    await expect(registerDocument(workspace, "bug-report", "bug.json", bug)).resolves.toMatchObject({ type: "bug-report" });
+    await expect(registerDocument(workspace, "bug-report", "bug.json", bug, [attempt.id, evidenceRecord.id])).resolves.toMatchObject({ type: "bug-report" });
   });
 
   it("binds test-data resource ownership to the workspace run", async () => {

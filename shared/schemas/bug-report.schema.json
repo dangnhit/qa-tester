@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vigentix.dev/qa-skills/schemas/bug-report.schema.json",
-  "title": "Bug Report",
+  "title": "Product Bug",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "bugId", "runId", "attemptId", "triageStatus", "expected", "actual", "evidenceIds"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "bugId", "runId", "attemptId", "triageStatus", "expected", "actual", "environment", "reproduction", "evidenceIds", "affectedAreas", "openQuestions", "provenance", "fingerprint", "testPriority", "open"],
   "properties": {
     "artifactType": { "const": "bug-report" },
     "schemaVersion": { "const": "1.0.0" },
@@ -14,8 +14,25 @@
     "attemptId": { "type": "string", "minLength": 1 },
     "triageStatus": { "enum": ["NEEDS_TRIAGE", "TRIAGED"] },
     "severity": { "enum": ["Blocker", "Critical", "Major", "Minor", "Trivial"] },
+    "priorityRecommendation": { "enum": ["P0", "P1", "P2", "P3"] },
+    "testPriority": { "enum": ["critical", "high", "medium", "low"] },
     "expected": { "type": "string", "minLength": 1 },
     "actual": { "type": "string", "minLength": 1 },
-    "evidenceIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+    "environment": { "$ref": "#/$defs/environment" },
+    "reproduction": { "$ref": "#/$defs/reproduction" },
+    "evidenceIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "affectedAreas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["sourceAttemptIds", "evidenceArtifactIds"], "properties": { "sourceAttemptIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "evidenceArtifactIds": { "type": "array", "items": { "type": "string", "minLength": 1 } } } },
+    "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "open": { "type": "boolean" }
+  },
+  "allOf": [
+    { "if": { "properties": { "triageStatus": { "const": "TRIAGED" } }, "required": ["triageStatus"] }, "then": { "properties": { "severity": {}, "priorityRecommendation": {} }, "required": ["severity", "priorityRecommendation"] } },
+    { "if": { "properties": { "triageStatus": { "const": "NEEDS_TRIAGE" } }, "required": ["triageStatus"] }, "then": { "not": { "anyOf": [{ "properties": { "severity": {} }, "required": ["severity"] }, { "properties": { "priorityRecommendation": {} }, "required": ["priorityRecommendation"] }] } } }
+  ],
+  "$defs": {
+    "environment": { "type": "object", "additionalProperties": false, "required": ["environmentProfileId", "name", "classification", "baseUrl"], "properties": { "environmentProfileId": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "classification": { "enum": ["local", "test", "staging", "production"] }, "baseUrl": { "type": "string", "minLength": 1 } } },
+    "reproduction": { "type": "object", "additionalProperties": false, "required": ["attemptIds", "attempted", "total", "rate", "outcome"], "properties": { "attemptIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "attempted": { "type": "integer", "minimum": 1 }, "total": { "type": "integer", "minimum": 2 }, "rate": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }, "outcome": { "enum": ["REPRODUCED", "NOT_REPRODUCED", "INTERMITTENT", "RERUN_OMITTED_UNSAFE"] }, "unsafeRerunReason": { "type": "string", "minLength": 1 } } }
   }
 }

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/release-gate.schema.json",
+  "title": "Release Gate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "recommendation", "ruleInputs", "verdicts"],
+  "properties": {
+    "artifactType": { "const": "release-gate" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 },
+    "recommendation": { "enum": ["READY", "READY_WITH_RISKS", "NOT_READY"] },
+    "ruleInputs": { "type": "object" },
+    "verdicts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["rule", "passed", "reason"], "properties": { "rule": { "type": "string", "minLength": 1 }, "passed": { "type": "boolean" }, "reason": { "type": "string", "minLength": 1 } } } }
+  }
+}

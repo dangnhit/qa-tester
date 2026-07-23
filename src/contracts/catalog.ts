@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import artifactManifestSchema from "../../shared/schemas/artifact-manifest.schema.json" with { type: "json" };
 import annotationSchema from "../../shared/schemas/annotation.schema.json" with { type: "json" };
 import bugReportSchema from "../../shared/schemas/bug-report.schema.json" with { type: "json" };
+import incidentSchema from "../../shared/schemas/incident.schema.json" with { type: "json" };
+import releaseGateSchema from "../../shared/schemas/release-gate.schema.json" with { type: "json" };
 import browserTestDslSchema from "../../shared/schemas/browser-test-dsl.schema.json" with { type: "json" };
 import environmentProfileSchema from "../../shared/schemas/environment-profile.schema.json" with { type: "json" };
 import evidenceGapSchema from "../../shared/schemas/evidence-gap.schema.json" with { type: "json" };
@@ -34,6 +36,8 @@ const schemas: Record<ArtifactType, object> = {
   evidence: evidenceSchema,
   "evidence-gap": evidenceGapSchema,
   "bug-report": bugReportSchema,
+  incident: incidentSchema,
+  "release-gate": releaseGateSchema,
   "test-data-manifest": testDataManifestSchema,
   "cleanup-run": cleanupRunSchema,
   "qa-execution-report": qaExecutionReportSchema,

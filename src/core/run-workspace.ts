@@ -4,6 +4,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
+import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
+import { evaluateReproduction } from "../defects/reproduction.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
 import {
@@ -904,7 +906,7 @@ export class RunWorkspace {
     if (unknownRelationship) {
       throw new QaSkillsError(`Relationship ${unknownRelationship} is not registered in this workspace`, "ARTIFACT_BINDING");
     }
-    await this.assertSemanticReferences(type, value, manifest);
+    await this.assertSemanticReferences(type, value, relationships, manifest);
   }
 
   private async transitionInternal(status: RunStatus): Promise<void> {
@@ -961,6 +963,7 @@ export class RunWorkspace {
   private async assertSemanticReferences(
     type: ArtifactType,
     value: Record<string, unknown>,
+    relationships: string[],
     manifest: Manifest,
   ): Promise<void> {
     if (type === "requirement-analysis") {
@@ -1007,15 +1010,71 @@ export class RunWorkspace {
       }
     } else if (type === "bug-report") {
       const testResults = await this.readRegisteredValues(manifest, "test-result");
-      if (testResults.filter((result) => result.attemptId === value.attemptId).length !== 1) {
-        throw new QaSkillsError("Bug report references an unregistered or ambiguous attempt", "ARTIFACT_BINDING");
+      const sourceAttemptIds = isRecord(value.provenance) && Array.isArray(value.provenance.sourceAttemptIds) ? value.provenance.sourceAttemptIds : [];
+      const reproductionAttemptIds = isRecord(value.reproduction) && Array.isArray(value.reproduction.attemptIds) ? value.reproduction.attemptIds : [];
+      if (reproductionAttemptIds.length === 0 || sourceAttemptIds.length === 0 || value.attemptId !== sourceAttemptIds[0]
+        || sourceAttemptIds.length !== reproductionAttemptIds.length
+        || !sourceAttemptIds.every((id, index) => id === reproductionAttemptIds[index])
+        || !sourceAttemptIds.every((attemptId) => testResults.filter((result) => result.attemptId === attemptId).length === 1)) {
+        throw new QaSkillsError("Bug report reproduction references unregistered or ambiguous attempts", "ARTIFACT_BINDING");
+      }
+      const original = testResults.find((result) => result.attemptId === value.attemptId);
+      if (original?.status !== "FAILED" || original.failureClassification !== "PRODUCT_DEFECT") {
+        throw new QaSkillsError("Only FAILED PRODUCT_DEFECT attempts may create a bug report", "ARTIFACT_BINDING");
+      }
+      const sourceAttempts = sourceAttemptIds.map((attemptId) => testResults.find((result) => result.attemptId === attemptId));
+      if (sourceAttempts.some((attempt) => !attempt)) throw new QaSkillsError("Bug report reproduction is incomplete", "ARTIFACT_BINDING");
+      const unsafeRerunReason = isRecord(value.reproduction) && typeof value.reproduction.unsafeRerunReason === "string" ? value.reproduction.unsafeRerunReason : undefined;
+      let derivedReproduction: ReturnType<typeof evaluateReproduction>;
+      try {
+        derivedReproduction = evaluateReproduction(sourceAttempts.map((attempt) => ({
+          attemptId: String(attempt?.attemptId), status: String(attempt?.status), failureClassification: String(attempt?.failureClassification),
+        })), unsafeRerunReason === undefined ? {} : { unsafeRerunReason });
+      } catch (error: unknown) {
+        throw new QaSkillsError(error instanceof Error ? error.message : "Bug reproduction is invalid", "ARTIFACT_BINDING");
+      }
+      if (JSON.stringify(value.reproduction) !== JSON.stringify(derivedReproduction)) throw new QaSkillsError("Bug reproduction must equal the registered attempt evaluation", "ARTIFACT_BINDING");
+      const existingBugs = await this.readRegisteredValues(manifest, "bug-report");
+      const expectedBugId = createRunScopedBugId(String(original.testCaseId), this.runId, existingBugs.length + 1);
+      if (value.bugId !== expectedBugId || existingBugs.some((bug) => bug.attemptId === value.attemptId)) {
+        throw new QaSkillsError("Bug ID or original-attempt identity is not deterministic", "ARTIFACT_BINDING");
+      }
+      if (!Array.isArray(value.affectedAreas) || typeof value.expected !== "string" || typeof value.actual !== "string"
+        || value.fingerprint !== createBugFingerprint({ feature: String(original.testCaseId), expected: value.expected, actual: value.actual, affectedAreas: value.affectedAreas.map(String) })) {
+        throw new QaSkillsError("Bug fingerprint is not canonical", "ARTIFACT_BINDING");
       }
       const evidenceItems = await this.readRegisteredValues(manifest, "evidence");
       const evidenceIds = value.evidenceIds;
       if (!Array.isArray(evidenceIds) || !evidenceIds.every((evidenceId) => evidenceItems.filter(
-        (evidence) => evidence.evidenceId === evidenceId && evidence.attemptId === value.attemptId,
+        (evidence) => evidence.evidenceId === evidenceId && sourceAttemptIds.includes(evidence.attemptId as string),
       ).length === 1)) {
-        throw new QaSkillsError("Bug report references unregistered or ambiguous evidence for its attempt", "ARTIFACT_BINDING");
+        throw new QaSkillsError("Bug report references unregistered or ambiguous evidence for its reproduction set", "ARTIFACT_BINDING");
+      }
+      const evidenceArtifactIds = isRecord(value.provenance) && Array.isArray(value.provenance.evidenceArtifactIds) ? value.provenance.evidenceArtifactIds : [];
+      if (!evidenceArtifactIds.every((id) => {
+        if (typeof id !== "string") return false;
+        return manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "evidence") && relationships.includes(id);
+      })) {
+        throw new QaSkillsError("Bug report evidence provenance is not registered", "ARTIFACT_BINDING");
+      }
+    } else if (type === "incident") {
+      const testResults = await this.readRegisteredValues(manifest, "test-result");
+      const attempt = testResults.find((result) => result.attemptId === value.attemptId);
+      const expectedKind = attempt?.failureClassification === "TEST_DEFECT" ? "TEST_INCIDENT"
+        : attempt?.failureClassification === "ENVIRONMENT_DEFECT" ? "ENVIRONMENT_INCIDENT"
+          : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
+      if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind) throw new QaSkillsError("Incident kind must derive from a registered non-product attempt", "ARTIFACT_BINDING");
+      const evidenceItems = await this.readRegisteredValues(manifest, "evidence");
+      if (!Array.isArray(value.evidenceIds) || !value.evidenceIds.every((id) => evidenceItems.some((evidence) => evidence.evidenceId === id && evidence.attemptId === value.attemptId))) {
+        throw new QaSkillsError("Incident references unregistered evidence for its attempt", "ARTIFACT_BINDING");
+      }
+    } else if (type === "release-gate") {
+      if (value.runId !== this.runId) throw new QaSkillsError("Release gate run does not match workspace", "ARTIFACT_BINDING");
+    } else if (type === "qa-execution-report") {
+      const gates = await this.readRegisteredValues(manifest, "release-gate");
+      if (gates.length !== 1 || !isRecord(value.releaseGate) || value.releaseRecommendation !== value.releaseGate.recommendation
+        || gates[0]?.recommendation !== value.releaseRecommendation) {
+        throw new QaSkillsError("QA report must reference the single registered deterministic release gate", "ARTIFACT_BINDING");
       }
     } else if (type === "test-data-manifest") {
       const resources = value.resources;

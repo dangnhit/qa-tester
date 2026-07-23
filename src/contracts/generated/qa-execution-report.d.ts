@@ -6,6 +6,37 @@ export interface QAExecutionReport {
   producerVersion: string;
   runId: string;
   generatedAt: string;
-  releaseRecommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
+  build: {
+    identifier: string;
+  };
   summary: string;
+  coverageMethods: string[];
+  incidents: {
+    [k: string]: unknown | undefined;
+  }[];
+  bugs: {
+    [k: string]: unknown | undefined;
+  }[];
+  telemetryFindings: {
+    [k: string]: unknown | undefined;
+  }[];
+  evidenceGaps: {
+    [k: string]: unknown | undefined;
+  }[];
+  cleanupLeaks: {
+    [k: string]: unknown | undefined;
+  }[];
+  criticalFindings: string[];
+  remainingRisks: string[];
+  excludedNotRun: string[];
+  releaseGate: {
+    recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
+    ruleInputs: {
+      [k: string]: unknown | undefined;
+    };
+    verdicts: {
+      [k: string]: unknown | undefined;
+    }[];
+  };
+  releaseRecommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
 }

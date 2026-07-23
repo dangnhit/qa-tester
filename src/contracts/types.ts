@@ -8,6 +8,8 @@ export const artifactTypes = [
   "evidence",
   "evidence-gap",
   "bug-report",
+  "incident",
+  "release-gate",
   "test-data-manifest",
   "cleanup-run",
   "qa-execution-report",

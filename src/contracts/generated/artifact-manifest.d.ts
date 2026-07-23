@@ -17,6 +17,8 @@ export interface RunArtifactManifest {
       | "evidence"
       | "evidence-gap"
       | "bug-report"
+      | "incident"
+      | "release-gate"
       | "test-data-manifest"
       | "cleanup-run"
       | "qa-execution-report"

@@ -8,6 +8,9 @@ import { ingestTestCases } from "./ingest-testcases.js";
 import { ingestCoverageObligation } from "./ingest-coverage-obligation.js";
 
 export async function ingestArtifact(options: { root: string; runId: string; type: ArtifactType; sourcePath: string; relationships?: string[] }): Promise<void> {
+  if (options.type === "bug-report" || options.type === "incident" || options.type === "release-gate" || options.type === "qa-execution-report") {
+    throw new QaSkillsError("Defects, incidents, gates, and reports must be generated from registered runtime artifacts", "INVALID_ARTIFACT");
+  }
   if (options.type === "requirement-analysis") {
     await ingestRequirementAnalysis(options);
     return;

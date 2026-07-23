@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/incident.schema.json",
+  "title": "QA Incident or Investigation Finding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "incidentId", "runId", "attemptId", "kind", "summary", "environment", "evidenceIds", "affectedAreas", "openQuestions", "provenance"],
+  "properties": {
+    "artifactType": { "const": "incident" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 },
+    "incidentId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "attemptId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["TEST_INCIDENT", "ENVIRONMENT_INCIDENT", "INVESTIGATION_FINDING"] }, "summary": { "type": "string", "minLength": 1 },
+    "environment": { "type": "object", "additionalProperties": false, "required": ["environmentProfileId", "name", "classification", "baseUrl"], "properties": { "environmentProfileId": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "classification": { "enum": ["local", "test", "staging", "production"] }, "baseUrl": { "type": "string", "minLength": 1 } } },
+    "evidenceIds": { "type": "array", "items": { "type": "string", "minLength": 1 } }, "affectedAreas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "openQuestions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["sourceAttemptId"], "properties": { "sourceAttemptId": { "type": "string", "minLength": 1 } } }
+  }
+}

@@ -122,7 +122,10 @@ const otherArtifactContracts = [
       triageStatus: "NEEDS_TRIAGE",
       expected: "A successful sign in",
       actual: "The sign in request failed",
+      environment: { environmentProfileId: "env-staging", name: "Staging", classification: "staging", baseUrl: "https://staging.example.test" },
+      reproduction: { attemptIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"], attempted: 1, total: 2, rate: "1/2", outcome: "RERUN_OMITTED_UNSAFE", unsafeRerunReason: "Unsafe to retry" },
       evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"],
+      affectedAreas: ["TC-1"], openQuestions: ["Assess impact"], provenance: { sourceAttemptIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"], evidenceArtifactIds: ["artifact-evidence-1"] }, fingerprint: "a".repeat(64), testPriority: "high", open: true,
     },
   },
   {
@@ -147,6 +150,7 @@ const otherArtifactContracts = [
       generatedAt: "2026-07-23T12:34:56.000Z",
       releaseRecommendation: "READY",
       summary: "All planned checks completed.",
+      build: { identifier: "build-1" }, coverageMethods: [], incidents: [], bugs: [], telemetryFindings: [], evidenceGaps: [], cleanupLeaks: [], criticalFindings: [], remainingRisks: [], excludedNotRun: [], releaseGate: { recommendation: "READY", ruleInputs: {}, verdicts: [] },
     },
   },
   {
@@ -221,6 +225,16 @@ describe("validateArtifact", () => {
     }).valid).toBe(false);
   });
 
+  it("validates typed non-product incidents and deterministic release-gate envelopes", () => {
+    expect(validateArtifact("incident", {
+      artifactType: "incident", schemaVersion: "1.0.0", producerVersion: "1.0.0", incidentId: "INC-1", runId: validRun.runId, attemptId: "ATTEMPT-1", kind: "TEST_INCIDENT", summary: "A test fixture failed.",
+      environment: { environmentProfileId: "env-staging", name: "Staging", classification: "staging", baseUrl: "https://staging.example.test" }, evidenceIds: [], affectedAreas: ["TC-1"], openQuestions: [], provenance: { sourceAttemptId: "ATTEMPT-1" },
+    }).valid).toBe(true);
+    expect(validateArtifact("release-gate", {
+      artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "1.0.0", runId: validRun.runId, recommendation: "READY", ruleInputs: {}, verdicts: [{ rule: "VALID_ARTIFACTS", passed: true, reason: "All registered artifacts are valid." }],
+    }).valid).toBe(true);
+  });
+
   describe("the remaining canonical schemas", () => {
     for (const contract of otherArtifactContracts) {
       it(`accepts a minimal valid ${contract.type} artifact`, () => {
@@ -257,6 +271,10 @@ describe("validateArtifact", () => {
       expect(validateArtifact(type, artifact).errors).toEqual(
         expect.arrayContaining([expect.objectContaining({ keyword: "enum" })]),
       );
+    });
+
+    it("forbids severity before a bug is triaged", () => {
+      expect(validateArtifact("bug-report", { ...otherArtifactContracts[6].valid, severity: "Major" }).valid).toBe(false);
     });
   });
 });
