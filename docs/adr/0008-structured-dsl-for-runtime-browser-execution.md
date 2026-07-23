@@ -1,0 +1,3 @@
+# Execute a bounded browser test DSL
+
+The **Runtime Browser Driver** executes only schema-validated **Test Case Revisions** expressed in a bounded **Test DSL** of supported actions, locators, and assertions, with no arbitrary JavaScript evaluation. Natural-language instructions are translated by an agent into **Test Case Candidates** and structured logs, keeping agent reasoning outside the deterministic execution boundary while preserving exploratory use through agent browser adapters. Promotion into an executable revision is controlled by an explicit **Approval Policy**; full mode may auto-promote only safe authoritative non-production candidates, and production always requires human approval.
