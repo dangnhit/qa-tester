@@ -1,7 +1,7 @@
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import {
-  evaluateResolvedCoverage,
+  evaluateCoverage,
   type CoverageAttempt,
   type CoverageEvaluation,
   type CoverageObligation,
@@ -75,7 +75,7 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
         ...coverage,
       };
     });
-    return evaluateResolvedCoverage(obligations, attempts);
+    return evaluateCoverage(obligations, attempts);
   } finally {
     await workspace.close();
   }

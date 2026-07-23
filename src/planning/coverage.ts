@@ -49,10 +49,11 @@ function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligat
 }
 
 /**
- * Pure downstream evaluator. Inputs must already be resolved from immutable
- * workspace records; it deliberately accepts no caller-supplied verification IDs.
+ * Deterministic pure façade for already-resolved canonical records. It accepts
+ * no authority, provenance, verification-ID, or workspace inputs. Runtime
+ * authority resolution belongs exclusively to evaluateWorkspaceCoverage.
  */
-export function evaluateResolvedCoverage(
+export function evaluateCoverage(
   obligations: readonly ResolvedCoverageObligation[],
   attempts: readonly CoverageAttempt[],
 ): CoverageEvaluation {
@@ -81,3 +82,6 @@ export function evaluateResolvedCoverage(
     qualifyingAttemptIds: [...qualifyingAttemptIds],
   };
 }
+
+/** @deprecated Use evaluateCoverage; this alias preserves resolved-record callers. */
+export const evaluateResolvedCoverage = evaluateCoverage;

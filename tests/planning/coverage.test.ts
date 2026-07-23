@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateResolvedCoverage } from "../../src/planning/coverage.js";
+import { evaluateCoverage } from "../../src/planning/coverage.js";
 
 const obligation = {
   obligationId: "COV-SAVE-CHROMIUM",
@@ -33,9 +33,9 @@ function matchingAttempt(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("evaluateResolvedCoverage", () => {
-  it("satisfies an obligation only with a passed authoritative attempt addressing it", () => {
-    const evaluation = evaluateResolvedCoverage([obligation], [
+describe("evaluateCoverage", () => {
+  it("provides the deterministic public façade for already-resolved canonical records", () => {
+    const evaluation = evaluateCoverage([obligation], [
       matchingAttempt({ attemptId: "ATTEMPT-FAILED", status: "FAILED" }),
       matchingAttempt(),
     ]);
@@ -46,7 +46,7 @@ describe("evaluateResolvedCoverage", () => {
   });
 
   it("reports a required obligation as missing when only non-authoritative passing attempts exist", () => {
-    const evaluation = evaluateResolvedCoverage([{ ...obligation, authoritativeRequirement: false }], [
+    const evaluation = evaluateCoverage([{ ...obligation, authoritativeRequirement: false }], [
       matchingAttempt({ attemptId: "ATTEMPT-ASSUMED" }),
     ]);
 
@@ -65,7 +65,7 @@ describe("evaluateResolvedCoverage", () => {
     ["risk", { risk: "low" }],
     ["outcome", { outcome: "redirected" }],
   ])("does not satisfy an obligation with a mismatched %s", (_dimension, mismatch) => {
-    const evaluation = evaluateResolvedCoverage([obligation], [matchingAttempt(mismatch)]);
+    const evaluation = evaluateCoverage([obligation], [matchingAttempt(mismatch)]);
 
     expect(evaluation.satisfied).toEqual([]);
     expect(evaluation.missing).toEqual([obligation.obligationId]);

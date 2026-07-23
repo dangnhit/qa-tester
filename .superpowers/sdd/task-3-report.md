@@ -59,3 +59,9 @@
 - GREEN: the new operation opens and freshly revalidates the registered workspace, resolves requirement authority from the linked immutable requirement-analysis artifact, binds a result to exactly one testcase revision and expanded instance, derives all coverage dimensions from that canonical case, and evaluates only passed attempts. Caller-provided IDs or verification context are ignored.
 - Contracts and revalidation: testcase artifacts now require an immutable instance ID and coverage dimensions; results require that exact instance ID. Registration and persisted workspace validation reject orphan, ambiguous, revision-mismatched, or instance-mismatched results. Obligation and result checksum-rewrite tampering are rejected during reevaluation.
 - Tests: positive authoritative flow; inferred requirement; spoofed caller context; orphan result; revision mismatch; requirement, role, behavior, browser, viewport, accessibility, risk, and outcome mismatches; obligation/result tampering. Full suite: 165 tests passed. Typecheck, lint, generated-type check, and diff-check passed.
+
+## Fifth review-fix evidence: public pure coverage façade
+
+- RED: `npm test -- tests/planning/coverage.test.ts` failed because the documented `evaluateCoverage` export did not exist.
+- GREEN: `evaluateCoverage(obligations, attempts)` is the public deterministic evaluator for already-resolved canonical records. Its contract accepts no authority/provenance claims, verified IDs, or workspace locator. `evaluateWorkspaceCoverage` remains the runtime trust boundary and now feeds this façade after resolving immutable registered artifacts. `evaluateResolvedCoverage` is retained as a deprecated compatibility alias.
+- Verification: focused coverage/workspace tests (25), full suite (165), typecheck, lint, and diff-check passed.
