@@ -3,14 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chromium } from "@playwright/test";
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
 import { captureEvidence, attachEvidence } from "../../src/evidence/collector.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { activeBrowserSessions } from "../../src/operations/execute-browser-test.js";
 
+function pixel(bytes: Buffer, width: number, x: number, y: number): number[] {
+  const offset = (y * width + x) * 4;
+  return [...bytes.subarray(offset, offset + 4)];
+}
+
 describe("live evidence collector", () => {
-  it("registers sanitized raw evidence and its canonical descriptor in the authoritative workspace manifest", async () => {
+  it("masks protected DOM and region pixels while preserving known unmasked screenshot pixels", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-evidence-workspace-"));
     const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-evidence", name: "Evidence", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
     const browser = await chromium.launch();
@@ -19,8 +25,9 @@ describe("live evidence collector", () => {
     const attemptId = "attempt-live";
     activeBrowserSessions.set(attemptId, { context, page, telemetry: { findings: [], responseStatuses: new Map(), networkRecords: [] }, secrets: new Set() });
     try {
-      await page.setContent('<input class="secret" value="secret-value"><p>visible</p>');
-      const result = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: true, redaction: { domSelectors: [".secret"], regions: [] } });
+      await page.setContent('<style>html,body{margin:0;background:#123456}.secret,#region{position:fixed;width:16px;height:16px}.secret{left:10px;top:10px;background:#ef4444}#region{left:45px;top:10px;background:#3b82f6}</style><div class="secret">secret</div><div id="region">region</div>');
+      const before = await page.screenshot({ type: "png" });
+      const result = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: true, redaction: { domSelectors: [".secret"], regions: [{ x: 45, y: 10, width: 16, height: 16 }] } });
       expect(result.kind).toBe("evidence");
       if (result.kind === "evidence") {
         expect((await readFile(result.rawPath)).length).toBeGreaterThan(0);
@@ -30,6 +37,13 @@ describe("live evidence collector", () => {
           expect.objectContaining({ id: result.binaryArtifactId, relativePath: expect.stringMatching(/^evidence\//), mediaType: "image/png" }),
           expect.objectContaining({ id: result.descriptorArtifactId, relativePath: expect.stringMatching(/^inputs\//) }),
         ]));
+        const [beforePixels, capturedPixels] = await Promise.all([
+          sharp(before).ensureAlpha().raw().toBuffer(),
+          sharp(await readFile(result.rawPath)).ensureAlpha().raw().toBuffer(),
+        ]);
+        expect(pixel(capturedPixels, 80, 12, 12)).not.toEqual(pixel(beforePixels, 80, 12, 12));
+        expect(pixel(capturedPixels, 80, 47, 12)).not.toEqual(pixel(beforePixels, 80, 47, 12));
+        expect(pixel(capturedPixels, 80, 2, 2)).toEqual(pixel(beforePixels, 80, 2, 2));
       }
     } finally {
       activeBrowserSessions.delete(attemptId);

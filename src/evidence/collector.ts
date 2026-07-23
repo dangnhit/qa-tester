@@ -23,10 +23,10 @@ async function registerGap(workspace: RunWorkspace, reason: string, affectedClai
 }
 
 async function applyRegionMasks(session: ActiveBrowserSession, regions: readonly CssBox[]): Promise<string[]> {
-  return session.page.evaluate((boxes) => boxes.map((box) => {
+  return session.page.evaluate((boxes) => boxes.map((box, index) => {
     const browser = globalThis as unknown as PageRuntime;
     const node = browser.document.createElement("div");
-    const id = `qa-evidence-mask-${crypto.randomUUID()}`;
+    const id = `qa-evidence-mask-${Date.now().toString(36)}-${index}`;
     node.id = id;
     node.setAttribute("aria-hidden", "true");
     Object.assign(node.style, { position: "fixed", left: `${box.x - browser.scrollX}px`, top: `${box.y - browser.scrollY}px`, width: `${box.width}px`, height: `${box.height}px`, background: "#000", zIndex: "2147483647", pointerEvents: "none", display: "block", opacity: "1" });

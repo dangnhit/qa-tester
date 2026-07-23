@@ -115,6 +115,31 @@ function failNextManifestWrite() {
   };
 }
 
+function failSecondEvidenceBinaryWrite() {
+  let evidenceWrites = 0;
+  return {
+    persistence: {
+      async writeAtomic(rootPath: string, path: string, contents: string | Uint8Array): Promise<void> {
+        if (path.includes("/evidence/") && contents instanceof Uint8Array && ++evidenceWrites === 2) {
+          await atomicWriteFile(rootPath, path, contents);
+          throw new Error("Injected late evidence binary write failure");
+        }
+        await atomicWriteFile(rootPath, path, contents);
+      },
+    },
+  };
+}
+
+function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
+  const primary = binaries[0];
+  return {
+    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "pending", pendingAttempt: true, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+    provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
+    ...overrides,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -155,6 +180,63 @@ describe("RunWorkspace", () => {
     const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
     expect(manifest.artifacts).toHaveLength(1);
     await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
+    await workspace.close();
+  });
+
+  it("waits for a late multi-binary write failure before rolling back every unregistered file", async () => {
+    const directory = await root();
+    const failure = failSecondEvidenceBinaryWrite();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile, persistence: failure.persistence });
+
+    await expect(workspace.registerEvidenceBundle({
+      binaries: ["first", "second", "third"].map((filename) => ({ filename: `${filename}.png`, contents: Buffer.from(filename), mediaType: "image/png", captureType: "screenshot" as const, dimensions: { width: 1, height: 1 } })),
+      descriptor: (binaries) => screenshotDescriptor(workspace, binaries),
+    })).rejects.toThrow(/late evidence binary write failure/i);
+
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: unknown[] };
+    expect(manifest.artifacts).toHaveLength(1);
+    await expect(readdir(join(workspace.path, "evidence"))).resolves.toEqual([]);
+    await workspace.close();
+  });
+
+  it.each([
+    ["path", { relativePath: "evidence/forged.png" }],
+    ["checksum", { sha256: "a".repeat(64) }],
+    ["media type", { mediaType: "application/json" }],
+  ])("rejects a forged primary descriptor %s before persistence", async (_name, override) => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+
+    await expect(workspace.registerEvidenceBundle({
+      binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
+      descriptor: (binaries) => screenshotDescriptor(workspace, binaries, override),
+    })).rejects.toThrow(/primary|descriptor|binding/i);
+
+    await expect(readdir(join(workspace.path, "evidence"))).rejects.toThrow(/ENOENT/);
+    await workspace.close();
+  });
+
+  it("rejects a rechecksummed persisted descriptor whose primary binary binding was tampered", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const bundle = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "capture.png", contents: Buffer.from("png"), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 1, height: 1 } }],
+      descriptor: (binaries) => screenshotDescriptor(workspace, binaries),
+    });
+    const descriptor = JSON.parse(await readFile(bundle.descriptor.absolutePath, "utf8")) as Record<string, unknown>;
+    descriptor.mediaType = "application/json";
+    const tampered = `${JSON.stringify(descriptor, null, 2)}\n`;
+    await writeFile(bundle.descriptor.absolutePath, tampered);
+    const manifestPath = join(workspace.path, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; sha256: string }[] };
+    const record = manifest.artifacts.find((artifact) => artifact.id === bundle.descriptor.id);
+    if (!record) throw new Error("Expected evidence descriptor record");
+    record.sha256 = sha256Text(tampered);
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect((await workspace.validate("execute")).diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "INVALID_REFERENCE", message: expect.stringMatching(/primary|descriptor/i) }),
+    ]));
     await workspace.close();
   });
   it("copies validated artifacts into immutable inputs and records their checksum", async () => {

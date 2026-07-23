@@ -63,7 +63,7 @@ export type WorkspaceDiagnostic = { code: string; message: string; relativePath?
 export type WorkspaceValidation = { valid: boolean; diagnostics: WorkspaceDiagnostic[] };
 export type RegisteredWorkspaceArtifact = Readonly<{ record: ArtifactRecord; value: Readonly<Record<string, unknown>> }>;
 export type WorkspacePersistence = {
-  writeAtomic(root: string, path: string, contents: string): Promise<void>;
+  writeAtomic(root: string, path: string, contents: string | Uint8Array): Promise<void>;
 };
 export type ExplicitTerminalOutcome = Extract<RunStatus, "BLOCKED" | "ABORTED">;
 
@@ -85,6 +85,21 @@ function isArtifactType(value: string): value is ArtifactType {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function matchingDimensions(value: unknown, dimensions: { width: number; height: number }): boolean {
+  return isRecord(value) && value.width === dimensions.width && value.height === dimensions.height;
+}
+
+function matchesEvidencePrimary(value: Record<string, unknown>, primary: ArtifactRecord): boolean {
+  const provenance = value.provenance;
+  return value.sha256 === primary.sha256
+    && value.relativePath === primary.relativePath
+    && value.mediaType === primary.mediaType
+    && value.kind === primary.captureType
+    && isRecord(provenance)
+    && provenance.captureType === primary.captureType
+    && (primary.dimensions === undefined || matchingDimensions(provenance.dimensions, primary.dimensions));
 }
 
 function errorCode(error: unknown): unknown {
@@ -373,6 +388,10 @@ async function inspectWorkspaceState(
       const binary = binaryRecords.find((candidate) => candidate.record.id === detail.id);
       if (!binary || binary.record.relativePath !== detail.relativePath || binary.record.sha256 !== detail.sha256 || binary.record.mediaType !== detail.mediaType) invalidate(descriptor, diagnostics, "INVALID_REFERENCE", "Evidence descriptor does not match its registered binary");
     }
+    const primary = binaryRecords.find((candidate) => candidate.record.id === ids[0]);
+    if (!primary || !matchesEvidencePrimary(descriptor.value as Record<string, unknown>, primary.record)) {
+      invalidate(descriptor, diagnostics, "INVALID_REFERENCE", "Evidence descriptor does not match its designated primary binary");
+    }
   }
   for (const binary of binaryRecords) {
     const references = evidenceDescriptors.filter((descriptor) => Array.isArray(descriptor.value?.binaryArtifactIds) && descriptor.value?.binaryArtifactIds.includes(binary.record.id));
@@ -613,7 +632,9 @@ export class RunWorkspace {
         const relationships = [...(input.relationships ?? []), ...planned.map((binary) => binary.id)];
         const details = isRecord(value) ? value.binaryArtifacts : undefined;
         const ids = isRecord(value) ? value.binaryArtifactIds : undefined;
-        if (!Array.isArray(ids) || !Array.isArray(details) || ids.length !== planned.length || details.length !== planned.length || !planned.every((binary) => ids.includes(binary.id) && details.some((detail) => isRecord(detail) && detail.id === binary.id && detail.relativePath === binary.relativePath && detail.sha256 === binary.sha256 && detail.mediaType === binary.mediaType))) throw new QaSkillsError("Evidence bundle descriptor does not exactly reference its proposed binaries", "ARTIFACT_BINDING");
+        if (!Array.isArray(ids) || !Array.isArray(details) || ids.length !== planned.length || details.length !== planned.length || !planned.every((binary, index) => ids[index] === binary.id && isRecord(details[index]) && details[index].id === binary.id && details[index].relativePath === binary.relativePath && details[index].sha256 === binary.sha256 && details[index].mediaType === binary.mediaType)) throw new QaSkillsError("Evidence bundle descriptor does not exactly reference its proposed binaries", "ARTIFACT_BINDING");
+        const primary = planned[0];
+        if (!primary || !matchesEvidencePrimary(value as Record<string, unknown>, primary)) throw new QaSkillsError("Evidence bundle descriptor does not match its designated primary binary", "ARTIFACT_BINDING");
         const withBinaries: Manifest = { ...manifest, artifacts: [...manifest.artifacts, ...planned] };
         await this.assertArtifactBinding("evidence", value, relationships, withBinaries);
         const canonicalContents = `${JSON.stringify(value, null, 2)}\n`;
@@ -622,17 +643,18 @@ export class RunWorkspace {
         const descriptorId = createEntityId();
         const relativePath = `inputs/${descriptorId}-evidence.json`;
         const absolutePath = resolveWithin(this.path, relativePath);
-        const binaries = await Promise.all(input.binaries.map(async (binary, index) => {
+        const binaries: (ArtifactRecord & { absolutePath: string })[] = [];
+        for (const [index, binary] of input.binaries.entries()) {
           const record = planned[index];
           if (!record) throw new QaSkillsError("Evidence bundle planning failed", "WRITE_FAILURE");
           const binaryPath = resolveWithin(this.path, record.relativePath);
-          await atomicWriteFile(this.path, binaryPath, binary.contents);
           written.push(binaryPath);
+          await this.persistence.writeAtomic(this.path, binaryPath, binary.contents);
           if (await sha256(binaryPath) !== record.sha256) throw new QaSkillsError("Atomic evidence binary write checksum mismatch", "WRITE_FAILURE");
-          return { ...record, absolutePath: binaryPath };
-        }));
-        await this.persistence.writeAtomic(this.path, absolutePath, canonicalContents);
+          binaries.push({ ...record, absolutePath: binaryPath });
+        }
         written.push(absolutePath);
+        await this.persistence.writeAtomic(this.path, absolutePath, canonicalContents);
         if (await sha256(absolutePath) !== checksum) throw new QaSkillsError("Atomic evidence descriptor write checksum mismatch", "WRITE_FAILURE");
         const descriptor: ArtifactRecord = { id: descriptorId, type: "evidence", relativePath, sha256: checksum, provenance: input.provenance ?? "runtime", relationships };
         await this.writeManifest({ ...withBinaries, artifacts: [...withBinaries.artifacts, descriptor] });
