@@ -2,7 +2,15 @@ export const evidenceModes = ["forbidden", "off", "optional", "on-failure", "alw
 export type EvidenceMode = (typeof evidenceModes)[number];
 export type EvidenceChannel = "logs" | "console" | "network" | "screenshot" | "trace" | "video";
 export type EvidencePolicyLayer = Partial<Record<EvidenceChannel, EvidenceMode>>;
-export type EvidencePolicyLayers = { safety?: EvidencePolicyLayer; profile?: EvidencePolicyLayer; run?: EvidencePolicyLayer; testcase?: EvidencePolicyLayer };
+export type EvidenceRedactionPolicy = Readonly<{ protectedEnvironment?: boolean; domSelectors?: readonly string[]; regions?: readonly { x: number; y: number; width: number; height: number }[] }>;
+export type EvidencePolicyLayers = {
+  safety?: EvidencePolicyLayer;
+  profile?: EvidencePolicyLayer;
+  run?: EvidencePolicyLayer;
+  testcase?: EvidencePolicyLayer;
+  /** Host-owned policy; it can only strengthen environment protection. */
+  protection?: EvidenceRedactionPolicy;
+};
 export type ResolvedEvidencePolicy = Readonly<Record<EvidenceChannel, EvidenceMode>>;
 
 const defaults: ResolvedEvidencePolicy = {

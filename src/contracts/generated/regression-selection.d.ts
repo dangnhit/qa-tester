@@ -6,6 +6,9 @@ export interface RegressionSelection {
   producerVersion: string;
   selectionId: string;
   runId: string;
+  changeScopeArtifactId: string;
+  changeScopeSha256: string;
+  decisionChecksum: string;
   selected: Decision[];
   excluded: Decision[];
   unmappedChangeRisks: {

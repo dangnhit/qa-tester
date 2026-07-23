@@ -13,6 +13,22 @@ export interface RetestResult {
    * @minItems 1
    */
   reproductionAttemptIds: [string, ...string[]];
+  /**
+   * @minItems 1
+   */
+  reproductionScenarios: [
+    {
+      scenarioId: string;
+      attemptId: string;
+      status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
+    },
+    ...{
+      scenarioId: string;
+      attemptId: string;
+      status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
+    }[]
+  ];
+  regressionAttemptIds: string[];
   verdict: "FIXED" | "NOT_FIXED" | "PARTIALLY_FIXED" | "CANNOT_VERIFY" | "INTERMITTENT";
-  regressionOutcome?: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
+  regressionOutcome: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
 }

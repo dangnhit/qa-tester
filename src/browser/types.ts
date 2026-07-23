@@ -121,12 +121,18 @@ export type ExecuteTestInput = {
   testCaseArtifactId: string;
   resolveSecret?: SecretResolver;
   onSessionActive?: (input: { attemptId: string; session: ActiveBrowserSession }) => Promise<void> | void;
+  /** Runtime-owned finalization seam: all actions and telemetry are complete, but the browser context is still live. */
+  onBeforeSessionClose?: (input: { attempt: TestAttempt; session: ActiveBrowserSession }) => Promise<void> | void;
 };
 
 export type CanonicalBrowserTestCase = BrowserTestInstance & {
   browserDsl: { steps: readonly BrowserTestStep[] };
   artifact: RegisteredWorkspaceArtifact;
 };
-export type InternalExecuteTestInput = RawExecuteTestInput & { attemptId: string; onSessionActive?: ExecuteTestInput["onSessionActive"] };
+export type InternalExecuteTestInput = RawExecuteTestInput & {
+  attemptId: string;
+  onSessionActive?: ExecuteTestInput["onSessionActive"];
+  onBeforeSessionClose?: ExecuteTestInput["onBeforeSessionClose"];
+};
 
 export type ResolvedLocator = Locator;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveRetestVerdict } from "../../src/retest/verdict.js";
+import { deriveRegressionOutcome, deriveRetestVerdict } from "../../src/retest/verdict.js";
 
 describe("retest verdicts", () => {
   it("evaluates the original bug independently from adjacent regression", () => {
@@ -16,5 +16,10 @@ describe("retest verdicts", () => {
   it("distinguishes partial repair across affected scenarios from intermittent repeats of one scenario", () => {
     expect(deriveRetestVerdict({ originalBugId: "BUG-LOGIN-001", reproductionStatuses: ["PASSED", "FAILED"], scenarioIds: ["password", "oauth"] }).verdict).toBe("PARTIALLY_FIXED");
     expect(deriveRetestVerdict({ originalBugId: "BUG-LOGIN-001", reproductionStatuses: ["PASSED", "FAILED"], scenarioIds: ["password", "password"] }).verdict).toBe("INTERMITTENT");
+  });
+
+  it("derives a typed regression outcome and rejects unknown execution statuses", () => {
+    expect(deriveRegressionOutcome(["PASSED", "FAILED"])).toBe("FAILED");
+    expect(() => deriveRegressionOutcome(["UNKNOWN"] as never)).toThrow(/execution status/i);
   });
 });

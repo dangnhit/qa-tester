@@ -1,6 +1,7 @@
 import type { ChangeScope, RegressionCase } from "./change-scope.js";
 
 export type RegressionSource = "requirement-mapping" | "code-surface-mapping" | "declared-dependency" | "git-diff-heuristic" | "user-scope";
+export const regressionMappingSources = ["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"] as const satisfies readonly RegressionSource[];
 export type RegressionDecision = Readonly<{ testCaseId: string; revisionId: string; source: RegressionSource; rationale: string; confidence: number }>;
 export type UnmappedChangeRisk = Readonly<{ changeId: string; rationale: string; confidence: number }>;
 export type RegressionSelection = Readonly<{ selected: readonly RegressionDecision[]; excluded: readonly RegressionDecision[]; unmappedChangeRisks: readonly UnmappedChangeRisk[]; complete: boolean }>;

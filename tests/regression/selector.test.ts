@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { selectRegressionCases } from "../../src/regression/selector.js";
+import { regressionMappingSources } from "../../src/orchestration/qa-tester.js";
 
 describe("regression selection", () => {
   it("prefers requirement mapping over lower-priority mapping and explains exclusions", () => {
@@ -19,5 +20,14 @@ describe("regression selection", () => {
   it("exposes unmapped changes and refuses a complete claim", () => {
     const result = selectRegressionCases({ changes: [{ id: "unknown", requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: ["new.ts"], userScope: [] }], testCases: [] });
     expect(result).toMatchObject({ complete: false, unmappedChangeRisks: [expect.objectContaining({ changeId: "unknown" })] });
+  });
+
+  it("exposes every canonical mapping source from the public QA Tester surface and preserves its priority", () => {
+    expect(regressionMappingSources).toEqual(["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"]);
+    const result = selectRegressionCases({
+      changes: [{ id: "priority", requirementIds: ["req"], codeSurfaces: ["surface"], declaredDependencies: ["dependency"], gitPaths: ["path"], userScope: ["scope"] }],
+      testCases: [{ testCaseId: "TC-ALL", revisionId: "REV-ALL", requirementIds: ["req"], codeSurfaces: ["surface"], declaredDependencies: ["dependency"], gitPaths: ["path"], userScope: ["scope"] }],
+    });
+    expect(result.selected).toEqual([expect.objectContaining({ source: "requirement-mapping" })]);
   });
 });

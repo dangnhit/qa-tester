@@ -82,7 +82,12 @@ async function executeCanonical(input: InternalExecuteTestInput): Promise<TestAt
     const scrub = (text: string) => [...secrets].reduce((result, secret) => secret.length === 0 ? result : result.replaceAll(secret, "[REDACTED]"), text);
     const safeSteps = steps.map((step) => step.error === undefined ? step : { ...step, error: scrub(step.error) });
     const safeTelemetry = session.telemetry.findings.map((finding) => ({ ...finding, message: scrub(finding.message), ...(finding.url === undefined ? {} : { url: scrub(finding.url) }) }));
-    return { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
+    const attempt = { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
+    // Evidence must observe the completed state.  This hook is runtime-owned
+    // and deliberately runs while the session registry and browser context
+    // remain live, immediately before cleanup.
+    await input.onBeforeSessionClose?.({ attempt, session });
+    return attempt;
   } finally {
     activeBrowserSessions.delete(input.attemptId);
     session.secrets.clear();
@@ -102,7 +107,7 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
-    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}) });
+    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}) });
     await input.workspace.registerArtifactValue({
       type: "test-result",
       value: {

@@ -28,7 +28,9 @@ export interface RunArtifactManifest {
       | "exploration-charter"
       | "retest-result"
       | "regression-selection"
-      | "change-scope";
+      | "change-scope"
+      | "workflow-checkpoint"
+      | "exploratory-finding";
     relativePath: string;
     sha256: string;
     mediaType?: string;

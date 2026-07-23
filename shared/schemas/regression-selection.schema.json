@@ -4,9 +4,9 @@
   "title": "Regression Selection",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "selectionId", "runId", "selected", "excluded", "unmappedChangeRisks", "complete"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "selectionId", "runId", "changeScopeArtifactId", "changeScopeSha256", "decisionChecksum", "selected", "excluded", "unmappedChangeRisks", "complete"],
   "properties": {
-    "artifactType": { "const": "regression-selection" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "selectionId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 },
+    "artifactType": { "const": "regression-selection" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "selectionId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "changeScopeArtifactId": { "type": "string", "minLength": 1 }, "changeScopeSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "decisionChecksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "selected": { "type": "array", "items": { "$ref": "#/$defs/decision" } }, "excluded": { "type": "array", "items": { "$ref": "#/$defs/decision" } },
     "unmappedChangeRisks": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["changeId", "rationale", "confidence"], "properties": { "changeId": { "type": "string", "minLength": 1 }, "rationale": { "type": "string", "minLength": 1 }, "confidence": { "type": "number", "minimum": 0, "maximum": 1 } } } }, "complete": { "type": "boolean" }
   },

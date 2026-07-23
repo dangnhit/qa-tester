@@ -40,7 +40,9 @@
               "exploration-charter",
               "retest-result",
               "regression-selection",
-              "change-scope"
+              "change-scope",
+              "workflow-checkpoint",
+              "exploratory-finding"
             ]
           },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },

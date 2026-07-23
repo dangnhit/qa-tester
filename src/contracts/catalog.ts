@@ -25,6 +25,8 @@ import explorationCharterSchema from "../../shared/schemas/exploration-charter.s
 import retestResultSchema from "../../shared/schemas/retest-result.schema.json" with { type: "json" };
 import regressionSelectionSchema from "../../shared/schemas/regression-selection.schema.json" with { type: "json" };
 import changeScopeSchema from "../../shared/schemas/change-scope.schema.json" with { type: "json" };
+import workflowCheckpointSchema from "../../shared/schemas/workflow-checkpoint.schema.json" with { type: "json" };
+import exploratoryFindingSchema from "../../shared/schemas/exploratory-finding.schema.json" with { type: "json" };
 import type { FormatsPlugin } from "ajv-formats";
 import type { Ajv2020 as Ajv2020Instance, ValidateFunction } from "ajv/dist/2020.js";
 
@@ -52,6 +54,8 @@ const schemas: Record<ArtifactType, object> = {
   "retest-result": retestResultSchema,
   "regression-selection": regressionSelectionSchema,
   "change-scope": changeScopeSchema,
+  "workflow-checkpoint": workflowCheckpointSchema,
+  "exploratory-finding": exploratoryFindingSchema,
 };
 
 const require = createRequire(import.meta.url);

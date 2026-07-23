@@ -37,7 +37,7 @@ function dsl() {
   ] } as const;
 }
 
-async function sourceBundle(root: string, options: { sourceBug?: boolean } = {}): Promise<CanonicalPlanBundleRef & { sourceBug?: { artifactId: string; sha256: string; bugId: string } }> {
+async function sourceBundle(root: string, options: { sourceBug?: boolean; includeExcluded?: boolean } = {}): Promise<CanonicalPlanBundleRef & { sourceBug?: { artifactId: string; sha256: string; bugId: string } }> {
   const source = await RunWorkspace.create({ root, mode: options.sourceBug ? "execute" : "plan", environmentProfile: environment });
   const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-RUNTIME",
@@ -46,11 +46,17 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean } = {})
   const execution = dsl();
   const plan = await source.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: {
     artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-RUNTIME", approvalPolicy: { mode: "auto-approve-safe" },
-    testCases: [{ testCaseId: "TC-RUNTIME", title: "Save email", expectedResults: [{ id: "ER-RUNTIME", requirementId: "REQ-RUNTIME", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "plan-open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [], browserExecution: { revisionId: "REV-RUNTIME", instanceId: "INSTANCE-RUNTIME", browserDsl: execution, browserDslFingerprint: sha256Fingerprint(execution) } }],
+    testCases: [
+      { testCaseId: "TC-RUNTIME", title: "Save email", expectedResults: [{ id: "ER-RUNTIME", requirementId: "REQ-RUNTIME", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "plan-open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [], browserExecution: { revisionId: "REV-RUNTIME", instanceId: "INSTANCE-RUNTIME", browserDsl: execution, browserDslFingerprint: sha256Fingerprint(execution) } },
+      ...(options.includeExcluded ? [{ testCaseId: "TC-EXCLUDED", title: "Excluded browser case", expectedResults: [{ id: "ER-EXCLUDED", requirementId: "REQ-RUNTIME", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "plan-open-excluded", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [], browserExecution: { revisionId: "REV-EXCLUDED", instanceId: "INSTANCE-EXCLUDED", browserDsl: execution, browserDslFingerprint: sha256Fingerprint(execution) } }] : []),
+    ],
   } });
   const testcase = await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
     artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME", instanceId: "INSTANCE-RUNTIME", title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-RUNTIME", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
+  const excluded = options.includeExcluded ? await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
+    artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-EXCLUDED", revisionId: "REV-EXCLUDED", instanceId: "INSTANCE-EXCLUDED", title: "Excluded browser case", steps: [{ id: "plan-open-excluded", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-RUNTIME", role: "member", behavior: "excluded", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" }, regressionIndex: { requirementIds: [], codeSurfaces: ["excluded-surface"], declaredDependencies: [], gitPaths: [], userScope: [] },
+  } }) : undefined;
   const coverage = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
     artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV-RUNTIME", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-RUNTIME", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true,
   } });
@@ -63,7 +69,7 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean } = {})
     sourceBug = { artifactId: generated.record.id, sha256: generated.record.sha256, bugId: String((await source.readRegisteredArtifacts()).find((item) => item.record.id === generated.record.id)?.value.bugId) };
   }
   await source.finalize(options.sourceBug ? "execute" : "plan");
-  const records = await Promise.all([requirement, plan, testcase, coverage].map((artifact) => source.readArtifactRecord(artifact.id)));
+  const records = await Promise.all([requirement, plan, testcase, coverage, ...(excluded === undefined ? [] : [excluded])].map((artifact) => source.readArtifactRecord(artifact.id)));
   await source.close();
   return { sourceRunId: source.runId, artifacts: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })), ...(sourceBug === undefined ? {} : { sourceBug }) };
 }
@@ -84,22 +90,29 @@ async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId:
 }
 
 describe("public runtime QA Tester", () => {
-  it("fails before finalization without a configured runtime and leaves no fabricated result or report", async () => {
+  it("checkpoints a missing runtime as AWAITING_RUNTIME and resumes the same nonterminal run without fabricating a result or report", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-missing-")); roots.push(root);
     const bundle = await sourceBundle(root);
 
-    await expect(createQaTester({})({ root, mode: "full", environmentProfile: environment, bundle, runtime: {} })).rejects.toThrow(/runtime.*configured|configured.*runtime/i);
+    const waiting = await createQaTester({})({ root, mode: "full", environmentProfile: environment, bundle, runtime: {} });
+    expect(waiting.outcome).toBe("AWAITING_RUNTIME");
 
     const runIds = await readdir(join(root, "qa-results"));
     expect(runIds).toHaveLength(2);
     const targetRunId = runIds.find((runId) => runId !== bundle.sourceRunId);
     expect(targetRunId).toBeTruthy();
-    const metadata = JSON.parse(await readFile(join(root, "qa-results", targetRunId!, "run-metadata.json"), "utf8")) as { status: string };
+    if (!targetRunId) throw new Error("Expected checkpointed target run");
+    const metadata = JSON.parse(await readFile(join(root, "qa-results", targetRunId, "run-metadata.json"), "utf8")) as { status: string };
     expect(metadata.status).not.toMatch(/COMPLETED|BLOCKED|ABORTED/);
-    const workspace = await RunWorkspace.open(root, targetRunId!);
+    const workspace = await RunWorkspace.open(root, targetRunId);
     const artifacts = await workspace.readRegisteredArtifacts();
+    expect(artifacts.some((item) => item.record.type === "workflow-checkpoint")).toBe(true);
     expect(artifacts.some((item) => item.record.type === "test-result" || item.record.type === "qa-execution-report")).toBe(false);
     await workspace.close();
+
+    const resumed = await createQaTester({ browserManagers: { chromium: { browser } }, testDataRegistries: { trusted: new TestDataHookRegistry([], {}) }, evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } } })({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
+    expect(resumed.runId).toBe(targetRunId);
+    expect(resumed.outcome).toBe("COMPLETED");
   });
 
   it("runs a full lifecycle through a real Chromium browser and only finalizes registered evidence-backed artifacts", async () => {
@@ -137,9 +150,27 @@ describe("public runtime QA Tester", () => {
     await workspace.close();
   });
 
+  it("derives protected screenshot redaction from the registered environment and records a gap instead of pixels when it cannot verify it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-protected-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const protectedEnvironment = { ...environment, environmentProfileId: "ENV-PROTECTED", evidenceProtection: { protected: true } } as const;
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "required" } } },
+    });
+
+    const result = await tester({ root, mode: "execute", environmentProfile: protectedEnvironment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+
+    expect(artifacts.filter((item) => item.record.type === "evidence-gap").map((item) => item.value.reason)).toContain("Protected screenshot capture requires a verifiable redaction policy");
+    expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "screenshot")).toBe(false);
+    await workspace.close();
+  });
+
   it("imports a terminal bundle for regression, executes only checksum-bound selected cases, and preserves its source bytes", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-regression-")); roots.push(root);
-    const bundle = await sourceBundle(root);
+    const bundle = await sourceBundle(root, { includeExcluded: true });
     const sourceManifestPath = join(root, "qa-results", bundle.sourceRunId, "artifact-manifest.json");
     const sourceBytes = await readFile(sourceManifestPath);
     const tester = createQaTester({
@@ -155,7 +186,7 @@ describe("public runtime QA Tester", () => {
     const attempts = artifacts.filter((item) => item.record.type === "test-result");
 
     expect(result.operationOrder).toEqual(["select-regression", "execute-browser-test", "collect-evidence", "generate-qa-report"]);
-    expect(selection?.value).toMatchObject({ complete: false, selected: [{ testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME" }], unmappedChangeRisks: [{ changeId: "CHANGE-UNMAPPED" }] });
+    expect(selection?.value).toMatchObject({ complete: false, selected: [{ testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME" }], excluded: [{ testCaseId: "TC-EXCLUDED", revisionId: "REV-EXCLUDED" }], unmappedChangeRisks: [{ changeId: "CHANGE-UNMAPPED" }] });
     expect(attempts).toHaveLength(1);
     expect(attempts[0]?.value).toMatchObject({ testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", status: "PASSED" });
     expect(artifacts.filter((item) => item.record.type === "evidence").every((item) => (item.value.provenance as { testcaseId?: string }).testcaseId === "TC-RUNTIME")).toBe(true);
@@ -202,10 +233,12 @@ describe("public runtime QA Tester", () => {
     } as const;
     const tester = createQaTester(runtime);
 
-    await expect(tester({ root, mode: "exploratory", environmentProfile: environment, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } })).rejects.toThrow(/runtime-owned evidence/i);
+    const exploratory = await tester({ root, mode: "exploratory", environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" }, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } });
+    expect(exploratory.validation.valid).toBe(true);
     const charterRunId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
     const charterWorkspace = await RunWorkspace.open(root, charterRunId);
     const charter = (await charterWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "exploration-charter")!;
+    expect((await charterWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "exploratory-finding")?.value).toMatchObject({ authority: "EXPLORATORY", satisfiesCoverage: false });
     await rechecksumRegisteredArtifact(charterWorkspace, charter.record.id, (value) => { value.actionBudget = 0; });
     await charterWorkspace.close();
     await expect(RunWorkspace.open(root, charterRunId)).rejects.toThrow(/contract|binding|invalid/i);

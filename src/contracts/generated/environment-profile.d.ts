@@ -9,4 +9,14 @@ export interface EnvironmentProfile {
   classification: "local" | "test" | "staging" | "production";
   baseUrl: string;
   productionReadOnly: boolean;
+  evidenceProtection?: {
+    protected?: boolean;
+    domSelectors?: string[];
+    regions?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }[];
+  };
 }

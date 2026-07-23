@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/exploratory-finding.schema.json",
+  "title": "Exploratory Finding",
+  "type": "object", "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "findingId", "runId", "charterId", "observation", "authority", "satisfiesCoverage"],
+  "properties": {
+    "artifactType": { "const": "exploratory-finding" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 },
+    "findingId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 }, "charterId": { "type": "string", "minLength": 1 }, "observation": { "type": "string", "minLength": 1 }, "authority": { "const": "EXPLORATORY" }, "satisfiesCoverage": { "const": false }
+  }
+}

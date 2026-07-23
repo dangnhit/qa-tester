@@ -1,6 +1,21 @@
 export type ChangeScope = Readonly<{ id: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
 export type RegressionCase = Readonly<{ testCaseId: string; revisionId: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
 
+function strings(value: unknown): readonly string[] { return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : []; }
+function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+
+/** Reads every regression mapping source from the canonical testcase revision. */
+export function regressionCaseFromCanonical(value: Record<string, unknown>): RegressionCase {
+  const index = object(value.regressionIndex) ? value.regressionIndex : {};
+  const coverage = object(value.coverage) ? value.coverage : {};
+  if (typeof value.testCaseId !== "string" || typeof value.revisionId !== "string") throw new Error("Canonical test case lacks regression identity");
+  return {
+    testCaseId: value.testCaseId, revisionId: value.revisionId,
+    requirementIds: index.requirementIds === undefined && typeof coverage.requirementId === "string" ? [coverage.requirementId] : strings(index.requirementIds),
+    codeSurfaces: strings(index.codeSurfaces), declaredDependencies: strings(index.declaredDependencies), gitPaths: strings(index.gitPaths), userScope: strings(index.userScope),
+  };
+}
+
 import { sha256Text } from "../core/checksum.js";
 import type { RunWorkspace, ArtifactRecord } from "../core/run-workspace.js";
 

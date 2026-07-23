@@ -1,5 +1,7 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
+export type Strings = string[];
+
 export interface TestCase {
   artifactType: "test-case";
   schemaVersion: "1.0.0";
@@ -23,6 +25,13 @@ export interface TestCase {
       sideEffect: "none" | "reversible" | "external" | "destructive";
     }[]
   ];
+  regressionIndex?: {
+    requirementIds: Strings;
+    codeSurfaces: Strings;
+    declaredDependencies: Strings;
+    gitPaths: Strings;
+    userScope: Strings;
+  };
   coverage: {
     requirementId: string;
     role: string;

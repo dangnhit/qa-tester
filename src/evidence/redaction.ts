@@ -17,6 +17,9 @@ function validBox(box: CssBox): boolean {
 /** Performs static checks before capture. Browser selector validation happens before taking a screenshot. */
 export function validateRedactionPlan(plan: RedactionPlan): RedactionCheck {
   if (!plan.protectedEnvironment) return { safe: true };
+  if (plan.domSelectors.length === 0 && plan.regions.length === 0) {
+    return { safe: false, gap: gap("Protected screenshot capture requires a verifiable redaction policy", "screenshot capture") };
+  }
   if (plan.domSelectors.some((selector) => selector.trim() === "" || selector.includes("[") !== selector.includes("]"))) {
     return { safe: false, gap: gap("Configured redaction selector is invalid", "screenshot capture") };
   }

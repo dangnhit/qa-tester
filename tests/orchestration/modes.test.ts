@@ -36,12 +36,12 @@ describe("workflow mode operation plans", () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     const calls: string[] = [];
     try {
-      const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); } })({
+      const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); }, "generate-qa-report": () => Promise.resolve() })({
         root, mode: "exploratory",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
         charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
       });
-      expect(result.operationOrder).toEqual(["register-exploration-charter", "collect-evidence"]);
+      expect(result.operationOrder).toEqual(["register-exploration-charter", "collect-evidence", "generate-qa-report"]);
       expect(calls).toEqual(["collect-evidence"]);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
@@ -58,13 +58,13 @@ describe("workflow mode operation plans", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it("fails safely before finalization when a public full workflow has no configured runtime", async () => {
+  it("returns a safe awaiting-runtime checkpoint when a public full workflow has no configured runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     try {
       await expect(createQaTester({})({
         root, mode: "full",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
-      })).rejects.toThrow(/runtime.*configured|configured.*runtime/i);
+      })).resolves.toMatchObject({ outcome: "AWAITING_RUNTIME" });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

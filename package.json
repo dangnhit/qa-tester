@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./dist/orchestration/qa-tester.js",
-    "./cli": "./dist/cli/index.js"
+    ".": "./dist/src/orchestration/qa-tester.js",
+    "./cli": "./dist/src/cli/index.js"
   },
   "bin": {
-    "qa-skill": "./dist/cli/index.js"
+    "qa-skill": "./dist/src/cli/index.js"
   },
   "engines": {
     "node": ">=22"

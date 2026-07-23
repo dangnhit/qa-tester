@@ -6,7 +6,9 @@ import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/t
 import { validateArtifact } from "../contracts/validator.js";
 import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
-import { deriveRetestVerdict } from "../retest/verdict.js";
+import { deriveRegressionOutcome, deriveRetestVerdict } from "../retest/verdict.js";
+import { regressionCaseFromCanonical } from "../regression/change-scope.js";
+import { selectRegressionCases } from "../regression/selector.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
@@ -489,7 +491,10 @@ async function inspectWorkspaceState(
         const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? valuesOf("test-case").filter((testCase) => testCase.value?.testCaseId === decision.testCaseId && testCase.value?.revisionId === decision.revisionId) : []);
         const relationshipIds = [...artifact.record.relationships].sort();
         const expectedIds = decisionCases.map((testCase) => testCase.record.id).sort();
-        if (value.runId !== expectedRunId || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify(expectedIds) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
+        const scope = artifacts.find((candidate) => candidate.valid && candidate.record.id === value.changeScopeArtifactId && candidate.record.type === "change-scope");
+        const expectedDecisionChecksum = sha256Text(JSON.stringify({ selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete }));
+        const recomputed = scope?.value && Array.isArray(scope.value.changes) ? selectRegressionCases({ changes: scope.value.changes as never, testCases: valuesOf("test-case").flatMap((testCase) => testCase.value === undefined ? [] : [regressionCaseFromCanonical(testCase.value)]) }) : undefined;
+        if (value.runId !== expectedRunId || !scope || scope.record.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== expectedDecisionChecksum || recomputed === undefined || stableJson({ selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete }) !== stableJson(recomputed) || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify([scope.record.id, ...expectedIds].sort()) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Regression selection must bind every decision to one registered case and expose unmapped risk") || changed;
         }
       } else if (artifact.record.type === "change-scope") {
@@ -498,10 +503,15 @@ async function inspectWorkspaceState(
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Change scope checksum does not match its registered mapping input") || changed;
         }
       } else if (artifact.record.type === "retest-result") {
-        const attempts = array(value.reproductionAttemptIds).map((id) => valuesOf("test-result").find((attempt) => attempt.value?.attemptId === id));
-        const relationships = attempts.map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined).sort();
+        const reproductionIds = array(value.reproductionAttemptIds);
+        const attempts = reproductionIds.map((id) => valuesOf("test-result").find((attempt) => attempt.value?.attemptId === id));
+        const regressionAttempts = array(value.regressionAttemptIds).map((id) => valuesOf("test-result").find((attempt) => attempt.value?.attemptId === id));
+        const relationships = [...attempts, ...regressionAttempts].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined).sort();
         const sourceMatchesLink = typeof value.sourceRunId === "string" && value.sourceRunId === metadata.linkedRunId && value.sourceRunId !== expectedRunId;
-        const derived = typeof value.bugId === "string" ? deriveRetestVerdict({ originalBugId: value.bugId, reproductionStatuses: attempts.map((attempt) => String(attempt?.value?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) }) : undefined;
+        const scenarios = array(value.reproductionScenarios);
+        const scenarioValid = scenarios.length === attempts.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === reproductionIds[index] && scenario.status === attempts[index]?.value?.status && typeof scenario.scenarioId === "string");
+        const derivedOutcome = regressionAttempts.length === array(value.regressionAttemptIds).length ? (() => { try { return deriveRegressionOutcome(regressionAttempts.map((attempt) => String(attempt?.value?.status))); } catch { return undefined; } })() : undefined;
+        const derived = typeof value.bugId === "string" && scenarioValid ? deriveRetestVerdict({ originalBugId: value.bugId, reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), ...(derivedOutcome === undefined ? {} : { regressionOutcome: derivedOutcome }) }) : undefined;
         let sourceBugValid = false;
         let reproductionMatchesSource = false;
         if (sourceMatchesLink && typeof value.sourceBugArtifactId === "string" && typeof value.sourceBugArtifactSha256 === "string" && typeof value.bugId === "string") try {
@@ -515,7 +525,7 @@ async function inspectWorkspaceState(
             reproductionMatchesSource = original !== undefined && attempts.every((attempt) => attempt?.value?.testCaseId === original.value.testCaseId && attempt?.value?.testCaseRevisionId === original.value.testCaseRevisionId && attempt?.value?.testCaseInstanceId === original.value.testCaseInstanceId);
           } finally { await source.close(); }
         } catch { sourceBugValid = false; }
-        if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
+        if (value.runId !== expectedRunId || !sourceMatchesLink || !sourceBugValid || !reproductionMatchesSource || attempts.length === 0 || attempts.some((attempt) => !attempt) || regressionAttempts.some((attempt) => !attempt) || !scenarioValid || value.regressionOutcome !== derivedOutcome || JSON.stringify([...artifact.record.relationships].sort()) !== JSON.stringify(relationships) || value.verdict !== derived?.verdict) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Retest result must bind linked source and exact reproduction artifacts with a derived verdict") || changed;
         }
       }
@@ -1279,7 +1289,11 @@ export class RunWorkspace {
         const testCase = cases[index];
         return testCase?.testCaseId === decision.testCaseId && testCase?.revisionId === decision.revisionId;
       })?.id : undefined);
-      if (!decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify(expectedRelationships.filter((id): id is string => id !== undefined).sort())) {
+      const scope = manifest.artifacts.find((artifact) => artifact.id === value.changeScopeArtifactId && artifact.type === "change-scope");
+      const scopeValue = scope === undefined ? undefined : (await this.readRegisteredValues(manifest, "change-scope"))[manifest.artifacts.filter((artifact) => artifact.type === "change-scope").findIndex((artifact) => artifact.id === scope.id)];
+      const recomputed = scopeValue && Array.isArray(scopeValue.changes) ? selectRegressionCases({ changes: scopeValue.changes as never, testCases: cases.map((testCase) => regressionCaseFromCanonical(testCase)) }) : undefined;
+      const stored = { selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete };
+      if (!scope || scope.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== sha256Text(JSON.stringify(stored)) || recomputed === undefined || stableJson(stored) !== stableJson(recomputed) || !decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify([scope.id, ...expectedRelationships.filter((id): id is string => id !== undefined)].sort())) {
         throw new QaSkillsError("Regression selection decisions must bind registered canonical test case revisions", "ARTIFACT_BINDING");
       }
       if (value.complete === true && Array.isArray(value.unmappedChangeRisks) && value.unmappedChangeRisks.length > 0) {
@@ -1301,13 +1315,22 @@ export class RunWorkspace {
         if (!original || reproduced.length === 0 || reproduced.some((attempt) => !attempt || attempt.testCaseId !== original.value.testCaseId || attempt.testCaseRevisionId !== original.value.testCaseRevisionId || attempt.testCaseInstanceId !== original.value.testCaseInstanceId)) {
           throw new QaSkillsError("Retest result must use exact registered reproduction attempts", "ARTIFACT_BINDING");
         }
-        const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: reproduced.map((attempt) => String(attempt?.status)), ...(typeof value.regressionOutcome === "string" ? { regressionOutcome: value.regressionOutcome as "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN" } : {}) });
+        const regressionIds = Array.isArray(value.regressionAttemptIds) ? value.regressionAttemptIds : [];
+        const regression = regressionIds.map((id) => attempts.find((attempt) => attempt?.attemptId === id));
+        const scenarios = Array.isArray(value.reproductionScenarios) ? value.reproductionScenarios : [];
+        const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && typeof scenario.scenarioId === "string");
+        const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => String(attempt?.status)));
+        const derived = deriveRetestVerdict({ originalBugId: String(bug.value.bugId), reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), regressionOutcome });
         const resultRecords = manifest.artifacts.filter((artifact) => artifact.type === "test-result");
         const expectedRelationships = ids.map((id) => {
           const index = attempts.findIndex((attempt) => attempt?.attemptId === id);
           return index < 0 ? undefined : resultRecords[index]?.id;
         }).filter((id): id is string => id !== undefined).sort();
-        if (value.verdict !== derived.verdict || JSON.stringify([...relationships].sort()) !== JSON.stringify(expectedRelationships)) throw new QaSkillsError("Retest verdict and relationships must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
+        const regressionRelationships = regressionIds.map((id) => {
+          const index = attempts.findIndex((attempt) => attempt?.attemptId === id);
+          return index < 0 ? undefined : resultRecords[index]?.id;
+        }).filter((id): id is string => id !== undefined).sort();
+        if (!scenarioValid || regression.some((attempt) => !attempt) || value.regressionOutcome !== regressionOutcome || value.verdict !== derived.verdict || JSON.stringify([...relationships].sort()) !== JSON.stringify([...expectedRelationships, ...regressionRelationships].sort())) throw new QaSkillsError("Retest verdict and relationships must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
       } finally { await source.close(); }
     }
   }

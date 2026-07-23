@@ -201,6 +201,25 @@ describe("executeTestInstance", () => {
     expect(createdContexts).toBe(1);
   });
 
+  it("keeps the runtime-owned session alive until the completed attempt is available to the close hook", async () => {
+    const { workspace, registeredCase } = await governedWorkspace();
+    let observed: { status: string; resultPresent: boolean; saved: string | null } | undefined;
+
+    await executeTestInstance({
+      workspace, browser, attemptId: "ATTEMPT-CLOSE-HOOK", testCaseArtifactId: registeredCase.id, resolveSecret: () => "qa@example.test",
+      onBeforeSessionClose: async ({ attempt, session }) => {
+        observed = {
+          status: attempt.status,
+          resultPresent: activeBrowserSessions.get(attempt.attemptId) === session,
+          saved: await session.page.getByTestId("result").textContent(),
+        };
+      },
+    });
+
+    expect(observed).toEqual({ status: "PASSED", resultPresent: true, saved: "Saved" });
+    expect(activeBrowserSessions.has("ATTEMPT-CLOSE-HOOK")).toBe(false);
+  });
+
   it("rejects a duplicate queued attempt before it can overwrite the live registry entry", async () => {
     const { workspace, registeredCase } = await governedWorkspace();
     let release: (() => void) | undefined;

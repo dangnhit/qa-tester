@@ -67,3 +67,18 @@ The public fixture-backed matrix now also covers regression and retest:
 - Package exports now expose only the production Skill Adapter and CLI; callback orchestration remains an explicit test-only source seam.
 
 To stabilize genuine Chromium evidence work without relaxing assertions or timeouts, Vitest now runs test files serially; concurrent browser processes had caused an unrelated evidence-scrubbing integration test to exceed its default timeout on the second complete-suite run.
+
+## Final hardening pass (2026-07-23)
+
+- Browser execution now provides a runtime-owned `onBeforeSessionClose` hook after every action, assertion, and telemetry collection, while the active browser session is still available. Runtime evidence collection runs there, so screenshots observe the post-action outcome rather than a pre-action page.
+- Runtime attempt IDs are ULID-based and unique across all phases. Regression execution derives runnable artifacts from `selected` decisions only; excluded decisions remain registered for audit but cannot execute.
+- Screenshot protection is derived from the registered Environment Profile and host evidence policy. Production or protected profiles without a verifiable selector/region redaction plan register an Evidence Gap and never persist screenshot pixels.
+- Canonical testcase revisions expose all mapping sources through `regressionIndex`; regression selections bind their exact change-scope record/checksum and a checksummed decision snapshot. Workspace reopening recomputes selection against the registered scope and mappings.
+- Retest results now persist exact reproduction scenarios/statuses, regression attempt IDs, and a runtime-derived typed regression outcome. Unknown execution statuses reject; mixed distinct scenarios remain `PARTIALLY_FIXED`, while variation within one scenario is `INTERMITTENT`.
+- Exploratory mode now creates a bounded runtime-owned browser context, performs one budget-bounded navigation, records live evidence and an `EXPLORATORY` finding linked to the registered charter, and derives its gate/report before profile completion. It remains non-authoritative for coverage.
+- The published package root points at the actual compiled entrypoint and exports `createQaTester`, typed inputs/runtime registry, and canonical regression mapping APIs; the unsafe callback factory is absent from the package surface.
+- Missing runtime services now return a durable `AWAITING_RUNTIME` result backed by a checksum-bound workflow checkpoint. A later public resume opens the same nonterminal run, verifies the immutable source bundle reference, and completes without re-importing canonical plan artifacts.
+
+## Status
+
+**READY_FOR_REVIEW.** The public Chromium matrix now includes selected-plus-excluded regression execution, runtime checkpoint/resume, protected evidence gaps, retest/regression derivation, bounded exploratory evidence/findings/reporting, and compiled package-consumer imports. The final verification ran the full suite twice: 46 files / 278 tests passed both times, followed by generated contracts, typecheck, lint, build, and whitespace validation.

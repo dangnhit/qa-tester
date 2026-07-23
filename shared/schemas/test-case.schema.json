@@ -27,6 +27,13 @@
         }
       }
     },
+    "regressionIndex": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requirementIds", "codeSurfaces", "declaredDependencies", "gitPaths", "userScope"],
+      "properties": {
+        "requirementIds": { "$ref": "#/$defs/strings" }, "codeSurfaces": { "$ref": "#/$defs/strings" }, "declaredDependencies": { "$ref": "#/$defs/strings" }, "gitPaths": { "$ref": "#/$defs/strings" }, "userScope": { "$ref": "#/$defs/strings" }
+      }
+    },
     "coverage": {
       "type": "object",
       "additionalProperties": false,
@@ -45,5 +52,6 @@
         "outcome": { "type": "string", "minLength": 1 }
       }
     }
-  }
+  },
+  "$defs": { "strings": { "type": "array", "items": { "type": "string", "minLength": 1 } } }
 }

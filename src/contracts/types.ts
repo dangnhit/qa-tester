@@ -20,6 +20,8 @@ export const artifactTypes = [
   "retest-result",
   "regression-selection",
   "change-scope",
+  "workflow-checkpoint",
+  "exploratory-finding",
 ] as const;
 
 export type ArtifactType = (typeof artifactTypes)[number];
