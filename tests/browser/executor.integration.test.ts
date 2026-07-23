@@ -7,7 +7,7 @@ import { chromium, type Browser } from "@playwright/test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { activeBrowserSessions, executeTestInstance } from "../../src/operations/execute-browser-test.js";
-import type { ActiveBrowserSession } from "../../src/browser/types.js";
+import type { ActiveBrowserSession, BrowserTestStep } from "../../src/browser/types.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { sha256Text } from "../../src/core/checksum.js";
@@ -39,7 +39,7 @@ function browserDsl() {
     { id: "open", action: { kind: "open", url: baseUrl }, assertions: [{ kind: "console-policy", level: "warning", allow: ["fixture initialized"] }], sideEffect: "none" },
     { id: "fill", action: { kind: "fill", locator: { label: "Email" }, value: { secretRef: "browser-email" } }, assertions: [{ kind: "value", locator: { label: "Email" }, value: { secretRef: "browser-email" } }], sideEffect: "none" },
     { id: "click", action: { kind: "click", locator: { role: "button", name: "Save" } }, assertions: [{ kind: "text", locator: { testId: "result" }, text: "Saved" }], sideEffect: "none" },
-  ] } as const;
+  ] } satisfies { steps: readonly BrowserTestStep[] };
 }
 
 function requirement() {
@@ -49,7 +49,7 @@ function requirement() {
   };
 }
 
-function plan(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER", dsl = browserDsl(), policy: "auto-approve-safe" | "human-review" = "auto-approve-safe") {
+function plan(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER", dsl: { steps: readonly BrowserTestStep[] } = browserDsl(), policy: "auto-approve-safe" | "human-review" = "auto-approve-safe") {
   return {
     artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-BROWSER", approvalPolicy: { mode: policy },
     testCases: [{
@@ -68,7 +68,7 @@ function testCase(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER") {
   };
 }
 
-async function governedWorkspace(options: { revisionId?: string; instanceId?: string; testCaseRevisionId?: string; testCaseInstanceId?: string; dsl?: ReturnType<typeof browserDsl>; policy?: "auto-approve-safe" | "human-review"; decision?: unknown } = {}) {
+async function governedWorkspace(options: { revisionId?: string; instanceId?: string; testCaseRevisionId?: string; testCaseInstanceId?: string; dsl?: { steps: readonly BrowserTestStep[] }; policy?: "auto-approve-safe" | "human-review"; decision?: unknown } = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-browser-"));
   roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
@@ -101,6 +101,7 @@ describe("executeTestInstance", () => {
     const artifacts = await workspace.readRegisteredArtifacts();
 
     expect(attempt).toMatchObject({ runId: workspace.runId, status: "PASSED", testCaseRevisionId: "REV-BROWSER", testCaseInstanceId: "INSTANCE-BROWSER" });
+    expect(attempt.telemetry).toContainEqual(expect.objectContaining({ kind: "console", level: "warning", message: "fixture initialized" }));
     expect(artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === "ATTEMPT-GOVERNED" && artifact.value.runId === workspace.runId)).toBe(true);
     expect(JSON.stringify(attempt)).not.toContain("qa@example.test");
   });
@@ -154,5 +155,74 @@ describe("executeTestInstance", () => {
     await expect(executeTestInstance({ workspace, browser, attemptId: "ATTEMPT-DUPLICATE", testCaseArtifactId: "missing" })).rejects.toThrow(/approved|artifact/i);
     await expect(executeTestInstance({ workspace, browser, attemptId: "ATTEMPT-AFTER-FAILURE", testCaseArtifactId: registeredCase.id, resolveSecret: () => "qa@example.test" })).resolves.toMatchObject({ status: "PASSED" });
     await expect(executeTestInstance({ workspace, browser, attemptId: "ATTEMPT-CONCURRENT-1", testCaseArtifactId: registeredCase.id })).rejects.toThrow(/already registered/i);
+  });
+
+  it("redacts a resolved secret from failed assertion errors, telemetry, and the registered result", async () => {
+    const secret = "secret-NEVER-serialize-9b6f";
+    const dsl = { steps: [
+      { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" },
+      { id: "mismatch", action: { kind: "fill", locator: { label: "Email" }, value: "not-the-secret" }, assertions: [{ kind: "value", locator: { label: "Email" }, value: { secretRef: "mismatch-secret" } }], sideEffect: "none" },
+    ] } satisfies { steps: readonly BrowserTestStep[] };
+    const { workspace, registeredCase } = await governedWorkspace({ dsl });
+
+    const attempt = await executeTestInstance({
+      workspace, browser, attemptId: "ATTEMPT-REDACTION", testCaseArtifactId: registeredCase.id,
+      resolveSecret: () => secret,
+      onSessionActive: async ({ session }) => { await session.page.evaluate((value) => console.error(`telemetry:${value}`), secret); },
+    });
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const serialized = JSON.stringify({ attempt, artifacts });
+
+    expect(attempt.status).toBe("FAILED");
+    expect(attempt.steps[1]?.error).toContain("[REDACTED]");
+    expect(attempt.telemetry.some((finding) => finding.message.includes("[REDACTED]"))).toBe(true);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("NEVER-serialize");
+  });
+
+  it("runs one real Chromium attempt through fail-fast dependent and independent steps without retrying", async () => {
+    const dsl = { steps: [
+      { id: "open", action: { kind: "open", url: baseUrl }, sideEffect: "none" },
+      { id: "fail", action: { kind: "wait", milliseconds: 0 }, assertions: [{ kind: "count", locator: { role: "button" }, count: 2 }], sideEffect: "none" },
+      { id: "dependent", action: { kind: "fill", locator: { label: "Email" }, value: "not-run" }, sideEffect: "none" },
+      { id: "independent", action: { kind: "wait", milliseconds: 0 }, sideEffect: "none", independent: true },
+    ] } satisfies { steps: readonly BrowserTestStep[] };
+    const { workspace, registeredCase } = await governedWorkspace({ dsl });
+    let createdContexts = 0;
+    const countedBrowser = { newContext: (...args: Parameters<Browser["newContext"]>) => {
+      createdContexts += 1;
+      return browser.newContext(...args);
+    } } as Browser;
+
+    const attempt = await executeTestInstance({ workspace, browser: countedBrowser, attemptId: "ATTEMPT-FAIL-FAST", testCaseArtifactId: registeredCase.id });
+
+    expect(attempt.status).toBe("FAILED");
+    expect(attempt.steps.map((step) => step.status)).toEqual(["PASSED", "FAILED", "NOT_RUN", "PASSED"]);
+    expect(createdContexts).toBe(1);
+  });
+
+  it("rejects a duplicate queued attempt before it can overwrite the live registry entry", async () => {
+    const { workspace, registeredCase } = await governedWorkspace();
+    let release: (() => void) | undefined;
+    const active = new Promise<void>((resolve) => { release = resolve; });
+    const first = executeTestInstance({
+      workspace, browser, attemptId: "ATTEMPT-LIVE-DUPLICATE", testCaseArtifactId: registeredCase.id, resolveSecret: () => "qa@example.test",
+      onSessionActive: async ({ attemptId, session }) => {
+        expect(activeBrowserSessions.get(attemptId)).toBe(session);
+        await active;
+      },
+    });
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        if (!activeBrowserSessions.has("ATTEMPT-LIVE-DUPLICATE")) return;
+        clearInterval(timer);
+        resolve();
+      }, 1);
+    });
+
+    await expect(executeTestInstance({ workspace, browser, attemptId: "ATTEMPT-LIVE-DUPLICATE", testCaseArtifactId: registeredCase.id })).rejects.toThrow(/already active or queued/i);
+    expect(activeBrowserSessions.get("ATTEMPT-LIVE-DUPLICATE")?.page).toBeTruthy();
+    release?.();
+    await expect(first).resolves.toMatchObject({ status: "PASSED" });
   });
 });
