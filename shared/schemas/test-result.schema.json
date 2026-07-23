@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/test-result.schema.json",
+  "title": "Test Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "status", "failureClassification", "startedAt", "finishedAt"],
+  "properties": {
+    "artifactType": { "const": "test-result" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "testCaseId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
+    "failureClassification": { "enum": ["PRODUCT_DEFECT", "TEST_DEFECT", "ENVIRONMENT_DEFECT", "UNDETERMINED", "NONE"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" }
+  }
+}

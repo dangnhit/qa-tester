@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/qa-execution-report.schema.json",
+  "title": "QA Execution Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "generatedAt", "releaseRecommendation", "summary"],
+  "properties": {
+    "artifactType": { "const": "qa-execution-report" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "releaseRecommendation": { "enum": ["READY", "READY_WITH_RISKS", "NOT_READY"] },
+    "summary": { "type": "string", "minLength": 1 }
+  }
+}

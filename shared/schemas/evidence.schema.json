@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/evidence.schema.json",
+  "title": "Evidence Item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "kind", "capturedAt", "sha256", "relativePath"],
+  "properties": {
+    "artifactType": { "const": "evidence" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "evidenceId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "evidence-gap"] },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" }
+  }
+}

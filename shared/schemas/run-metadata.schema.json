@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/run-metadata.schema.json",
+  "title": "QA Run Metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "status", "createdAt", "mode", "environmentProfileId"],
+  "properties": {
+    "artifactType": { "const": "run-metadata" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$" },
+    "status": { "enum": ["CREATED", "RUNNING", "FINALIZING", "COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "mode": { "enum": ["plan", "execute", "full", "exploratory", "retest", "regression", "cleanup"] },
+    "environmentProfileId": { "type": "string", "minLength": 1 },
+    "linkedRunId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$" }
+  }
+}

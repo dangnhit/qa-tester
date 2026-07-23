@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/test-step-result.schema.json",
+  "title": "Test Step Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "stepId", "status", "durationMs"],
+  "properties": {
+    "artifactType": { "const": "test-step-result" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "minLength": 1 },
+    "stepId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
+    "durationMs": { "type": "integer", "minimum": 0 }
+  }
+}

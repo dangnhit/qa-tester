@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/test-data-manifest.schema.json",
+  "title": "Test Data Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactType", "schemaVersion", "producerVersion", "runId", "resources"],
+  "properties": {
+    "artifactType": { "const": "test-data-manifest" },
+    "schemaVersion": { "const": "1.0.0" },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ownerRunId", "cleanupAction"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "ownerRunId": { "type": "string", "minLength": 1 },
+          "cleanupAction": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

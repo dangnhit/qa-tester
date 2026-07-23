@@ -1,0 +1,40 @@
+{
+  "name": "@vigentix/qa-skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "qa-skill": "./dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate:types": "tsx scripts/generate-types.ts",
+    "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "commander": "^14.0.0",
+    "sharp": "^0.34.3",
+    "ulid": "^3.0.1",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@playwright/test": "^1.54.1",
+    "@types/node": "^24.0.15",
+    "eslint": "^9.31.0",
+    "json-schema-to-typescript": "^15.0.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.37.0",
+    "vitest": "^3.2.4"
+  }
+}
