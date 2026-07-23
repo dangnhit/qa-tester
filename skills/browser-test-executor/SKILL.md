@@ -9,13 +9,13 @@ Execution kind: runtime-backed. Read [browser adapters](../shared/references/age
 
 Resolve `./node_modules/.bin/qa-skill` before `qa-skill` on `PATH`. Stop if neither is compatible; never use remote `npx`.
 
-Example — validate completed execution:
+Example — standalone execution:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile execute
+"$QA_SKILL" workflow run --input inputs/execute-workflow.json
 ```
 
-Example — standalone: validate a completed execute profile before recording the attempt outcome.
+Expected outputs are registered `test-result` attempts and evidence or gaps. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
 
 Example — full run: pass registered attempts and runtime evidence to `qa-report-generator` after `--profile full` validates.

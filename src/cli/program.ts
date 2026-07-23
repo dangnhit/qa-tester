@@ -8,6 +8,7 @@ import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
+import { runLocalWorkflow } from "./workflow.js";
 import { isAgentName, isInstallTarget } from "../installer/agents.js";
 import { installSkills } from "../installer/install.js";
 import { uninstallSkills } from "../installer/uninstall.js";
@@ -95,6 +96,9 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     stdout += `${JSON.stringify(result)}\n`;
     if (result.leftovers.length > 0) exitCode = ExitCode.UNMET_OBLIGATIONS;
   });
+  program.command("workflow").command("run")
+    .requiredOption("--input <json>")
+    .action(async (commandOptions: { input: string }) => { stdout += `${JSON.stringify(await runLocalWorkflow({ cwd: options.cwd, inputPath: commandOptions.input }))}\n`; });
   program.command("artifact").command("ingest")
     .requiredOption("--root <path>")
     .requiredOption("--run-id <id>")
@@ -132,7 +136,7 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     if (error instanceof QaSkillsError) {
       stderr += `${error.message}\n`;
       if (error.code === "LIVE_LOCK") exitCode = ExitCode.BLOCKED;
-      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE") exitCode = ExitCode.SAFETY_DENIED;
+      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError) {
       stderr += `${error.message}\n`;

@@ -16,9 +16,9 @@ Example — full run:
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
 "$QA_SKILL" artifact ingest --root qa-results --run-id RUN_ID --type requirement-analysis --file drafts/requirements.json
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile full
+"$QA_SKILL" workflow run --input inputs/full-workflow.json
 ```
 
-Example — standalone planning: use `requirement-analyzer` to draft and ingest only the analysis, then validate the `plan` profile.
+Expected full outputs include registered attempts, evidence or gaps, bug reports, a release gate, and a QA report. Example — standalone planning: use `requirement-analyzer` to draft and ingest only the analysis.
 
 This is one canonical standard `SKILL.md` per skill name for Codex, Claude, and Cursor. Deliberately omit generated `agents/` metadata because it is vendor-specific and would duplicate the portable definition.

@@ -9,11 +9,11 @@ Execution kind: runtime-backed. Read [artifact contracts](../shared/references/a
 
 Resolve `./node_modules/.bin/qa-skill` before `qa-skill` on `PATH`. Stop if unavailable and never use remote `npx`.
 
-Example — verify defect outputs:
+Example — standalone execution outcome:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile full
+"$QA_SKILL" workflow run --input inputs/full-workflow.json
 ```
 
-Example — standalone: validate a completed execution profile before asking the runtime to derive a defect outcome.
+Expected outputs are runtime-owned incidents and `bug-report` artifacts only for qualifying failures. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json` to derive reports.

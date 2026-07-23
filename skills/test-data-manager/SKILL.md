@@ -9,11 +9,11 @@ Execution kind: runtime-backed. Read [safety](../shared/references/safety.md) an
 
 Resolve the local runtime as `./node_modules/.bin/qa-skill`, then `qa-skill` on `PATH`; stop with setup guidance if unavailable. Never use remote `npx`.
 
-Example — verify a data-backed run:
+Example — full data-backed run:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile full
+"$QA_SKILL" workflow run --input inputs/full-workflow.json
 ```
 
-Example — standalone: validate the declared data bindings with the run's required profile before browser execution.
+Expected full outputs include a runtime-owned `test-data-manifest`, attempts, evidence, and report. Example — standalone: declare bindings and ingest planning drafts; do not run setup outside the workflow.

@@ -9,13 +9,13 @@ Execution kind: runtime-backed. Read [safety](../shared/references/safety.md), [
 
 Resolve `./node_modules/.bin/qa-skill`, then `qa-skill` on `PATH`; otherwise stop with setup guidance. Never use remote `npx`.
 
-Example — check evidence completeness:
+Example — standalone evidence capture:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile execute
+"$QA_SKILL" workflow run --input inputs/execute-workflow.json
 ```
 
-Example — standalone: retain one safe registered evidence bundle or evidence gap for an executed attempt.
+Expected outputs are redacted evidence descriptors/binaries or `evidence-gap` artifacts. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.
 
 Example — full run: retain registered evidence or gaps for runtime defect and report generation after validation.

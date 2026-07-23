@@ -9,11 +9,11 @@ Execution kind: runtime-backed. Read [artifact contracts](../shared/references/a
 
 Resolve `./node_modules/.bin/qa-skill`, then `qa-skill` on `PATH`; stop with setup guidance if absent. Never use remote `npx`.
 
-Example — validate report readiness:
+Example — standalone execution report:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" validate --root qa-results --run-id RUN_ID --profile full
+"$QA_SKILL" workflow run --input inputs/full-workflow.json
 ```
 
-Example — standalone: render only from an already validated run; use the full profile when including planning, evidence, defects, and the release gate.
+Expected outputs are a deterministic `release-gate` and `qa-execution-report`. Example — full run: run `"$QA_SKILL" workflow run --input inputs/full-workflow.json`.

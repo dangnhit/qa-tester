@@ -16,6 +16,7 @@ describe("portable QA skill bundle", () => {
       expect(text).toContain("Example");
       expect(text).toMatch(/standalone/i);
       expect(text).toMatch(/full/i);
+      expect(text).toContain("workflow run --input");
     }
     expect(await readdir(resolve(root, "qa-tester"))).not.toContain("agents");
   });
