@@ -7,6 +7,7 @@ import { artifactTypes, type ArtifactType } from "../contracts/types.js";
 import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact-profiles.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
+import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { ExitCode, type ExitCode as ExitCodeValue } from "./exit-codes.js";
 
 export type CliResult = { exitCode: ExitCodeValue; stdout: string; stderr: string };
@@ -60,12 +61,13 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .option("--relationship <id>", "Related artifact ID", (value, previous: string[]) => [...previous, value], [])
     .action(async (commandOptions: { root: string; runId: string; type: string; file: string; relationship: string[] }) => {
       if (!isArtifactType(commandOptions.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
-      const workspace = await RunWorkspace.open(commandOptions.root, commandOptions.runId);
-      try {
-        await workspace.registerArtifact({ type: commandOptions.type, sourcePath: commandOptions.file, relationships: commandOptions.relationship, provenance: "agent-draft" });
-      } finally {
-        await workspace.close();
-      }
+      await ingestArtifact({
+        root: commandOptions.root,
+        runId: commandOptions.runId,
+        type: commandOptions.type,
+        sourcePath: commandOptions.file,
+        relationships: commandOptions.relationship,
+      });
     });
   program.command("validate")
     .requiredOption("--root <path>")

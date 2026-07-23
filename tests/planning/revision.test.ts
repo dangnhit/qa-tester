@@ -30,4 +30,10 @@ describe("createTestCaseRevision", () => {
     expect(revision.testCaseId).toBe(candidate.testCaseId);
     expect(revision.revisionId).not.toBe(createTestCaseRevision(candidate).revisionId);
   });
+
+  it("orders canonical object keys by Unicode code unit rather than runtime locale", () => {
+    const revision = createTestCaseRevision({ ...candidate, metadata: { ä: "umlaut", z: "zed" } });
+
+    expect(revision.metadata).toEqual({ z: "zed", ä: "umlaut" });
+  });
 });

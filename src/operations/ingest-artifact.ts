@@ -3,8 +3,18 @@ import type { ArtifactType } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
+import { ingestRequirementAnalysis } from "./ingest-requirement-analysis.js";
+import { ingestTestCases } from "./ingest-testcases.js";
 
 export async function ingestArtifact(options: { root: string; runId: string; type: ArtifactType; sourcePath: string; relationships?: string[] }): Promise<void> {
+  if (options.type === "requirement-analysis") {
+    await ingestRequirementAnalysis(options);
+    return;
+  }
+  if (options.type === "test-plan") {
+    await ingestTestCases(options);
+    return;
+  }
   const source = await readFile(options.sourcePath, "utf8");
   const format = options.sourcePath.endsWith(".yaml") || options.sourcePath.endsWith(".yml") ? "yaml" : "json";
   const draft = parseAuthoringDocument(source, format);

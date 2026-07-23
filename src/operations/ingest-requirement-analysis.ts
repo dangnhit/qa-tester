@@ -4,6 +4,7 @@ import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { validateArtifact } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord } from "../core/run-workspace.js";
+import { assertRequirementAuthorities } from "../planning/authority.js";
 
 export type IngestRequirementAnalysisOptions = {
   root: string;
@@ -29,11 +30,16 @@ export async function ingestRequirementAnalysis(
   if (!validateArtifact("requirement-analysis", draft).valid) {
     throw new QaSkillsError("Requirement Analysis Agent Draft does not satisfy the artifact contract or authority rules", "INVALID_ARTIFACT");
   }
+  try {
+    assertRequirementAuthorities(draft);
+  } catch (error: unknown) {
+    throw new QaSkillsError(error instanceof Error ? error.message : "Requirement authority verification failed", "INVALID_ARTIFACT");
+  }
   const workspace = await RunWorkspace.open(options.root, options.runId);
   try {
-    return await workspace.registerArtifact({
+    return await workspace.registerArtifactValue({
       type: "requirement-analysis",
-      sourcePath: options.sourcePath,
+      value: draft,
       relationships: options.relationships ?? [],
       provenance: "agent-draft",
     });

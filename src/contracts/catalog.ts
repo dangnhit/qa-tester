@@ -6,6 +6,7 @@ import environmentProfileSchema from "../../shared/schemas/environment-profile.s
 import evidenceGapSchema from "../../shared/schemas/evidence-gap.schema.json" with { type: "json" };
 import evidenceSchema from "../../shared/schemas/evidence.schema.json" with { type: "json" };
 import qaExecutionReportSchema from "../../shared/schemas/qa-execution-report.schema.json" with { type: "json" };
+import planningActionSchema from "../../shared/schemas/planning-action.schema.json" with { type: "json" };
 import coverageObligationSchema from "../../shared/schemas/coverage-obligation.schema.json" with { type: "json" };
 import requirementAnalysisSchema from "../../shared/schemas/requirement-analysis.schema.json" with { type: "json" };
 import runMetadataSchema from "../../shared/schemas/run-metadata.schema.json" with { type: "json" };
@@ -41,6 +42,9 @@ const Ajv2020 = (require("ajv/dist/2020.js") as { default: typeof Ajv2020Instanc
 const addFormats = (require("ajv-formats") as { default: FormatsPlugin }).default;
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
+ajv.addSchema(planningActionSchema);
+
+export const planningActionValidator = ajv.getSchema(planningActionSchema.$id) as ValidateFunction;
 
 export const artifactValidators: Readonly<Record<ArtifactType, ValidateFunction>> = Object.fromEntries(
   Object.entries(schemas).map(([type, schema]) => [type, ajv.compile(schema)]),

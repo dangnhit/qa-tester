@@ -61,6 +61,30 @@ describe("CLI core", () => {
     expect(JSON.parse(unmet.stdout)).toMatchObject({ valid: false });
   });
 
+  it("routes governed planning artifacts through authority validation instead of low-level registration", async () => {
+    const directory = await root();
+    const environmentProfile = {
+      artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "env-test", name: "Test", classification: "test", baseUrl: "https://test.example.test", productionReadOnly: false,
+    } as const;
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    await workspace.close();
+    const sourcePath = join(directory, "code-as-authoritative.json");
+    await writeFile(sourcePath, JSON.stringify({
+      artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-1",
+      statements: [{
+        requirementId: "REQ-1", sourceProvenance: { kind: "code", reference: "controller.ts" }, normalizedText: "The current controller redirects.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [],
+      }],
+    }));
+
+    const result = await runCli([
+      "artifact", "ingest", "--root", directory, "--run-id", workspace.runId,
+      "--type", "requirement-analysis", "--file", sourcePath,
+    ], { cwd: directory });
+
+    expect(result.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(result.stderr).toMatch(/authority.*provenance|provenance.*authority/i);
+  });
+
   it("maps live locks, invalid input, and unexpected internal failures to their actual exit codes", async () => {
     const directory = await root();
     const environmentProfile = {

@@ -7,8 +7,8 @@ const safeCandidate = {
   dslValid: true,
   openQuestions: [],
   steps: [
-    { id: "open", sideEffect: "none" },
-    { id: "seed", sideEffect: "reversible", cleanup: { declared: true } },
+    { id: "open", action: { kind: "navigate", url: "/login" }, sideEffect: "none" },
+    { id: "seed", action: { kind: "fill", locator: { testId: "email" }, value: "qa@example.test" }, sideEffect: "reversible", cleanup: { declared: true } },
   ],
 };
 
@@ -39,5 +39,15 @@ describe("evaluateApproval", () => {
       "open-questions",
       "unsafe-side-effect",
     ]));
+  });
+
+  it("validates bounded actions rather than trusting a draft dslValid assertion", () => {
+    const decision = evaluateApproval({
+      ...safeCandidate,
+      dslValid: true,
+      steps: [{ id: "script", action: { kind: "evaluate", script: "document.cookie" }, sideEffect: "none" }],
+    }, safePolicy, { classification: "test" });
+
+    expect(decision).toMatchObject({ approved: false, reasons: expect.arrayContaining(["invalid-dsl"]) });
   });
 });

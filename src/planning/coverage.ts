@@ -1,5 +1,3 @@
-import type { RequirementAuthority } from "./authority.js";
-
 export type CoverageObligation = {
   obligationId: string;
   requirementId: string;
@@ -7,7 +5,7 @@ export type CoverageObligation = {
   behavior: string;
   browser: string;
   viewport: { width: number; height: number };
-  accessibilityMethod?: string;
+  accessibilityMethod?: string | undefined;
   risk: string;
   required: boolean;
   outcome: string;
@@ -16,10 +14,19 @@ export type CoverageObligation = {
 export type CoverageAttempt = {
   attemptId: string;
   status: string;
-  authority?: RequirementAuthority;
-  expectedResultAuthority?: RequirementAuthority;
-  requirementAuthority?: RequirementAuthority;
+  authority?: string;
+  expectedResultAuthority?: string;
+  requirementAuthority?: string;
+  authorityProvenance?: string;
   obligationIds: readonly string[];
+  requirementId: string;
+  role: string;
+  behavior: string;
+  browser: string;
+  viewport: { width: number; height: number };
+  accessibilityMethod?: string | undefined;
+  risk: string;
+  outcome: string;
 };
 
 export type CoverageEvaluation = {
@@ -29,8 +36,20 @@ export type CoverageEvaluation = {
   qualifyingAttemptIds: string[];
 };
 
-function attemptAuthority(attempt: CoverageAttempt): RequirementAuthority | undefined {
+function attemptAuthority(attempt: CoverageAttempt): string | undefined {
   return attempt.authority ?? attempt.expectedResultAuthority ?? attempt.requirementAuthority;
+}
+
+function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
+  return attempt.requirementId === obligation.requirementId
+    && attempt.role === obligation.role
+    && attempt.behavior === obligation.behavior
+    && attempt.browser === obligation.browser
+    && attempt.viewport.width === obligation.viewport.width
+    && attempt.viewport.height === obligation.viewport.height
+    && attempt.accessibilityMethod === obligation.accessibilityMethod
+    && attempt.risk === obligation.risk
+    && attempt.outcome === obligation.outcome;
 }
 
 export function evaluateCoverage(
@@ -41,8 +60,15 @@ export function evaluateCoverage(
   const qualifyingAttemptIds = new Set<string>();
   const obligationIds = new Set(obligations.map((obligation) => obligation.obligationId));
   for (const attempt of attempts) {
-    if (attempt.status !== "PASSED" || attemptAuthority(attempt) !== "AUTHORITATIVE") continue;
-    const addressed = attempt.obligationIds.filter((id) => obligationIds.has(id));
+    if (
+      attempt.status !== "PASSED"
+      || attemptAuthority(attempt) !== "AUTHORITATIVE"
+      || attempt.authorityProvenance !== "registered-requirement-analysis"
+    ) continue;
+    const addressed = attempt.obligationIds.filter((id) => {
+      const obligation = obligations.find((candidate) => candidate.obligationId === id);
+      return obligationIds.has(id) && obligation !== undefined && matchesObligation(attempt, obligation);
+    });
     if (addressed.length === 0) continue;
     addressed.forEach((id) => satisfied.add(id));
     qualifyingAttemptIds.add(attempt.attemptId);

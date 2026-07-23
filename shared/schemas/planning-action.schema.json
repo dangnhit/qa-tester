@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigentix.dev/qa-skills/schemas/planning-action.schema.json",
+  "title": "Bounded Planning Action",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": { "const": "navigate" },
+        "url": { "type": "string", "minLength": 1 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator"],
+      "properties": {
+        "kind": { "const": "click" },
+        "locator": { "$ref": "#/$defs/locator" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator", "value"],
+      "properties": {
+        "kind": { "const": "fill" },
+        "locator": { "$ref": "#/$defs/locator" },
+        "value": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator", "text"],
+      "properties": {
+        "kind": { "const": "assert-text" },
+        "locator": { "$ref": "#/$defs/locator" },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    }
+  ],
+  "$defs": {
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role"],
+          "properties": {
+            "role": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["testId"],
+          "properties": { "testId": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label"],
+          "properties": { "label": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    }
+  }
+}
