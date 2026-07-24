@@ -69,6 +69,11 @@ Reviewed HEAD: `024872e`
    swapping complete provenance strings between target records is accepted. Bind each
    target one-to-one to its exact source type, artifact ID/checksum provenance,
    transformed canonical value/checksum, and rebuilt relationships/dependencies.
+5. Checkpointed resume validates only the checkpoint’s imported artifact IDs, so an
+   additional workspace artifact can reuse canonical import provenance without detection.
+   Require the complete workspace provenance-import ID/mapping set to equal the checkpoint
+   mapping exactly, rejecting extras, omissions, duplicates, provenance reuse, and
+   mismatched targets.
 
 ### Minor
 

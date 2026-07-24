@@ -288,6 +288,36 @@ describe("public runtime QA Tester", () => {
     ]);
   });
 
+  it("rejects an extra workspace import provenance outside the checkpoint mapping before any adapter resumes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-checkpoint-extra-import-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const registry = { browserManagers: { chromium: { browser } }, testDataRegistries: { trusted: new TestDataHookRegistry([], {}) }, evidencePolicies: { required: { safety: { screenshot: "required" as const } } } };
+    const interrupted = createQaTesterWithTraceForTests(registry, (event) => {
+      if (event === "ingest-testcases:adapter") throw new Error("simulated interruption after first operation checkpoint");
+    });
+    await expect(interrupted({ root, mode: "full", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } }))
+      .rejects.toThrow(/simulated interruption/i);
+    const runId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
+    const workspace = await RunWorkspace.open(root, runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const imported = artifacts.find((artifact) => artifact.record.type === "requirement-analysis" && artifact.record.provenance.startsWith(`runtime-import:${bundle.sourceRunId}:`));
+    const checkpoint = artifacts.find((artifact) => artifact.record.type === "workflow-checkpoint");
+    if (!imported || !checkpoint) throw new Error("Expected imported requirement and one-operation checkpoint");
+    await workspace.close();
+    const manifestPath = join(root, "qa-results", runId, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; provenance: string }[] };
+    const checkpointRecord = manifest.artifacts.find((artifact) => artifact.id === checkpoint.record.id);
+    if (!checkpointRecord) throw new Error("Expected checkpoint manifest record");
+    checkpointRecord.provenance = imported.record.provenance;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const resumedTrace: string[] = [];
+    const resumed = createQaTesterWithTraceForTests(registry, (event) => resumedTrace.push(event));
+
+    await expect(resumed({ root, mode: "full", resumeRunId: runId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } }))
+      .rejects.toThrow(/checkpoint|workspace.*provenance|exact.*mapping/i);
+    expect(resumedTrace).toEqual([]);
+  });
+
   it("derives protected screenshot redaction from the registered environment and records a gap instead of pixels when it cannot verify it", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-protected-")); roots.push(root);
     const bundle = await sourceBundle(root);
@@ -507,7 +537,7 @@ describe("public runtime QA Tester", () => {
       await tamperedWorkspace.close();
       await expect(RunWorkspace.open(root, tampered.runId)).rejects.toThrow(/retest|source|scenario|binding/i);
     }
-  });
+  }, 15_000);
 
   it("enforces exploratory URL scope, side-effect safety, declared budgets, and stop conditions through the public Chromium adapter", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-exploration-contract-")); roots.push(root);

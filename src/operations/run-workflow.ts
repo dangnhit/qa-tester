@@ -867,6 +867,14 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
     }
   } else {
     const imported = all.filter((artifact) => state.importedArtifactIds.includes(artifact.record.id));
+    const checkpointImportIds = new Set(state.importedArtifactIds);
+    const workspaceImportIds = new Set(provenanceImports.map((artifact) => artifact.record.id));
+    if (checkpointImportIds.size !== state.importedArtifactIds.length || workspaceImportIds.size !== provenanceImports.length
+      || checkpointImportIds.size !== workspaceImportIds.size
+      || [...checkpointImportIds].some((id) => !workspaceImportIds.has(id))
+      || [...workspaceImportIds].some((id) => !checkpointImportIds.has(id))) {
+      throw new QaSkillsError("Workflow checkpoint imported artifact IDs do not exactly match the complete workspace provenance import mapping", "ARTIFACT_BINDING");
+    }
     if (imported.length !== expected.size || imported.some((artifact) => !expected.has(artifact.record.provenance))
       || [...expected].some((provenance) => !imported.some((artifact) => artifact.record.provenance === provenance))) {
       throw new QaSkillsError("Workflow checkpoint canonical bundle mapping is incomplete or does not match the exact source artifacts", "ARTIFACT_BINDING");

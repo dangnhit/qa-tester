@@ -35,9 +35,10 @@ Decision: `READY_FOR_REVIEW`
 - Every portable skill contains POSIX and PowerShell examples.
 - Follow-up crash recovery adopts only a complete one-to-one mapping. Each imported
   target must match its exact source artifact type, ID/checksum provenance, transformed
-  canonical value/checksum, and rebuilt references/relationships. Partial, duplicated,
-  mismatched, same-type-swapped, cross-type-swapped, and checkpoint-tampered imports
-  fail closed.
+  canonical value/checksum, and rebuilt references/relationships. Checkpoint resume also
+  requires the complete workspace provenance-import ID set to equal its imported-artifact
+  mapping. Partial, extra, duplicated, mismatched, same-type-swapped, cross-type-swapped,
+  provenance-reused, and checkpoint-tampered imports fail closed.
 - Skill Installation manifests bind the runtime command, real path, resolution source,
   version, and executable checksum. Verification reports typed `runtime-missing`,
   `runtime-changed`, and `runtime-incompatible` states.
@@ -61,12 +62,19 @@ Decision: `READY_FOR_REVIEW`
   failed 2/2 because both same-type and cross-type swaps completed instead of rejecting.
 - GREEN for the focused mapping seam: 3/3 passed, covering both swap rejections while
   exact complete post-import crash adoption still resumes successfully.
+- RED for complete checkpoint provenance coverage:
+  `npx vitest run tests/orchestration/runtime-public.e2e.test.ts -t "extra workspace import provenance"`
+  failed because resume completed instead of rejecting the injected extra provenance.
+- GREEN for the focused resume/crash seam: 5/5 passed, covering exact checkpoint resume,
+  exact crash adoption, same-type/cross-type swap rejection, and rejection of the extra
+  workspace provenance before adapter execution.
 
 ## Focused verification
 
-- Runtime public workflow: 19/19 passed, including exact post-import crash adoption,
-  same-type/cross-type provenance-swap rejection, partial/mismatched import rejection,
-  resume, required-video readiness, and checkpoint tamper rejection.
+- Runtime public workflow: 20/20 passed, including exact checkpoint resume, exact
+  post-import crash adoption, same-type/cross-type provenance-swap rejection, complete
+  workspace/checkpoint provenance-set equality, partial/mismatched import rejection,
+  required-video readiness, and checkpoint tamper rejection.
 - Runtime Binding lifecycle: 8/8 passed; the packed installed CLI clean-removal
   reproduction also passed 1/1 with typed `runtime-missing` output.
 - CLI core and portable Skill Bundle: 11/11 passed, including unlocked nonterminal run
@@ -97,7 +105,7 @@ npm run smoke:package
 
 Results:
 
-- Full suite: 54 files, 329 tests passed.
+- Full suite: 54 files, 330 tests passed.
 - Demo: intentional desktop/mobile product defects, schema-valid
   `COMPLETED_WITH_FAILURES`, deterministic `NOT_READY`, valid Full Artifact
   Profile, and successful cleanup.
