@@ -8,6 +8,7 @@ import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
+import { navigationPolicyFromProfile, type LaneSafetyContext } from "../safety/navigation.js";
 import { authorizeStep } from "../safety/side-effects.js";
 
 const reservedAttemptIds = new Set<string>();
@@ -79,7 +80,7 @@ function permitTarget(step: BrowserTestStep): string {
   return step.action.kind === "open" && typeof step.action.url === "string" ? step.action.url : JSON.stringify(step.action);
 }
 
-async function executeCanonical(input: InternalExecuteTestInput & { persistAttempt?: (attempt: TestAttempt) => Promise<void> }): Promise<TestAttempt> {
+async function executeCanonical(input: InternalExecuteTestInput & { safety: LaneSafetyContext; persistAttempt?: (attempt: TestAttempt) => Promise<void> }): Promise<TestAttempt> {
   const started = Date.now();
   const session = await createBrowserAttemptSession(input.browser, input.testCase);
   const contextId = `${input.attemptId}:context`;
@@ -102,7 +103,7 @@ async function executeCanonical(input: InternalExecuteTestInput & { persistAttem
         const decision = await input.authorizeStep(step);
         if (!decision.allowed) { steps.push(blockedStep(step, decision.reasons)); priorFailed = true; continue; }
       }
-      const result = await executeBrowserStep(session.page, step, session.telemetry, resolveSecret);
+      const result = await executeBrowserStep(session.page, step, session.telemetry, resolveSecret, input.safety);
       steps.push(result);
       if (result.status === "FAILED") priorFailed = true;
     }
@@ -136,7 +137,10 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
-    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), ...(input.environment === undefined ? {} : { authorizeStep: async (step) => authorizeStep({ sideEffect: step.sideEffect, action: step.action.kind, channel: "browser", target: permitTarget(step) }, input.environment!, input.externalPermitRegistry ?? []) }), persistAttempt: async (attempt) => {
+    // Lane-1 safety context: derive the navigation policy from the registered
+    // environment profile, failing closed if it is missing/malformed.
+    const safety: LaneSafetyContext = { navigation: navigationPolicyFromProfile(artifacts.find((artifact) => artifact.record.type === "environment-profile")?.value) };
+    const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, safety, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), ...(input.environment === undefined ? {} : { authorizeStep: async (step) => authorizeStep({ sideEffect: step.sideEffect, action: step.action.kind, channel: "browser", target: permitTarget(step) }, input.environment!, input.externalPermitRegistry ?? []) }), persistAttempt: async (attempt) => {
       await input.workspace.registerArtifactValue({
         type: "test-result",
         value: {

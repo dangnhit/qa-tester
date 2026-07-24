@@ -23,7 +23,7 @@ let closeServer: () => Promise<void>;
 
 const environment = {
   artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0",
-  environmentProfileId: "env-browser", name: "Browser fixture", classification: "test", baseUrl: "http://fixture.invalid", productionReadOnly: false,
+  environmentProfileId: "env-browser", name: "Browser fixture", classification: "test", baseUrl: "http://127.0.0.1", productionReadOnly: false,
 } as const;
 
 beforeAll(async () => {

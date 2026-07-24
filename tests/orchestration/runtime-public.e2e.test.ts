@@ -15,7 +15,7 @@ import { serveBrowserFixture } from "../../fixtures/browser/server.js";
 import { sha256Text } from "../../src/core/checksum.js";
 
 const roots: string[] = [];
-const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-RUNTIME", name: "Runtime fixture", classification: "test", baseUrl: "http://fixture.invalid", productionReadOnly: false } as const;
+const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-RUNTIME", name: "Runtime fixture", classification: "test", baseUrl: "http://127.0.0.1", productionReadOnly: false } as const;
 const fixture = join(fileURLToPath(new URL(".", import.meta.url)), "../../fixtures/browser/basic.html");
 let browser: Browser;
 let baseUrl: string;

@@ -1,12 +1,21 @@
 import type { Page } from "@playwright/test";
 
+import { QaSkillsError } from "../../core/errors.js";
+import { assertNavigable, type LaneSafetyContext } from "../../safety/navigation.js";
 import { assertBrowserAssertion, resolveValue } from "../assertions.js";
 import { resolveLocator } from "../locator.js";
 import type { BrowserAction, BrowserStepResult, BrowserTelemetry, BrowserTestStep, SecretResolver } from "../types.js";
 
-export async function executeAction(page: Page, action: BrowserAction, resolver?: SecretResolver): Promise<void> {
+export async function executeAction(page: Page, action: BrowserAction, resolver?: SecretResolver, safety?: LaneSafetyContext): Promise<void> {
   switch (action.kind) {
-    case "open": await page.goto(await resolveValue(action.url, resolver)); return;
+    case "open": {
+      const resolvedUrl = await resolveValue(action.url, resolver);
+      // Fail closed: the DSL `open` step must never navigate without a lane-1 safety context.
+      if (safety === undefined) throw new QaSkillsError("Navigation refused: no lane-1 safety context was supplied for the open step", "UNSAFE_NAVIGATION");
+      await assertNavigable(resolvedUrl, safety.navigation);
+      await page.goto(resolvedUrl);
+      return;
+    }
     case "click": await resolveLocator(page, action.locator).click(); return;
     case "fill": await resolveLocator(page, action.locator).fill(await resolveValue(action.value, resolver)); return;
     case "select": await resolveLocator(page, action.locator).selectOption(await resolveValue(action.value, resolver)); return;
@@ -28,11 +37,12 @@ export async function executeBrowserStep(
   step: BrowserTestStep,
   telemetry: BrowserTelemetry,
   resolver?: SecretResolver,
+  safety?: LaneSafetyContext,
 ): Promise<BrowserStepResult> {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
   try {
-    await executeAction(page, step.action, resolver);
+    await executeAction(page, step.action, resolver, safety);
   } catch (error) {
     const finished = Date.now();
     return { stepId: step.id, status: "FAILED", startedAt, finishedAt: new Date(finished).toISOString(), durationMs: finished - started, action: step.action, assertions: step.assertions ?? [], error: error instanceof Error ? error.message : String(error), failureOrigin: "action" };
