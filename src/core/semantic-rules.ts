@@ -1,9 +1,10 @@
 import type { ArtifactType } from "../contracts/types.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
+import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import type { ArtifactRecord } from "./artifact-record.js";
 import type { ArtifactProfileName } from "./artifact-profiles.js";
-import { isRecord } from "./values.js";
+import { array, canonicalJson, isRecord, uniqueResourceIds } from "./values.js";
 
 /**
  * Shared semantic-rule abstraction (Phase 2a). One `Record<ArtifactType, SemanticRule>` is consumed
@@ -192,10 +193,278 @@ const testPlanRule: SemanticRule = {
   },
 };
 
-/** The shared table. Only the three overlapping planning types are migrated in Task 14; every other
- *  type stays on its legacy write branch / read inline-chain branch (the adapters fall through). */
+/** Rule: `test-result` — carries per-path drift (both message AND logic). WRITE splits the check into
+ *  four distinct messages and adds a write-only attempt-uniqueness check plus a strict relationship
+ *  binding on the matched case; READ folds the ordered-steps + aggregate-status checks into one message
+ *  and drops the relationship binding (the attempt-uniqueness check is the read path's SEPARATE
+ *  AMBIGUOUS_ATTEMPT loop, which is left in `inspectWorkspaceState` and is NOT part of this rule).
+ *  Faithful to write `assertSemanticReferences` test-result branch and read `inspectWorkspaceState`
+ *  inline test-result branch. */
+const testResultRule: SemanticRule = {
+  type: "test-result",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const matches = ctx.relatedOfType("test-case").filter((candidate) =>
+      candidate.value?.testCaseId === value.testCaseId
+      && candidate.value?.revisionId === value.testCaseRevisionId
+      && candidate.value?.instanceId === value.testCaseInstanceId);
+    const testCase = matches.length === 1 ? matches[0] : undefined;
+    if (ctx.stage === "write") {
+      if (!testCase || ctx.relationships.filter((id) => id === testCase.record.id).length !== 1
+        || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-case") !== undefined).length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Test result references an unregistered or ambiguous test case revision and instance" };
+      }
+    } else if (!testCase) {
+      return { code: "ARTIFACT_BINDING", message: "Test result must reference exactly one registered test case revision and instance" };
+    }
+    const matchedCase = matches[0]!;
+    const plan = ctx.relatedOfType("test-plan").find((candidate) => matchedCase.record.relationships.includes(candidate.record.id));
+    const planCases = array(plan?.value?.testCases);
+    const planCase = planCases.find((candidate) => isRecord(candidate) && candidate.testCaseId === value.testCaseId);
+    const execution = isRecord(planCase) && isRecord(planCase.browserExecution) ? planCase.browserExecution : undefined;
+    const browserDsl = execution && isRecord(execution.browserDsl) ? execution.browserDsl : undefined;
+    const canonicalSteps = Array.isArray(browserDsl?.steps) ? browserDsl.steps : (Array.isArray(matchedCase.value?.steps) ? matchedCase.value.steps : []);
+    const resultSteps = Array.isArray(value.steps) ? value.steps : [];
+    const canonicalIds = canonicalSteps.map((step) => isRecord(step) ? step.id : undefined);
+    const resultIds = resultSteps.map((step) => isRecord(step) ? step.stepId : undefined);
+    const precedence = ["BLOCKED", "INCONCLUSIVE", "FAILED", "NOT_RUN", "PASSED"];
+    const aggregate = precedence.find((status) => resultSteps.some((step) => isRecord(step) && step.status === status)) ?? "NOT_RUN";
+    const stepsMismatch = canonicalIds.length !== resultIds.length || canonicalIds.some((id, index) => id !== resultIds[index]);
+    if (ctx.stage === "write") {
+      if (stepsMismatch) {
+        return { code: "ARTIFACT_BINDING", message: "Test result must contain the exact ordered canonical test case steps" };
+      }
+      if (value.status !== aggregate) {
+        return { code: "ARTIFACT_BINDING", message: "Test result aggregate status is not derived from its step results" };
+      }
+      if ((value.status === "PASSED") !== (value.failureClassification === "NONE")) {
+        return { code: "ARTIFACT_BINDING", message: "Test result failure classification is incoherent with aggregate status" };
+      }
+      if (ctx.relatedOfType("test-result").some((candidate) => candidate.value?.attemptId === value.attemptId)) {
+        return { code: "ARTIFACT_BINDING", message: "Test result attempt ID is already registered and would be ambiguous" };
+      }
+    } else {
+      if (stepsMismatch || aggregate !== value.status) {
+        return { code: "ARTIFACT_BINDING", message: "Test result must be derived from the exact ordered canonical steps and aggregate status" };
+      }
+      if ((value.status === "PASSED") !== (value.failureClassification === "NONE")) {
+        return { code: "ARTIFACT_BINDING", message: "Test result failure classification is incoherent with aggregate status" };
+      }
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `approval-decision` — carries logic drift. WRITE additionally requires the bound plan to be a
+ *  pending human-review plan (`approvalPolicy.mode === "human-review"` + `approvalDecision.approved ===
+ *  false`) and additionally requires exactly one test-plan relationship; READ has neither extra check
+ *  and resolves the plan from the cascade-sensitive valid pool. Faithful to write
+ *  `assertSemanticReferences` approval-decision branch and read inline approval-decision branch. */
+const approvalDecisionRule: SemanticRule = {
+  type: "approval-decision",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    if (ctx.stage === "write") {
+      const plan = ctx.registeredRecord(typeof value.planArtifactId === "string" ? value.planArtifactId : "", "test-plan");
+      if (!plan || plan.sha256 !== value.planSha256 || ctx.relationships.filter((id) => id === plan.id).length !== 1
+        || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-plan") !== undefined).length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Human approval must bind one exact immutable test plan" };
+      }
+      const planValue = ctx.relatedOfType("test-plan").find((candidate) => candidate.record.id === plan.id)?.value;
+      if (!isRecord(planValue?.approvalPolicy) || planValue.approvalPolicy.mode !== "human-review"
+        || !isRecord(planValue.approvalDecision) || planValue.approvalDecision.approved !== false) {
+        return { code: "ARTIFACT_BINDING", message: "Human approval requires a pending human-review test plan" };
+      }
+    } else {
+      const plans = ctx.relatedOfType("test-plan").filter((candidate) => candidate.record.id === value.planArtifactId && candidate.record.sha256 === value.planSha256);
+      if (plans.length !== 1 || ctx.relationships.filter((id) => id === plans[0]?.record.id).length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Human approval must bind one exact immutable test plan" };
+      }
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `test-step-result` — message drift only. WRITE splits into two messages (unregistered/ambiguous
+ *  attempt, then unregistered step); READ folds both into one combined message. Shared identity/step
+ *  logic. Faithful to write `assertSemanticReferences` test-step-result branch and read inline branch. */
+const testStepResultRule: SemanticRule = {
+  type: "test-step-result",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const matchingAttempts = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    const result = matchingAttempts.length === 1 ? matchingAttempts[0]?.value : undefined;
+    const matchingCases = result
+      ? ctx.relatedOfType("test-case").filter((candidate) =>
+        candidate.value?.testCaseId === result.testCaseId
+        && candidate.value?.revisionId === result.testCaseRevisionId)
+      : [];
+    const steps = matchingCases.length === 1 ? matchingCases[0]?.value?.steps : undefined;
+    if (ctx.stage === "write") {
+      if (matchingAttempts.length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Test step result references an unregistered or ambiguous attempt" };
+      }
+      if (!Array.isArray(steps) || !steps.some((step) => isRecord(step) && step.id === value.stepId)) {
+        return { code: "ARTIFACT_BINDING", message: "Test step result references an unregistered step" };
+      }
+    } else if (
+      matchingAttempts.length !== 1
+      || matchingCases.length !== 1
+      || !Array.isArray(steps)
+      || !steps.some((step) => isRecord(step) && step.id === value.stepId)
+    ) {
+      return { code: "ARTIFACT_BINDING", message: "Test step result must reference one registered attempt and test case step" };
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `incident` — message drift only. WRITE splits into two messages (kind derivation, then
+ *  evidence/gap presence); READ folds both into one combined message. Shared attempt/kind/evidence
+ *  logic. Faithful to write `assertSemanticReferences` incident branch and read inline incident branch. */
+const incidentRule: SemanticRule = {
+  type: "incident",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const attempt = ctx.relatedOfType("test-result").find((candidate) => candidate.value?.attemptId === value.attemptId)?.value;
+    const expectedKind = attempt?.failureClassification === "TEST_DEFECT" ? "TEST_INCIDENT"
+      : attempt?.failureClassification === "ENVIRONMENT_DEFECT" ? "ENVIRONMENT_INCIDENT"
+        : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
+    const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => ctx.relatedOfType("evidence").some((candidate) => candidate.value?.evidenceId === id && candidate.value?.attemptId === value.attemptId && candidate.value?.runId === ctx.runId));
+    const validGap = Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0 && value.evidenceGapIds.every((id) => ctx.relatedOfType("evidence-gap").some((candidate) => candidate.value?.evidenceGapId === id && candidate.value?.attemptId === value.attemptId && candidate.value?.runId === ctx.runId));
+    if (ctx.stage === "write") {
+      if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind) {
+        return { code: "ARTIFACT_BINDING", message: "Incident kind must derive from a registered non-product attempt" };
+      }
+      if (!validEvidence && !validGap) {
+        return { code: "ARTIFACT_BINDING", message: "Incident requires registered evidence or an evidence gap for its exact attempt" };
+      }
+    } else if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind || (!validEvidence && !validGap)) {
+      return { code: "ARTIFACT_BINDING", message: "Incident must bind its exact non-product attempt to registered evidence or an evidence gap" };
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `release-gate` — message drift only; the write/read POPULATION difference (cascade) is carried
+ *  by `ctx.related()` (WRITE = on-disk registered set, always valid; READ = cascade-sensitive valid
+ *  pool). Both stages recompute the gate over all non-gate/non-report artifacts and compare it to the
+ *  persisted snapshot. Faithful to write `assertSemanticReferences` release-gate branch and read inline
+ *  release-gate branch. */
+const releaseGateRule: SemanticRule = {
+  type: "release-gate",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const derived = deriveReleaseGateFromWorkspaceArtifacts(ctx.related()
+      .filter((candidate) => candidate.record.type !== "release-gate" && candidate.record.type !== "qa-execution-report" && candidate.value !== undefined)
+      .map((candidate) => ({ record: { id: candidate.record.id, sha256: candidate.record.sha256, type: candidate.record.type, provenance: candidate.record.provenance }, value: candidate.value as Record<string, unknown> })));
+    if (value.runId !== ctx.runId
+      || JSON.stringify(value.sourceArtifacts) !== JSON.stringify(derived.sourceArtifacts)
+      || JSON.stringify(value.ruleInputs) !== JSON.stringify(derived.ruleInputs)
+      || JSON.stringify(value.verdicts) !== JSON.stringify(derived.verdicts)
+      || value.recommendation !== derived.recommendation) {
+      return {
+        code: "ARTIFACT_BINDING",
+        message: ctx.stage === "write" ? "Release gate must equal the complete workspace-derived fact snapshot" : "Release gate is not derived from the complete manifest facts",
+      };
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `qa-execution-report` — carries message AND logic drift. WRITE additionally requires the
+ *  report's top-level `releaseRecommendation` to equal its own embedded `releaseGate.recommendation`;
+ *  READ omits that clause. Both embed the single registered release gate. Faithful to write
+ *  `assertSemanticReferences` qa-execution-report branch and read inline qa-execution-report branch. */
+const qaExecutionReportRule: SemanticRule = {
+  type: "qa-execution-report",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const gates = ctx.relatedOfType("release-gate");
+    if (ctx.stage === "write") {
+      const gate = gates[0]?.value;
+      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
+      if (gates.length !== 1 || !isRecord(value.releaseGate) || value.releaseRecommendation !== value.releaseGate.recommendation
+        || gate?.recommendation !== value.releaseRecommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
+        return { code: "ARTIFACT_BINDING", message: "QA report must reference the single registered deterministic release gate" };
+      }
+    } else {
+      const gate = gates.length === 1 ? gates[0]?.value : undefined;
+      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
+      if (!gate || !isRecord(value.releaseGate) || value.releaseRecommendation !== gate.recommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
+        return { code: "ARTIFACT_BINDING", message: "QA report must embed the complete registered release gate" };
+      }
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `test-data-manifest` — no drift; the write and read checks and messages are identical (unique
+ *  resource ids, every `ownerRunId === ctx.runId`). No `ctx.stage` branch. Faithful to write
+ *  `assertSemanticReferences` test-data-manifest branch and read inline test-data-manifest branch. */
+const testDataManifestRule: SemanticRule = {
+  type: "test-data-manifest",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const resources = ctx.value.resources;
+    if (!uniqueResourceIds(resources) || !resources.every((resource) => resource.ownerRunId === ctx.runId)) {
+      return { code: "ARTIFACT_BINDING", message: "Test data resource owner run does not match this workspace" };
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `exploration-charter` — carries message AND logic drift. WRITE checks that NO charter is
+ *  already registered (`relatedOfType("exploration-charter").length > 0`, since the new charter is not
+ *  yet in the pool); READ checks that EXACTLY ONE valid charter exists (the persisted one is in the
+ *  pool). Both require the sole environment-profile relationship. Faithful to write
+ *  `assertSemanticReferences` exploration-charter branch and read inline exploration-charter branch. */
+const explorationCharterRule: SemanticRule = {
+  type: "exploration-charter",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const environment = ctx.relatedOfType("environment-profile")[0];
+    if (ctx.stage === "write") {
+      if (value.runId !== ctx.runId || ctx.relatedOfType("exploration-charter").length > 0 || !environment
+        || ctx.relationships.length !== 1 || ctx.relationships[0] !== environment.record.id) {
+        return { code: "ARTIFACT_BINDING", message: "An exploratory run requires exactly one runtime-bound charter" };
+      }
+    } else if (value.runId !== ctx.runId || ctx.relatedOfType("exploration-charter").length !== 1 || !environment
+      || ctx.relationships.length !== 1 || ctx.relationships[0] !== environment.record.id) {
+      return { code: "ARTIFACT_BINDING", message: "Exploration charter must be the sole run-bound charter linked to the environment" };
+    }
+    return undefined;
+  },
+};
+
+/** The shared table. Task 14 migrated the three overlapping planning types; Task 15a adds the eight
+ *  synchronous "both-path" types below. Every remaining type stays on its legacy write branch / read
+ *  inline-chain branch (the adapters fall through). */
 export const semanticRules: Partial<Record<ArtifactType, SemanticRule>> = {
   "requirement-analysis": requirementAnalysisRule,
   "coverage-obligation": coverageObligationRule,
   "test-plan": testPlanRule,
+  "test-result": testResultRule,
+  "approval-decision": approvalDecisionRule,
+  "test-step-result": testStepResultRule,
+  "incident": incidentRule,
+  "release-gate": releaseGateRule,
+  "qa-execution-report": qaExecutionReportRule,
+  "test-data-manifest": testDataManifestRule,
+  "exploration-charter": explorationCharterRule,
 };

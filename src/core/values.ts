@@ -3,6 +3,16 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Coerces an unknown to a readonly array, yielding an empty array for non-arrays. */
+export function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value as unknown[] : []; }
+
+/** True when `resources` is an array of records whose `id` values are all distinct. */
+export function uniqueResourceIds(resources: unknown): resources is Record<string, unknown>[] {
+  return Array.isArray(resources)
+    && resources.every(isRecord)
+    && new Set(resources.map((resource) => resource.id)).size === resources.length;
+}
+
 /**
  * Deterministic canonical JSON for CHECKSUM inputs only: object keys sorted lexicographically at
  * every level; array order preserved. undefined policy: values are emitted via `JSON.stringify`, so
