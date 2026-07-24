@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
-import { validateArtifact } from "../contracts/validator.js";
+import { formatValidationErrors, validateArtifact } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord } from "../core/run-workspace.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
@@ -27,8 +27,9 @@ export async function ingestRequirementAnalysis(
   options: IngestRequirementAnalysisOptions,
 ): Promise<RegisteredPlanningArtifact> {
   const draft = await readAgentDraft(options.sourcePath);
-  if (!validateArtifact("requirement-analysis", draft).valid) {
-    throw new QaSkillsError("Requirement Analysis Agent Draft does not satisfy the artifact contract or authority rules", "INVALID_ARTIFACT");
+  const result = validateArtifact("requirement-analysis", draft);
+  if (!result.valid) {
+    throw new QaSkillsError(`Requirement Analysis Agent Draft does not satisfy the artifact contract or authority rules: ${formatValidationErrors(result.errors)}`, "INVALID_ARTIFACT");
   }
   try {
     assertRequirementAuthorities(draft);

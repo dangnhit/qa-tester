@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
-import { validateArtifact } from "../contracts/validator.js";
+import { formatValidationErrors, validateArtifact } from "../contracts/validator.js";
 import { createBugFingerprint, createRunScopedBugId } from "../defects/fingerprint.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
 import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId } from "../retest/verdict.js";
@@ -858,8 +858,9 @@ export class RunWorkspace {
       const source = await readFile(sourcePath, "utf8");
       const format = sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml") ? "yaml" : "json";
       const value = parseAuthoringDocument(source, format);
-      if (!validateArtifact(input.type, value).valid) {
-        throw new QaSkillsError("Artifact does not match its contract", "INVALID_ARTIFACT");
+      const result = validateArtifact(input.type, value);
+      if (!result.valid) {
+        throw new QaSkillsError(`Artifact does not match its contract: ${formatValidationErrors(result.errors)}`, "INVALID_ARTIFACT");
       }
       return this.registerArtifactValueInternal({
         type: input.type,
@@ -883,8 +884,9 @@ export class RunWorkspace {
       relationships = [...input.relationships];
       this.assertWritable();
       if (!isArtifactType(input.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
-      if (!validateArtifact(input.type, snapshot).valid) {
-        throw new QaSkillsError("Artifact does not match its contract", "INVALID_ARTIFACT");
+      const result = validateArtifact(input.type, snapshot);
+      if (!result.valid) {
+        throw new QaSkillsError(`Artifact does not match its contract: ${formatValidationErrors(result.errors)}`, "INVALID_ARTIFACT");
       }
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
@@ -911,7 +913,9 @@ export class RunWorkspace {
       this.assertWritable();
       if (inputs.length === 0 || new Set(inputs.map((input) => input.key)).size !== inputs.length) throw new QaSkillsError("Artifact batch keys must be non-empty and unique", "INVALID_ARTIFACT");
       for (const input of inputs) {
-        if (input.key.length === 0 || !isArtifactType(input.type) || !validateArtifact(input.type, input.value).valid) throw new QaSkillsError("Artifact batch does not match its contract", "INVALID_ARTIFACT");
+        if (input.key.length === 0 || !isArtifactType(input.type)) throw new QaSkillsError("Artifact batch does not match its contract", "INVALID_ARTIFACT");
+        const result = validateArtifact(input.type, input.value);
+        if (!result.valid) throw new QaSkillsError(`Artifact batch entry '${input.key}' (${input.type}) does not match its contract: ${formatValidationErrors(result.errors)}`, "INVALID_ARTIFACT");
       }
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));

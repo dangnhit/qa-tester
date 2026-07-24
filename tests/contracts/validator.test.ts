@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { validateArtifact } from "../../src/contracts/validator.js";
-import type { ArtifactType } from "../../src/contracts/types.js";
+import { formatValidationErrors, validateArtifact } from "../../src/contracts/validator.js";
+import type { ArtifactType, NormalizedValidationError } from "../../src/contracts/types.js";
 
 const validRun = {
   artifactType: "run-metadata",
@@ -280,5 +280,26 @@ describe("validateArtifact", () => {
     it("forbids severity before a bug is triaged", () => {
       expect(validateArtifact("bug-report", { ...otherArtifactContracts[6].valid, severity: "Major" }).valid).toBe(false);
     });
+  });
+});
+
+describe("formatValidationErrors", () => {
+  it("renders each error's instancePath and message, in Ajv's original order", () => {
+    const errors: NormalizedValidationError[] = [
+      { instancePath: "/status", schemaPath: "#/properties/status/enum", keyword: "enum", message: "must be equal to one of the allowed values" },
+      { instancePath: "/title", schemaPath: "#/required", keyword: "required", message: "must have required property 'title'" },
+    ];
+
+    const formatted = formatValidationErrors(errors);
+
+    expect(formatted).toContain("/status");
+    expect(formatted).toContain("must be equal to one of the allowed values");
+    expect(formatted).toContain("/title");
+    expect(formatted).toContain("must have required property 'title'");
+    expect(formatted.indexOf("/status")).toBeLessThan(formatted.indexOf("/title"));
+  });
+
+  it("falls back to a short diagnostic-free message for an empty error list", () => {
+    expect(formatValidationErrors([])).toBe("no diagnostics available");
   });
 });

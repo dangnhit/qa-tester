@@ -53,6 +53,19 @@ describe("loadQaConfig", () => {
     await expect(loadQaConfig({ cwd: root, configPath: removedField })).rejects.toThrow(/config|schema/i);
   });
 
+  it("names the offending instance path and missing field when the schema check fails", async () => {
+    const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
+    const malformed = await config(root, "malformed-fields.yaml", "version: 1\nhooks:\n  - id: seed\n    kind: command\n    command: node\n");
+
+    const error: Error = await loadQaConfig({ cwd: root, configPath: malformed }).then(
+      () => { throw new Error("expected loadQaConfig to reject"); },
+      (caught: unknown) => caught as Error,
+    );
+
+    expect(error.message).toContain("/hooks/0");
+    expect(error.message).toContain("args");
+  });
+
   it("keeps secret references in the snapshot and resolves/scrubs only operation memory", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
     await config(root, "qa.config.yaml", "version: 1\nheaders:\n  authorization: ${ENV:QA_TOKEN}\n");

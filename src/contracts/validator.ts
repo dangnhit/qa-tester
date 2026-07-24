@@ -12,6 +12,12 @@ function normalizeErrors(errors: ErrorObject[] | null | undefined): NormalizedVa
   }));
 }
 
+/** The single shared renderer for normalized Ajv errors; every ingestion site interpolates this. */
+export function formatValidationErrors(errors: readonly NormalizedValidationError[]): string {
+  if (errors.length === 0) return "no diagnostics available";
+  return errors.map((error) => `${error.instancePath || "/"} ${error.message} (${error.keyword})`).join("; ");
+}
+
 export function validateArtifact(type: ArtifactType, value: unknown): ValidationResult {
   const validator = artifactValidators[type];
   const valid = validator(value);

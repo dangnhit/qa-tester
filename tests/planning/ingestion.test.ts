@@ -296,6 +296,17 @@ describe("planning ingestion", () => {
     await expect(ingestCoverageObligation({ ...fixture, sourcePath })).rejects.toThrow(/orphan|requirement/i);
   });
 
+  it("names the offending field when a requirement analysis draft fails schema validation", async () => {
+    const fixture = await setup();
+    const sourcePath = join(fixture.root, "invalid-requirement.json");
+    const draft = requirementAnalysis();
+    const statement = draft.statements[0] as Record<string, unknown>;
+    delete statement.normalizedText;
+    await writeFile(sourcePath, JSON.stringify(draft));
+
+    await expect(ingestRequirementAnalysis({ ...fixture, sourcePath })).rejects.toThrow(/normalizedText/);
+  });
+
   it("rejects a checksum-rewritten persisted coverage obligation that no longer binds its requirement", async () => {
     const fixture = await setup();
     const requirementPath = join(fixture.root, "requirements.json");

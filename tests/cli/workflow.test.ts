@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,6 +49,44 @@ describe("workflow scaffold", () => {
     expect((await source.readRegisteredArtifacts()).map((artifact) => artifact.record.type).sort())
       .toEqual(["coverage-obligation", "environment-profile", "requirement-analysis", "test-case", "test-plan"]);
     await source.close();
+  });
+
+  it("fails fast naming the offending draft file and creates no run directory when a bootstrap draft is invalid", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-workflow-bootstrap-invalid-")); roots.push(root);
+    const paths = {
+      environment: join(root, "environment.json"),
+      requirement: join(root, "requirement.json"),
+      plan: join(root, "plan.json"),
+      testcase: join(root, "testcase.json"),
+      coverage: join(root, "coverage.json"),
+    };
+    const requirement = { artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA" };
+    const plan = { artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN", approvalPolicy: { mode: "human-review" }, testCases: [{ testCaseId: "TC", title: "Save", expectedResults: [{ id: "ER", requirementId: "REQ", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }] };
+    const testcase = { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC", revisionId: "REV", instanceId: "INSTANCE", title: "Save", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } };
+    const coverage = { artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV", requirementAnalysisArtifactId: "replaced-atomically", requirementId: "REQ", role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true };
+    await Promise.all([
+      writeFile(paths.environment, JSON.stringify(environment)),
+      writeFile(paths.requirement, JSON.stringify(requirement)),
+      writeFile(paths.plan, JSON.stringify(plan)),
+      writeFile(paths.testcase, JSON.stringify(testcase)),
+      writeFile(paths.coverage, JSON.stringify(coverage)),
+    ]);
+
+    const error: Error = await bootstrapPlanningBundle({
+      root,
+      environmentPath: paths.environment,
+      requirementPath: paths.requirement,
+      planPath: paths.plan,
+      testCasePaths: [paths.testcase],
+      coveragePaths: [paths.coverage],
+    }).then(
+      () => { throw new Error("expected bootstrapPlanningBundle to reject"); },
+      (caught: unknown) => caught as Error,
+    );
+
+    expect(error.message).toContain(paths.requirement);
+    expect(error.message).toContain("statements");
+    await expect(readdir(join(root, "qa-results"))).rejects.toThrow(/ENOENT/);
   });
 
   it("creates parseable plan and source-bound inputs without scanning for a latest run", async () => {

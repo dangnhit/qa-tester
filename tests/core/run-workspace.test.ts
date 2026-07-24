@@ -205,6 +205,25 @@ describe("RunWorkspace", () => {
     await workspace.close();
   });
 
+  it("names the failing batch entry's key, type, and offending field when a schema check fails", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const invalid = testCase("TC-INVALID") as Record<string, unknown>;
+    delete invalid.steps;
+
+    const caught: Error = await workspace.registerArtifactValueBatch([
+      { key: "broken-entry", type: "test-case", value: invalid, relationships: [] },
+    ]).then(
+      () => { throw new Error("expected registerArtifactValueBatch to reject"); },
+      (error: unknown) => error as Error,
+    );
+
+    expect(caught.message).toContain("broken-entry");
+    expect(caught.message).toContain("test-case");
+    expect(caught.message).toContain("steps");
+    await workspace.close();
+  });
+
   it("waits for a late multi-binary write failure before rolling back every unregistered file", async () => {
     const directory = await root();
     const failure = failSecondEvidenceBinaryWrite();

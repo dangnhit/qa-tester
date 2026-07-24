@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { chromium } from "@playwright/test";
 
 import { loadQaConfig } from "../config/load-config.js";
+import type { ArtifactType } from "../contracts/types.js";
+import { formatValidationErrors, validateArtifact } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createQaTester, type QaWorkflowInput, type WorkflowResult } from "../orchestration/qa-tester.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
@@ -29,6 +31,21 @@ export async function bootstrapPlanningBundle(options: BootstrapOptions): Promis
   ]);
   const testCases = rest.slice(0, options.testCasePaths.length);
   const obligations = rest.slice(options.testCasePaths.length);
+
+  const preflight: readonly { path: string; type: ArtifactType; value: unknown }[] = [
+    { path: options.requirementPath, type: "requirement-analysis", value: requirement },
+    { path: options.planPath, type: "test-plan", value: plan },
+    // `testCases`/`obligations` were sliced to exactly `testCasePaths`/`coveragePaths` length above, so each index is present.
+    ...testCases.map((value, index) => ({ path: options.testCasePaths[index]!, type: "test-case" as const, value })),
+    ...obligations.map((value, index) => ({ path: options.coveragePaths[index]!, type: "coverage-obligation" as const, value })),
+  ];
+  for (const entry of preflight) {
+    const result = validateArtifact(entry.type, entry.value);
+    if (!result.valid) {
+      throw new QaSkillsError(`${resolve(entry.path)} does not satisfy the ${entry.type} contract: ${formatValidationErrors(result.errors)}`, "INVALID_ARTIFACT");
+    }
+  }
+
   const workspace = await RunWorkspace.create({ root: resolve(options.root), mode: "plan", environmentProfile: environmentValue });
   try {
     const batch = await workspace.registerArtifactValueBatch([
