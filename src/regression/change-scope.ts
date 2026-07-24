@@ -1,15 +1,16 @@
+import { isRecord } from "../core/values.js";
+
 export type ChangeScope = Readonly<{ id: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
 /** The instance is part of a canonical testcase identity: revisions can have
  * more than one parameterized/source instance. */
 export type RegressionCase = Readonly<{ testCaseId: string; revisionId: string; instanceId: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
 
 function strings(value: unknown): readonly string[] { return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : []; }
-function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
 /** Reads every regression mapping source from the canonical testcase revision. */
 export function regressionCaseFromCanonical(value: Record<string, unknown>): RegressionCase {
-  const index = object(value.regressionIndex) ? value.regressionIndex : {};
-  const coverage = object(value.coverage) ? value.coverage : {};
+  const index = isRecord(value.regressionIndex) ? value.regressionIndex : {};
+  const coverage = isRecord(value.coverage) ? value.coverage : {};
   if (typeof value.testCaseId !== "string" || typeof value.revisionId !== "string" || typeof value.instanceId !== "string") throw new Error("Canonical test case lacks exact regression instance identity");
   return {
     testCaseId: value.testCaseId, revisionId: value.revisionId, instanceId: value.instanceId,

@@ -6,6 +6,7 @@ import YAML from "yaml";
 
 import { serveDemoFixture } from "../fixtures/demo/server.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact } from "../src/core/run-workspace.js";
+import { isRecord } from "../src/core/values.js";
 import { executeCleanupRun } from "../src/operations/cleanup-run.js";
 import { createQaTester, type CanonicalPlanBundleRef } from "../src/operations/run-workflow.js";
 import { sha256Fingerprint } from "../src/planning/testcase-revision.js";
@@ -53,10 +54,6 @@ export type DemoResult = Readonly<{
 
 const fixtureDirectory = fileURLToPath(new URL("../fixtures/demo/", import.meta.url));
 const authoritativeExpectedResultId = "ER-DEMO-SAVE";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function loadYaml<T>(name: string): Promise<T> {
   return YAML.parse(await readFile(join(fixtureDirectory, name), "utf8")) as T;

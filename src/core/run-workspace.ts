@@ -27,6 +27,7 @@ import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
+import { isRecord, canonicalJson } from "./values.js";
 
 export type { ArtifactRecord } from "./artifact-record.js";
 
@@ -81,15 +82,7 @@ function isArtifactType(value: string): value is ArtifactType {
   return (artifactTypes as readonly string[]).includes(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value as unknown[] : []; }
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
-}
 function sameStringOccurrences(left: readonly string[], right: readonly string[]): boolean {
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
@@ -109,7 +102,7 @@ const checkpointOutputTypes: Readonly<Record<WorkflowOperationName, readonly Art
   "derive-retest-verdict": ["retest-result"],
 };
 
-function checkpointStateChecksum(state: unknown): string { return sha256Text(stableJson(state)); }
+function checkpointStateChecksum(state: unknown): string { return sha256Text(canonicalJson(state)); }
 
 function sameCheckpointRefs(left: readonly unknown[], right: readonly unknown[]): boolean {
   const normalize = (items: readonly unknown[]) => items.map((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string" ? `${item.artifactId}:${item.sha256}` : "").sort();
@@ -508,7 +501,7 @@ async function inspectWorkspaceState(
         let reproductionValid = false;
         try {
           reproductionValid = sourceAttempts.every((attempt) => attempt !== undefined)
-            && stableJson(value.reproduction) === stableJson(evaluateReproduction(sourceAttempts.filter((attempt): attempt is Record<string, unknown> => attempt !== undefined).map((attempt) => ({ attemptId: String(attempt.attemptId), status: String(attempt.status), failureClassification: String(attempt.failureClassification) })), isRecord(value.reproduction) && typeof value.reproduction.unsafeRerunReason === "string" ? { unsafeRerunReason: value.reproduction.unsafeRerunReason } : {}));
+            && canonicalJson(value.reproduction) === canonicalJson(evaluateReproduction(sourceAttempts.filter((attempt): attempt is Record<string, unknown> => attempt !== undefined).map((attempt) => ({ attemptId: String(attempt.attemptId), status: String(attempt.status), failureClassification: String(attempt.failureClassification) })), isRecord(value.reproduction) && typeof value.reproduction.unsafeRerunReason === "string" ? { unsafeRerunReason: value.reproduction.unsafeRerunReason } : {}));
         } catch { reproductionValid = false; }
         const original = matchingAttempts[0]?.value;
         const caseValue = original === undefined ? undefined : valuesOf("test-case").find((candidate) => candidate.value?.testCaseId === original.testCaseId && candidate.value?.revisionId === original.testCaseRevisionId && candidate.value?.instanceId === original.testCaseInstanceId)?.value;
@@ -560,7 +553,7 @@ async function inspectWorkspaceState(
         const gates = valuesOf("release-gate");
         const gate = gates.length === 1 ? gates[0]?.value : undefined;
         const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
-        if (!gate || !isRecord(value.releaseGate) || value.releaseRecommendation !== gate.recommendation || stableJson(value.releaseGate) !== stableJson(expectedGate)) {
+        if (!gate || !isRecord(value.releaseGate) || value.releaseRecommendation !== gate.recommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "QA report must embed the complete registered release gate") || changed;
         }
       } else if (artifact.record.type === "test-data-manifest") {
@@ -590,7 +583,7 @@ async function inspectWorkspaceState(
         const scope = artifacts.find((candidate) => candidate.valid && candidate.record.id === value.changeScopeArtifactId && candidate.record.type === "change-scope");
         const expectedDecisionChecksum = sha256Text(JSON.stringify({ selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete }));
         const recomputed = scope?.value && Array.isArray(scope.value.changes) ? selectRegressionCases({ changes: scope.value.changes as never, testCases: valuesOf("test-case").flatMap((testCase) => testCase.value === undefined ? [] : [regressionCaseFromCanonical(testCase.value)]) }) : undefined;
-        if (value.runId !== expectedRunId || !scope || scope.record.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== expectedDecisionChecksum || recomputed === undefined || stableJson({ selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete }) !== stableJson(recomputed) || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify([scope.record.id, ...expectedIds].sort()) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
+        if (value.runId !== expectedRunId || !scope || scope.record.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== expectedDecisionChecksum || recomputed === undefined || canonicalJson({ selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete }) !== canonicalJson(recomputed) || decisionCases.length !== decisions.length || JSON.stringify(relationshipIds) !== JSON.stringify([scope.record.id, ...expectedIds].sort()) || (value.complete === true && array(value.unmappedChangeRisks).length > 0)) {
           changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Regression selection must bind every decision to one registered case and expose unmapped risk") || changed;
         }
       } else if (artifact.record.type === "change-scope") {
@@ -1555,7 +1548,7 @@ export class RunWorkspace {
       const gate = gates[0];
       const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
       if (gates.length !== 1 || !isRecord(value.releaseGate) || value.releaseRecommendation !== value.releaseGate.recommendation
-        || gate?.recommendation !== value.releaseRecommendation || stableJson(value.releaseGate) !== stableJson(expectedGate)) {
+        || gate?.recommendation !== value.releaseRecommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
         throw new QaSkillsError("QA report must reference the single registered deterministic release gate", "ARTIFACT_BINDING");
       }
     } else if (type === "test-data-manifest") {
@@ -1591,7 +1584,7 @@ export class RunWorkspace {
       const scopeValue = scope === undefined ? undefined : (await this.readRegisteredValues(manifest, "change-scope"))[manifest.artifacts.filter((artifact) => artifact.type === "change-scope").findIndex((artifact) => artifact.id === scope.id)];
       const recomputed = scopeValue && Array.isArray(scopeValue.changes) ? selectRegressionCases({ changes: scopeValue.changes as never, testCases: cases.map((testCase) => regressionCaseFromCanonical(testCase)) }) : undefined;
       const stored = { selected: value.selected, excluded: value.excluded, unmappedChangeRisks: value.unmappedChangeRisks, complete: value.complete };
-      if (!scope || scope.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== sha256Text(JSON.stringify(stored)) || recomputed === undefined || stableJson(stored) !== stableJson(recomputed) || !decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId && testCase.instanceId === decision.instanceId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify([scope.id, ...expectedRelationships.filter((id): id is string => id !== undefined)].sort())) {
+      if (!scope || scope.sha256 !== value.changeScopeSha256 || value.decisionChecksum !== sha256Text(JSON.stringify(stored)) || recomputed === undefined || canonicalJson(stored) !== canonicalJson(recomputed) || !decisions.every((decision) => isRecord(decision) && cases.some((testCase) => testCase.testCaseId === decision.testCaseId && testCase.revisionId === decision.revisionId && testCase.instanceId === decision.instanceId)) || expectedRelationships.some((id) => id === undefined) || JSON.stringify([...relationships].sort()) !== JSON.stringify([scope.id, ...expectedRelationships.filter((id): id is string => id !== undefined)].sort())) {
         throw new QaSkillsError("Regression selection decisions must bind registered canonical test case revisions", "ARTIFACT_BINDING");
       }
       if (value.complete === true && Array.isArray(value.unmappedChangeRisks) && value.unmappedChangeRisks.length > 0) {

@@ -1,10 +1,7 @@
 import { createEntityId } from "../core/ids.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord } from "../core/run-workspace.js";
-
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "../core/values.js";
 
 export async function recordHumanApproval(input: { root: string; runId: string; planArtifactId: string; approvedBy: string }): Promise<ArtifactRecord> {
   if (input.approvedBy.trim() === "") throw new QaSkillsError("Human approver identity is required", "INVALID_ARTIFACT");
@@ -12,10 +9,10 @@ export async function recordHumanApproval(input: { root: string; runId: string; 
   try {
     const artifacts = await workspace.readRegisteredArtifacts();
     const plan = artifacts.find((artifact) => artifact.record.id === input.planArtifactId && artifact.record.type === "test-plan");
-    if (!plan || !record(plan.value.approvalPolicy) || plan.value.approvalPolicy.mode !== "human-review") {
+    if (!plan || !isRecord(plan.value.approvalPolicy) || plan.value.approvalPolicy.mode !== "human-review") {
       throw new QaSkillsError("Human approval requires one registered human-review test plan", "ARTIFACT_BINDING");
     }
-    if (!record(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== false || plan.value.approvalDecision.mode !== "HUMAN_REVIEW") {
+    if (!isRecord(plan.value.approvalDecision) || plan.value.approvalDecision.approved !== false || plan.value.approvalDecision.mode !== "HUMAN_REVIEW") {
       throw new QaSkillsError("Human approval can only resolve a pending derived human-review decision", "ARTIFACT_BINDING");
     }
     return workspace.registerArtifactValue({

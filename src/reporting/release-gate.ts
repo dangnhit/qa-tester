@@ -1,4 +1,5 @@
 import type { DefectSeverity } from "../defects/triage.js";
+import { isRecord } from "../core/values.js";
 import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
 
 export type GateBug = Readonly<{ bugId: string; triageStatus: "NEEDS_TRIAGE" | "TRIAGED"; severity?: DefectSeverity; open: boolean }>;
@@ -19,7 +20,6 @@ export type GateWorkspaceArtifact = Readonly<{
   value: Readonly<Record<string, unknown>>;
 }>;
 
-function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function string(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value : []; }
 function canonical<T>(items: readonly T[], key: (item: T) => string): readonly T[] { return [...items].sort((left, right) => key(left).localeCompare(key(right))); }
@@ -80,8 +80,8 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {
     const value = artifact.value; const viewport = value.viewport;
     const analysis = source.find((candidate) => candidate.record.id === value.requirementAnalysisArtifactId && candidate.record.type === "requirement-analysis");
-    const authoritative = array(analysis?.value.statements).some((statement) => record(statement) && statement.requirementId === value.requirementId && statement.authority === "AUTHORITATIVE");
-    if (!record(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") return [];
+    const authoritative = array(analysis?.value.statements).some((statement) => isRecord(statement) && statement.requirementId === value.requirementId && statement.authority === "AUTHORITATIVE");
+    if (!isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") return [];
     const fields = [value.obligationId, value.requirementId, value.role, value.behavior, value.browser, value.risk, value.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
     return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, role: value.role as string, behavior: value.behavior as string, browser: value.browser as string, viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
@@ -90,7 +90,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     const value = artifact.value;
     const testCase = cases.find((candidate) => candidate.value.testCaseId === value.testCaseId && candidate.value.revisionId === value.testCaseRevisionId && candidate.value.instanceId === value.testCaseInstanceId);
     const dimensions = testCase?.value.coverage;
-    if (!record(dimensions) || !record(dimensions.viewport) || typeof dimensions.viewport.width !== "number" || typeof dimensions.viewport.height !== "number") return [];
+    if (!isRecord(dimensions) || !isRecord(dimensions.viewport) || typeof dimensions.viewport.width !== "number" || typeof dimensions.viewport.height !== "number") return [];
     const fields = [value.attemptId, value.status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.browser, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
     return [{ attemptId: value.attemptId as string, status: value.status as string, requirementId: dimensions.requirementId as string, role: dimensions.role as string, behavior: dimensions.behavior as string, browser: dimensions.browser as string, viewport: { width: dimensions.viewport.width, height: dimensions.viewport.height }, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
@@ -115,8 +115,8 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   }), (item) => item.bugId);
   const incidents = canonical(valuesOf("incident").map((artifact) => artifact.value), (item) => String(item.incidentId));
   const evidenceGaps = canonical(valuesOf("evidence-gap").map((artifact) => artifact.value), (item) => String(item.evidenceGapId));
-  const cleanupLeaks: readonly Record<string, unknown>[] = canonical(valuesOf("cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter(record).filter((resource) => resource.status === "failed")), (item) => String(item.id));
-  const unmappedChangeRisks = canonical(valuesOf("regression-selection").flatMap((artifact) => array(artifact.value.unmappedChangeRisks).filter(record)), (item) => String(item.changeId));
+  const cleanupLeaks: readonly Record<string, unknown>[] = canonical(valuesOf("cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter(isRecord).filter((resource) => resource.status === "failed")), (item) => String(item.id));
+  const unmappedChangeRisks = canonical(valuesOf("regression-selection").flatMap((artifact) => array(artifact.value.unmappedChangeRisks).filter(isRecord)), (item) => String(item.changeId));
   const sharedBlockers = canonical([
     ...incidents.filter((incident) => incident.kind === "ENVIRONMENT_INCIDENT").map((incident) => `Environment incident ${String(incident.incidentId)}`),
     ...evidenceGaps.map((gap) => `Evidence gap ${String(gap.evidenceGapId)} affects ${String(gap.affectedClaim)}`),

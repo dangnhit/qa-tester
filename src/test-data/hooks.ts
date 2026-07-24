@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { QaConfig } from "../config/load-config.js";
+import { isRecord } from "../core/values.js";
 import { ownedResources, type TestResource } from "./resources.js";
 
 export type TestDataHookDescriptor =
@@ -10,7 +11,6 @@ export type TestDataHookDescriptor =
 type ProducedResource = Readonly<{ id: string; cleanupAction: string }>;
 type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: TestDataHookDescriptor, operation?: Readonly<Record<string, unknown>>) => Promise<readonly ProducedResource[]>>>;
 
-function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function contained(directory: string, candidate: string): boolean {
   const relativePath = relative(directory, candidate);
   return relativePath !== "" && !relativePath.startsWith("../") && relativePath !== "..";
@@ -40,7 +40,7 @@ export class TestDataHookRegistry {
     if (hooks === undefined) return new TestDataHookRegistry([], runners);
     if (!Array.isArray(hooks)) throw new Error("Config hooks must be an array of trusted descriptors");
     const descriptors = await Promise.all(hooks.map(async (hook): Promise<TestDataHookDescriptor> => {
-      if (!record(hook) || typeof hook.id !== "string" || typeof hook.kind !== "string") throw new Error("Config hook descriptor is invalid");
+      if (!isRecord(hook) || typeof hook.id !== "string" || typeof hook.kind !== "string") throw new Error("Config hook descriptor is invalid");
       if (hook.kind === "command" && typeof hook.command === "string" && Array.isArray(hook.args) && hook.args.every((arg) => typeof arg === "string")) {
         return { id: hook.id, kind: "command", command: [hook.command, ...hook.args] };
       }

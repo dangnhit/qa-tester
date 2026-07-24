@@ -1,4 +1,5 @@
 import { validateBrowserTestDsl, validatePlanningAction } from "../contracts/validator.js";
+import { isRecord } from "../core/values.js";
 import { sha256Fingerprint } from "./testcase-revision.js";
 
 export type ApprovalPolicy = { mode: "auto-approve-safe" | "human-review" };
@@ -40,8 +41,6 @@ export function evaluateApproval(
     : { approved: false, mode: "HUMAN_REVIEW", reasons };
 }
 
-function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-
 export function deriveTestPlanApproval(input: {
   plan: Readonly<Record<string, unknown>>;
   requirementAnalyses: readonly Readonly<Record<string, unknown>>[];
@@ -49,13 +48,13 @@ export function deriveTestPlanApproval(input: {
 }): ApprovalDecision {
   const policy = input.plan.approvalPolicy;
   const testCases = input.plan.testCases;
-  if (!record(policy) || (policy.mode !== "auto-approve-safe" && policy.mode !== "human-review") || !Array.isArray(testCases)) throw new Error("Test plan policy is invalid");
+  if (!isRecord(policy) || (policy.mode !== "auto-approve-safe" && policy.mode !== "human-review") || !Array.isArray(testCases)) throw new Error("Test plan policy is invalid");
   const requirements = new Map<string, string[]>();
   for (const analysis of input.requirementAnalyses) {
     const statements = analysis.statements;
     if (!Array.isArray(statements)) continue;
     for (const statement of statements) {
-      if (!record(statement) || typeof statement.requirementId !== "string" || typeof statement.authority !== "string") continue;
+      if (!isRecord(statement) || typeof statement.requirementId !== "string" || typeof statement.authority !== "string") continue;
       requirements.set(statement.requirementId, [...(requirements.get(statement.requirementId) ?? []), statement.authority]);
     }
   }
@@ -65,26 +64,26 @@ export function deriveTestPlanApproval(input: {
   const effectSteps: { sideEffect: string; cleanup?: { declared: boolean } }[] = [];
   let browserDslValid = true;
   for (const testCase of testCases) {
-    if (!record(testCase) || !Array.isArray(testCase.expectedResults) || !Array.isArray(testCase.steps) || !Array.isArray(testCase.openQuestions)) throw new Error("Test plan test case is invalid");
+    if (!isRecord(testCase) || !Array.isArray(testCase.expectedResults) || !Array.isArray(testCase.steps) || !Array.isArray(testCase.openQuestions)) throw new Error("Test plan test case is invalid");
     for (const expected of testCase.expectedResults) {
-      if (!record(expected) || typeof expected.requirementId !== "string") throw new Error("Test plan expected result is invalid");
+      if (!isRecord(expected) || typeof expected.requirementId !== "string") throw new Error("Test plan expected result is invalid");
       const matches = requirements.get(expected.requirementId) ?? [];
       if (matches.length !== 1) throw new Error("Test plan has an orphan or ambiguous expected result requirement");
       if (expected.authority !== matches[0]) throw new Error("Test plan expected authority does not match its registered requirement");
       expectedResults.push({ authority: matches[0] ?? "ASSUMED" });
     }
     openQuestions.push(...testCase.openQuestions.filter((question): question is string => typeof question === "string"));
-    for (const step of testCase.steps) steps.push(record(step) ? {
+    for (const step of testCase.steps) steps.push(isRecord(step) ? {
       action: step.action, sideEffect: typeof step.sideEffect === "string" ? step.sideEffect : "",
-      ...(record(step.cleanup) && typeof step.cleanup.declared === "boolean" ? { cleanup: { declared: step.cleanup.declared } } : {}),
+      ...(isRecord(step.cleanup) && typeof step.cleanup.declared === "boolean" ? { cleanup: { declared: step.cleanup.declared } } : {}),
     } : { sideEffect: "" });
     if (testCase.browserExecution === undefined) continue;
     const execution = testCase.browserExecution;
-    if (!record(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !record(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") throw new Error("Test plan browser execution binding is invalid");
+    if (!isRecord(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !isRecord(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") throw new Error("Test plan browser execution binding is invalid");
     if (sha256Fingerprint(execution.browserDsl) !== execution.browserDslFingerprint || !validateBrowserTestDsl(execution.browserDsl).valid) browserDslValid = false;
     const browserSteps = execution.browserDsl.steps;
     if (!Array.isArray(browserSteps)) browserDslValid = false;
-    else for (const step of browserSteps) effectSteps.push(record(step) ? { sideEffect: typeof step.sideEffect === "string" ? step.sideEffect : "" } : { sideEffect: "" });
+    else for (const step of browserSteps) effectSteps.push(isRecord(step) ? { sideEffect: typeof step.sideEffect === "string" ? step.sideEffect : "" } : { sideEffect: "" });
   }
   return evaluateApproval({ expectedResults, openQuestions, steps, effectSteps, browserDslValid }, policy as ApprovalPolicy, input.environment);
 }

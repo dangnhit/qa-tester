@@ -3,9 +3,9 @@ import { toQaExecutionReport, type QaReportModel } from "../reporting/report-mod
 import { renderCanonicalJson } from "../reporting/render-json.js";
 import { renderMarkdown } from "../reporting/render-markdown.js";
 import type { ArtifactRecord, RunWorkspace } from "../core/run-workspace.js";
+import { isRecord } from "../core/values.js";
 
 type Values = Readonly<Record<string, unknown>>;
-function record(value: unknown): value is Values { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function str(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value : []; }
 
@@ -22,14 +22,14 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const gateValue = { artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, ...gateResult };
   const gate = await input.workspace.registerArtifactValue({ type: "release-gate", value: gateValue, relationships: artifacts.map((artifact) => artifact.record.id), provenance: "runtime" });
   const evidence = artifacts.filter((artifact) => artifact.record.type === "evidence");
-  const build = evidence.map((artifact) => record(artifact.value.provenance) ? str(artifact.value.provenance.build) : undefined).find((value) => value !== undefined) ?? "unknown";
+  const build = evidence.map((artifact) => isRecord(artifact.value.provenance) ? str(artifact.value.provenance.build) : undefined).find((value) => value !== undefined) ?? "unknown";
   const incidents = artifacts.filter((artifact) => artifact.record.type === "incident").map((artifact) => artifact.value);
   const evidenceGaps = artifacts.filter((artifact) => artifact.record.type === "evidence-gap").map((artifact) => artifact.value);
-  const cleanupLeaks = artifacts.filter((artifact) => artifact.record.type === "cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter((resource) => record(resource) && resource.status === "failed") as Values[]);
+  const cleanupLeaks = artifacts.filter((artifact) => artifact.record.type === "cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter((resource) => isRecord(resource) && resource.status === "failed") as Values[]);
   const excludedNotRun = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "NOT_RUN").map((artifact) => str(artifact.value.testCaseId) ?? artifact.record.id);
   const criticalFindings = currentOpenBugs.filter((bug) => bug.severity === "Blocker" || bug.severity === "Critical").map((bug) => bug.bugId);
   const remainingRisks = [...gateResult.ruleInputs.coverage.optionalGaps, ...currentOpenBugs.filter((bug) => bug.severity !== "Blocker" && bug.severity !== "Critical").map((bug) => bug.bugId), ...evidenceGaps.map((gap) => str(gap.reason) ?? "Evidence gap")];
-  const telemetryFindings = evidence.flatMap((artifact) => array(artifact.value.telemetryFindings).filter(record).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, attemptId: artifact.value.attemptId })));
+  const telemetryFindings = evidence.flatMap((artifact) => array(artifact.value.telemetryFindings).filter(isRecord).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, attemptId: artifact.value.attemptId })));
   const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${artifacts.filter((artifact) => artifact.record.type === "test-result").length} registered attempts evaluated; ${currentOpenBugs.length} open product bug${currentOpenBugs.length === 1 ? "" : "s"}.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, releaseGate: gateResult };
   const value = toQaExecutionReport(model);
   const report = await input.workspace.registerArtifactValue({ type: "qa-execution-report", value, relationships: [gate.id, ...artifacts.map((artifact) => artifact.record.id)], provenance: "runtime" });

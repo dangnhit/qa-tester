@@ -6,19 +6,18 @@ import type { BrowserStepResult, BrowserTestStep, CanonicalBrowserTestCase, Exec
 import { validateBrowserTestDsl } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
+import { isRecord } from "../core/values.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { authorizeStep } from "../safety/side-effects.js";
 
 const reservedAttemptIds = new Set<string>();
 let executionTail: Promise<void> = Promise.resolve();
 
-function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-
 function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[], testCaseArtifactId: string): CanonicalBrowserTestCase {
   const artifact = artifacts.find((candidate) => candidate.record.id === testCaseArtifactId && candidate.record.type === "test-case");
   if (!artifact) throw new QaSkillsError("Execution requires an approved registered test case artifact", "ARTIFACT_BINDING");
   const plan = artifacts.find((candidate) => candidate.record.type === "test-plan" && artifact.record.relationships.includes(candidate.record.id));
-  const autoApproved = plan && object(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true;
+  const autoApproved = plan && isRecord(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true;
   const humanApproved = plan && artifacts.some((candidate) => candidate.record.type === "approval-decision"
     && candidate.record.relationships.filter((id) => id === plan.record.id).length === 1
     && candidate.value.planArtifactId === plan.record.id
@@ -27,16 +26,16 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
   if (!plan || (!autoApproved && !humanApproved)) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
   const cases: unknown = plan.value.testCases;
   const planCases: readonly unknown[] = Array.isArray(cases) ? cases as unknown[] : [];
-  const planCase = planCases.find((candidate) => object(candidate)
+  const planCase = planCases.find((candidate) => isRecord(candidate)
     && candidate.testCaseId === artifact.value.testCaseId
-    && candidate.browserExecution !== null && object(candidate.browserExecution)
+    && candidate.browserExecution !== null && isRecord(candidate.browserExecution)
     && candidate.browserExecution.revisionId === artifact.value.revisionId
     && candidate.browserExecution.instanceId === artifact.value.instanceId);
-  if (!object(planCase)) {
+  if (!isRecord(planCase)) {
     throw new QaSkillsError("Test case revision or instance does not match its approved registered plan binding", "ARTIFACT_BINDING");
   }
   const execution = planCase.browserExecution;
-  if (!object(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !object(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") {
+  if (!isRecord(execution) || typeof execution.revisionId !== "string" || typeof execution.instanceId !== "string" || !isRecord(execution.browserDsl) || typeof execution.browserDslFingerprint !== "string") {
     throw new QaSkillsError("Approved test plan entry has no browser execution binding", "ARTIFACT_BINDING");
   }
   if (execution.revisionId !== artifact.value.revisionId || execution.instanceId !== artifact.value.instanceId) {
@@ -53,14 +52,14 @@ function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[]
     revisionId: artifact.value.revisionId,
     instanceId: artifact.value.instanceId,
     ...(typeof artifact.value.title === "string" ? { title: artifact.value.title } : {}),
-    ...(object(artifact.value.coverage) && object(artifact.value.coverage.viewport)
+    ...(isRecord(artifact.value.coverage) && isRecord(artifact.value.coverage.viewport)
       && typeof artifact.value.coverage.viewport.width === "number"
       && typeof artifact.value.coverage.viewport.height === "number"
       ? { browser: { viewport: { width: artifact.value.coverage.viewport.width, height: artifact.value.coverage.viewport.height } } }
       : {}),
     browserDsl: { steps: execution.browserDsl.steps as BrowserTestStep[] },
     authoritativeExpectedResultIds: Array.isArray(planCase.expectedResults)
-      ? planCase.expectedResults.filter(object).filter((result) => result.authority === "AUTHORITATIVE" && typeof result.id === "string").map((result) => result.id as string)
+      ? planCase.expectedResults.filter(isRecord).filter((result) => result.authority === "AUTHORITATIVE" && typeof result.id === "string").map((result) => result.id as string)
       : [],
     artifact,
   };

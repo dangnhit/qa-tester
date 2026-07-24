@@ -1,5 +1,6 @@
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
+import { isRecord } from "../core/values.js";
 import {
   evaluateCoverage,
   type CoverageAttempt,
@@ -10,10 +11,6 @@ import {
 
 type RequirementStatement = { requirementId: string; authority: string };
 type CoverageDimensions = Omit<CoverageObligation, "obligationId" | "required">;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) throw new QaSkillsError(`Registered ${label} is invalid`, "ARTIFACT_BINDING");

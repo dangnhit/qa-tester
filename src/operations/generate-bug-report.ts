@@ -6,11 +6,11 @@ import { createTriage, type TriageInput } from "../defects/triage.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createEntityId } from "../core/ids.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
+import { isRecord } from "../core/values.js";
 
 type Values = Readonly<Record<string, unknown>>;
 type GeneratedDefect = Readonly<{ kind: "BUG"; record: ArtifactRecord }> | Readonly<{ kind: "INCIDENT"; record: ArtifactRecord }>;
 
-function record(value: unknown): value is Values { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function string(value: unknown, label: string): string { if (typeof value !== "string" || value.length === 0) throw new QaSkillsError(`Registered ${label} is invalid`, "ARTIFACT_BINDING"); return value; }
 function attemptFrom(artifact: RegisteredWorkspaceArtifact): DefectAttempt & { testCaseRevisionId: string; testCaseInstanceId: string } {
   return { attemptId: string(artifact.value.attemptId, "attempt ID"), runId: string(artifact.value.runId, "attempt run ID"), testCaseId: string(artifact.value.testCaseId, "attempt testcase ID"), testCaseRevisionId: string(artifact.value.testCaseRevisionId, "attempt testcase revision ID"), testCaseInstanceId: string(artifact.value.testCaseInstanceId, "attempt testcase instance ID"), status: string(artifact.value.status, "attempt status"), failureClassification: string(artifact.value.failureClassification, "attempt failure classification") };
@@ -24,14 +24,14 @@ function environmentFrom(artifacts: readonly RegisteredWorkspaceArtifact[]): Val
 function expectedFrom(artifacts: readonly RegisteredWorkspaceArtifact[], attempt: DefectAttempt & { testCaseRevisionId: string; testCaseInstanceId: string }): string {
   const testCase = artifacts.find((artifact) => artifact.record.type === "test-case" && artifact.value.testCaseId === attempt.testCaseId && artifact.value.revisionId === attempt.testCaseRevisionId && artifact.value.instanceId === attempt.testCaseInstanceId);
   if (!testCase) throw new QaSkillsError("Bug generation requires the registered testcase for the attempt", "ARTIFACT_BINDING");
-  const approvedPlanCase = artifacts.filter((artifact) => artifact.record.type === "test-plan" && record(artifact.value.approvalDecision) && artifact.value.approvalDecision.approved === true)
-    .flatMap((artifact) => Array.isArray(artifact.value.testCases) ? artifact.value.testCases.filter(record).filter((candidate) => candidate.testCaseId === attempt.testCaseId && (!record(candidate.browserExecution) || candidate.browserExecution.revisionId === attempt.testCaseRevisionId)) : [])
+  const approvedPlanCase = artifacts.filter((artifact) => artifact.record.type === "test-plan" && isRecord(artifact.value.approvalDecision) && artifact.value.approvalDecision.approved === true)
+    .flatMap((artifact) => Array.isArray(artifact.value.testCases) ? artifact.value.testCases.filter(isRecord).filter((candidate) => candidate.testCaseId === attempt.testCaseId && (!isRecord(candidate.browserExecution) || candidate.browserExecution.revisionId === attempt.testCaseRevisionId)) : [])
     .find((candidate) => Array.isArray(candidate.expectedResults));
   const plannedExpected = approvedPlanCase && Array.isArray(approvedPlanCase.expectedResults)
-    ? approvedPlanCase.expectedResults.filter(record).filter((result) => typeof result.text === "string" && result.text.length > 0).map((result) => result.text).join(" ") : undefined;
+    ? approvedPlanCase.expectedResults.filter(isRecord).filter((result) => typeof result.text === "string" && result.text.length > 0).map((result) => result.text).join(" ") : undefined;
   if (plannedExpected) return plannedExpected;
   const coverage = testCase.value.coverage;
-  return record(coverage) && typeof coverage.outcome === "string" && coverage.outcome.length > 0
+  return isRecord(coverage) && typeof coverage.outcome === "string" && coverage.outcome.length > 0
     ? coverage.outcome : string(testCase.value.title, "testcase title");
 }
 function evidenceFor(artifacts: readonly RegisteredWorkspaceArtifact[], attemptIds: readonly string[]): readonly RegisteredWorkspaceArtifact[] {
@@ -46,8 +46,8 @@ function observedActualFrom(artifacts: readonly RegisteredWorkspaceArtifact[], a
       for (const finding of artifact.value.telemetryFindings as unknown[]) findings.push(finding);
     }
   }
-  const telemetry = findings.find((finding) => record(finding) && typeof finding.message === "string");
-  if (record(telemetry) && typeof telemetry.message === "string") return { actual: telemetry.message, unknown: false };
+  const telemetry = findings.find((finding) => isRecord(finding) && typeof finding.message === "string");
+  if (isRecord(telemetry) && typeof telemetry.message === "string") return { actual: telemetry.message, unknown: false };
   return { actual: "Unknown observed actual (no registered step, error, or telemetry observation).", unknown: true };
 }
 
@@ -123,9 +123,9 @@ export async function generateBugReport(input: Readonly<{
       return { runId: hint.runId, artifactId: hint.artifactId, bugId: artifact.value.bugId, fingerprint, sha256: record.sha256 };
     } finally { await comparison.close(); }
   }));
-  const mergedAttemptIds = [...new Set([...reproduction.attemptIds, ...(record(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.sourceAttemptIds) ? superseded.value.provenance.sourceAttemptIds.filter((id): id is string => typeof id === "string") : [])])];
+  const mergedAttemptIds = [...new Set([...reproduction.attemptIds, ...(isRecord(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.sourceAttemptIds) ? superseded.value.provenance.sourceAttemptIds.filter((id): id is string => typeof id === "string") : [])])];
   const mergedEvidence = [...new Set([...(Array.isArray(superseded?.value.evidenceIds) ? superseded.value.evidenceIds.filter((id): id is string => typeof id === "string") : []), ...evidence.map((item) => string(item.value.evidenceId, "evidence ID"))])];
-  const mergedEvidenceArtifacts = [...new Set([...(record(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.evidenceArtifactIds) ? superseded.value.provenance.evidenceArtifactIds.filter((id): id is string => typeof id === "string") : []), ...evidence.map((item) => item.record.id)])];
+  const mergedEvidenceArtifacts = [...new Set([...(isRecord(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.evidenceArtifactIds) ? superseded.value.provenance.evidenceArtifactIds.filter((id): id is string => typeof id === "string") : []), ...evidence.map((item) => item.record.id)])];
   const mergedAttemptArtifacts = mergedAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId)).filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
   const mergedReproduction = evaluateReproduction(mergedAttemptArtifacts.map(attemptFrom), mergedAttemptIds.length === 1 && input.unsafeRerunReason !== undefined ? { unsafeRerunReason: input.unsafeRerunReason } : {});
   const value = {

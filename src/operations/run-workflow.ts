@@ -5,6 +5,7 @@ import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } fr
 import { sha256Text } from "../core/checksum.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
+import { isRecord, canonicalJson } from "../core/values.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import { activeBrowserSessions } from "../browser/session-registry.js";
@@ -113,11 +114,10 @@ export type QaWorkflowInput = Readonly<{
   retest?: Readonly<{ sourceBug: RegisteredArtifactRef }>;
 }>;
 
-function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value as unknown[] : []; }
 
 function artifactRecord(value: unknown): value is ArtifactRecord {
-  return record(value) && typeof value.id === "string" && typeof value.sha256 === "string" && typeof value.type === "string" && typeof value.relativePath === "string";
+  return isRecord(value) && typeof value.id === "string" && typeof value.sha256 === "string" && typeof value.type === "string" && typeof value.relativePath === "string";
 }
 
 function asString(value: unknown, label: string): string {
@@ -217,11 +217,6 @@ function emptyWorkflowState(): WorkflowStateSnapshot {
   return { importedArtifacts: [], executionCases: [], reproductionAttempts: [], regressionAttempts: [], exploratoryFindings: [] };
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (record(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
-}
 function workflowStateChecksum(state: WorkflowStateSnapshot): string { return sha256Text(canonicalJson(state)); }
 
 function registeredRef(artifacts: readonly RegisteredWorkspaceArtifact[], id: string | undefined): RegisteredArtifactRef | undefined {
@@ -246,9 +241,9 @@ async function snapshotWorkflowState(state: WorkflowExecutionState): Promise<Wor
 }
 
 function checkpointState(value: unknown): WorkflowStateSnapshot {
-  if (!record(value)) throw new QaSkillsError("Workflow checkpoint state is invalid", "ARTIFACT_BINDING");
-  const refs = (key: string): readonly RegisteredArtifactRef[] => Array.isArray(value[key]) && value[key].every((item) => record(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string") ? value[key] as RegisteredArtifactRef[] : (() => { throw new QaSkillsError("Workflow checkpoint state references are invalid", "ARTIFACT_BINDING"); })();
-  const ref = (key: string): RegisteredArtifactRef | undefined => value[key] === undefined ? undefined : record(value[key]) && typeof value[key].artifactId === "string" && typeof value[key].sha256 === "string" ? value[key] as RegisteredArtifactRef : (() => { throw new QaSkillsError("Workflow checkpoint state reference is invalid", "ARTIFACT_BINDING"); })();
+  if (!isRecord(value)) throw new QaSkillsError("Workflow checkpoint state is invalid", "ARTIFACT_BINDING");
+  const refs = (key: string): readonly RegisteredArtifactRef[] => Array.isArray(value[key]) && value[key].every((item) => isRecord(item) && typeof item.artifactId === "string" && typeof item.sha256 === "string") ? value[key] as RegisteredArtifactRef[] : (() => { throw new QaSkillsError("Workflow checkpoint state references are invalid", "ARTIFACT_BINDING"); })();
+  const ref = (key: string): RegisteredArtifactRef | undefined => value[key] === undefined ? undefined : isRecord(value[key]) && typeof value[key].artifactId === "string" && typeof value[key].sha256 === "string" ? value[key] as RegisteredArtifactRef : (() => { throw new QaSkillsError("Workflow checkpoint state reference is invalid", "ARTIFACT_BINDING"); })();
   return { importedArtifacts: refs("importedArtifacts"), executionCases: refs("executionCases"), reproductionAttempts: refs("reproductionAttempts"), regressionAttempts: refs("regressionAttempts"), exploratoryFindings: refs("exploratoryFindings"), ...(ref("selection") === undefined ? {} : { selection: ref("selection")! }), ...(ref("charter") === undefined ? {} : { charter: ref("charter")! }), ...(value.retestSource === undefined ? {} : { retestSource: value.retestSource as RetestSource }) };
 }
 
@@ -258,7 +253,7 @@ async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInpu
   if (checkpoints.length > 0) {
     const latest = [...checkpoints].sort((left, right) => Number(right.value.revision) - Number(left.value.revision))[0];
     if (!latest || latest.value.inputChecksum !== checksum) throw new QaSkillsError("Resume input does not match its durable workflow checkpoint", "ARTIFACT_BINDING");
-    return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: record(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {}, state: checkpointState(latest.value.state) };
+    return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: isRecord(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {}, state: checkpointState(latest.value.state) };
   }
   const created = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
     artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
@@ -326,14 +321,14 @@ async function buildCanonicalPlanImportBatch(workspace: RunWorkspace, bundle: Ca
     for (const plan of plans) {
       const entries = Array.isArray(plan.value.testCases) ? plan.value.testCases : [];
       for (const entry of entries) {
-        if (!record(entry) || !record(entry.browserExecution)) continue;
+        if (!isRecord(entry) || !isRecord(entry.browserExecution)) continue;
         const execution = entry.browserExecution;
         const matches = cases.filter((item) => item.value.testCaseId === entry.testCaseId && item.value.revisionId === execution.revisionId && item.value.instanceId === execution.instanceId);
         if (matches.length !== 1) throw new QaSkillsError("Canonical plan bundle must contain every exact executable testcase revision and instance", "ARTIFACT_BINDING");
       }
     }
     const obligations = selected.filter((item) => item.record.type === "coverage-obligation");
-    const requiredRequirementIds = new Set(plans.flatMap((plan) => array(plan.value.testCases)).flatMap((entry) => record(entry) ? array(entry.expectedResults) : []).flatMap((expected) => record(expected) && typeof expected.requirementId === "string" ? [expected.requirementId] : []));
+    const requiredRequirementIds = new Set(plans.flatMap((plan) => array(plan.value.testCases)).flatMap((entry) => isRecord(entry) ? array(entry.expectedResults) : []).flatMap((expected) => isRecord(expected) && typeof expected.requirementId === "string" ? [expected.requirementId] : []));
     for (const requirementId of requiredRequirementIds) if (!obligations.some((item) => item.value.requirementId === requirementId)) throw new QaSkillsError("Canonical plan bundle omits a coverage obligation for a planned expected result", "ARTIFACT_BINDING");
     const environment = (await workspace.readRegisteredArtifacts()).find((item) => item.record.type === "environment-profile")?.value;
     if (typeof environment?.classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
@@ -415,13 +410,13 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 function redactionRegions(value: unknown): readonly { x: number; y: number; width: number; height: number }[] {
-  return Array.isArray(value) && value.every((item) => record(item) && [item.x, item.y, item.width, item.height].every((part) => typeof part === "number"))
+  return Array.isArray(value) && value.every((item) => isRecord(item) && [item.x, item.y, item.width, item.height].every((part) => typeof part === "number"))
     ? value as { x: number; y: number; width: number; height: number }[] : [];
 }
 
 /** Environment identity is canonical; host policy may only add protection/redaction. */
 function capturePolicyForEnvironment(environment: Record<string, unknown>, host: EvidencePolicyLayers) {
-  const profile = record(environment.evidenceProtection) ? environment.evidenceProtection : {};
+  const profile = isRecord(environment.evidenceProtection) ? environment.evidenceProtection : {};
   const runtime = host.protection ?? {};
   return {
     protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true,
@@ -439,7 +434,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
   const policy = resolveEvidencePolicy(ids.evidencePolicyId === undefined ? {} : resolveRuntime(runtime.evidencePolicies, ids.evidencePolicyId, "evidence policy"));
   const policyLayers = ids.evidencePolicyId === undefined ? {} : resolveRuntime(runtime.evidencePolicies, ids.evidencePolicyId, "evidence policy");
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
-  if (!record(environment)) throw new QaSkillsError("Runtime execution requires a registered environment profile", "ARTIFACT_BINDING");
+  if (!isRecord(environment)) throw new QaSkillsError("Runtime execution requires a registered environment profile", "ARTIFACT_BINDING");
   const capturePolicy = capturePolicyForEnvironment(environment, policyLayers);
   const telemetryScrubber = capturePolicy.telemetryScrubberId === undefined
     ? undefined
@@ -534,10 +529,10 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
             if (failed?.failedAssertion && "locator" in failed.failedAssertion) {
               const box = await resolveLocator(session.page, failed.failedAssertion.locator).boundingBox();
               const raw = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === evidence.descriptorArtifactId)?.value;
-              const provenance = record(raw?.provenance) ? raw.provenance : undefined;
-              const dimensions = record(provenance?.dimensions) ? provenance.dimensions : undefined;
-              const scroll = record(provenance?.scroll) ? provenance.scroll : undefined;
-              const clip = record(provenance?.clip) ? provenance.clip : undefined;
+              const provenance = isRecord(raw?.provenance) ? raw.provenance : undefined;
+              const dimensions = isRecord(provenance?.dimensions) ? provenance.dimensions : undefined;
+              const scroll = isRecord(provenance?.scroll) ? provenance.scroll : undefined;
+              const clip = isRecord(provenance?.clip) ? provenance.clip : undefined;
               if (box && dimensions && scroll && clip && typeof dimensions.width === "number" && typeof dimensions.height === "number" && typeof provenance?.dpr === "number" && typeof scroll.x === "number" && typeof scroll.y === "number" && typeof clip.x === "number" && typeof clip.y === "number" && typeof clip.width === "number" && typeof clip.height === "number") {
                 const locator = JSON.stringify(failed.failedAssertion.locator);
                 const annotations = normalizeGeometry({ image: { width: dimensions.width, height: dimensions.height, dpr: provenance.dpr, scrollX: scroll.x, scrollY: scroll.y, clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height } }, annotations: [{ id: `failure-${failed.stepId}`, box, ...(failed.error === undefined ? {} : { label: failed.error }), locator }] });
@@ -568,7 +563,7 @@ function scenarioIdForRegisteredAttempt(artifacts: readonly RegisteredWorkspaceA
   const testCase = artifacts.find((artifact) => artifact.record.type === "test-case" && attempt.record.relationships.includes(artifact.record.id));
   if (!testCase) throw new QaSkillsError("Retest attempt lacks its exact testcase artifact binding", "ARTIFACT_BINDING");
   if (testCase.value.testCaseId !== attempt.value.testCaseId || testCase.value.revisionId !== attempt.value.testCaseRevisionId || testCase.value.instanceId !== attempt.value.testCaseInstanceId) throw new QaSkillsError("Retest attempt testcase identity binding is invalid", "ARTIFACT_BINDING");
-  return sourceScenarioId({ testCaseId: asString(attempt.value.testCaseId, "retest testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "retest testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "retest testcase instance ID"), parameters: record(testCase.value.parameters) ? testCase.value.parameters : {} });
+  return sourceScenarioId({ testCaseId: asString(attempt.value.testCaseId, "retest testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "retest testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "retest testcase instance ID"), parameters: isRecord(testCase.value.parameters) ? testCase.value.parameters : {} });
 }
 
 async function sourceBugFromReference(workspace: RunWorkspace, reference: RegisteredArtifactRef): Promise<RetestSource> {
@@ -580,7 +575,7 @@ async function sourceBugFromReference(workspace: RunWorkspace, reference: Regist
     const artifacts = await source.readRegisteredArtifacts();
     const bug = artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.type === "bug-report");
     if (!bug) throw new QaSkillsError("Retest source bug is not registered", "ARTIFACT_BINDING");
-    const provenance = record(bug.value.provenance) ? bug.value.provenance : {};
+    const provenance = isRecord(bug.value.provenance) ? bug.value.provenance : {};
     const sourceAttemptIds = Array.isArray(provenance.sourceAttemptIds) && provenance.sourceAttemptIds.every((id) => typeof id === "string") ? provenance.sourceAttemptIds : [asString(bug.value.attemptId, "source bug attempt ID")];
     if (sourceAttemptIds.length === 0 || new Set(sourceAttemptIds).size !== sourceAttemptIds.length) throw new QaSkillsError("Selected bug revision has invalid exact reproduction references", "ARTIFACT_BINDING");
     const scenarios = sourceAttemptIds.map((attemptId) => {
@@ -589,7 +584,7 @@ async function sourceBugFromReference(workspace: RunWorkspace, reference: Regist
       const caseId = attempt.record.relationships.find((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-case"));
       const testCase = caseId === undefined ? undefined : artifacts.find((candidate) => candidate.record.id === caseId && candidate.record.type === "test-case");
       if (!testCase || testCase.value.testCaseId !== attempt.value.testCaseId || testCase.value.revisionId !== attempt.value.testCaseRevisionId || testCase.value.instanceId !== attempt.value.testCaseInstanceId) throw new QaSkillsError("Source attempt is not bound to its exact canonical testcase instance", "ARTIFACT_BINDING");
-      return { sourceAttemptArtifactId: attempt.record.id, sourceTestCaseArtifactId: testCase.record.id, testCaseId: asString(attempt.value.testCaseId, "source testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "source testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "source testcase instance ID"), parameters: record(testCase.value.parameters) ? testCase.value.parameters : {} };
+      return { sourceAttemptArtifactId: attempt.record.id, sourceTestCaseArtifactId: testCase.record.id, testCaseId: asString(attempt.value.testCaseId, "source testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "source testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "source testcase instance ID"), parameters: isRecord(testCase.value.parameters) ? testCase.value.parameters : {} };
     });
     return { bugId: asString(bug.value.bugId, "source bug ID"), scenarios };
   } finally { await source.close(); }
@@ -617,8 +612,8 @@ async function assertApprovedCanonicalRevisions(workspace: RunWorkspace, ids: re
   for (const testCase of requested) {
     if (testCase.record.type !== "test-case") throw new QaSkillsError("Execution accepts only registered test case revisions", "ARTIFACT_BINDING");
     const plans = artifacts.filter((plan) => plan.record.type === "test-plan" && testCase.record.relationships.includes(plan.record.id));
-    const approved = plans.some((plan) => record(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true
-      && Array.isArray(plan.value.testCases) && plan.value.testCases.some((entry) => record(entry) && entry.testCaseId === testCase.value.testCaseId));
+    const approved = plans.some((plan) => isRecord(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true
+      && Array.isArray(plan.value.testCases) && plan.value.testCases.some((entry) => isRecord(entry) && entry.testCaseId === testCase.value.testCaseId));
     if (!approved) throw new QaSkillsError("Execution requires approved canonical test case revisions", "ARTIFACT_BINDING");
   }
 }
@@ -648,7 +643,7 @@ async function registerCharter(workspace: RunWorkspace, charter: ExplorationChar
 async function executeExploration(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, charter: ExplorationCharter): Promise<readonly ArtifactRecord[]> {
   const manager = resolveRuntime(runtime.browserManagers, ids.browserManagerId, "browser manager");
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
-  if (!record(environment) || typeof environment.baseUrl !== "string") throw new QaSkillsError("Exploration requires its registered environment", "ARTIFACT_BINDING");
+  if (!isRecord(environment) || typeof environment.baseUrl !== "string") throw new QaSkillsError("Exploration requires its registered environment", "ARTIFACT_BINDING");
   const policyLayers = ids.evidencePolicyId === undefined ? {} : resolveRuntime(runtime.evidencePolicies, ids.evidencePolicyId, "evidence policy");
   const capturePolicy = capturePolicyForEnvironment(environment, policyLayers);
   const attemptId = `EXP-${workspace.runId}-${createEntityId()}`;
