@@ -1,9 +1,9 @@
 import sharp from "sharp";
 
+import { getActiveBrowserSession } from "../browser/session-registry.js";
 import type { ActiveBrowserSession, TelemetryFinding } from "../browser/types.js";
 import type { RunWorkspace } from "../core/run-workspace.js";
 import { createEntityId } from "../core/ids.js";
-import { activeBrowserSessions } from "../operations/execute-browser-test.js";
 import { evidenceFilename, type EvidenceProvenance } from "./manifest.js";
 import { redactNetworkRecord, redactText, validateRedactionPlan, type CssBox, type EvidenceGap, type RedactionPlan } from "./redaction.js";
 
@@ -16,7 +16,7 @@ export type TelemetryScrubber = (payload: TelemetryPayload, context: Readonly<{ 
 type PageRuntime = { document: { createElement(tag: string): { id: string; setAttribute(name: string, value: string): void; style: Record<string, string> }; documentElement: { appendChild(node: unknown): void }; getElementById(id: string): { remove(): void } | null }; scrollX: number; scrollY: number; innerWidth: number; innerHeight: number; location: { href: string } };
 
 function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowserSession | undefined {
-  return attemptId === callerAttemptId ? activeBrowserSessions.get(attemptId) : undefined;
+  return attemptId === callerAttemptId ? getActiveBrowserSession(attemptId) : undefined;
 }
 
 type AttemptBinding = Readonly<{ artifactId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }>;

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "@playwright/test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { activeBrowserSessions, executeTestInstance } from "../../src/operations/execute-browser-test.js";
+import { executeTestInstance } from "../../src/operations/execute-browser-test.js";
+import { activeBrowserSessions } from "../../src/browser/session-registry.js";
 import type { ActiveBrowserSession, BrowserTestStep } from "../../src/browser/types.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";

@@ -1,20 +1,16 @@
 import { aggregateStepResults } from "../browser/assertions.js";
 import { executeBrowserStep } from "../browser/playwright/executor.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
-import type { ActiveBrowserSession, BrowserStepResult, BrowserTestStep, CanonicalBrowserTestCase, ExecuteTestInput, InternalExecuteTestInput, TestAttempt } from "../browser/types.js";
+import { activeBrowserSessions } from "../browser/session-registry.js";
+import type { BrowserStepResult, BrowserTestStep, CanonicalBrowserTestCase, ExecuteTestInput, InternalExecuteTestInput, TestAttempt } from "../browser/types.js";
 import { validateBrowserTestDsl } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { authorizeStep } from "../safety/side-effects.js";
 
-export const activeBrowserSessions = new Map<string, ActiveBrowserSession>();
 const reservedAttemptIds = new Set<string>();
 let executionTail: Promise<void> = Promise.resolve();
-
-export function getActiveBrowserSession(attemptId: string): ActiveBrowserSession | undefined {
-  return activeBrowserSessions.get(attemptId);
-}
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 

@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { captureEvidence, attachEvidence } from "../../src/evidence/collector.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
-import { activeBrowserSessions } from "../../src/operations/execute-browser-test.js";
+import { activeBrowserSessions } from "../../src/browser/session-registry.js";
 
 function pixel(bytes: Buffer, width: number, x: number, y: number): number[] {
   const offset = (y * width + x) * 4;
