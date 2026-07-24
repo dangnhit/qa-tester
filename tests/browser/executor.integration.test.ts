@@ -166,6 +166,26 @@ describe("executeTestInstance", () => {
     await production.close();
   });
 
+  it("pins the fail-open: the external permit-requiring step blocked WITH environment executes with no authorization decision WITHOUT environment", async () => {
+    const dsl = { steps: [{ id: "external-open", action: { kind: "open", url: baseUrl }, sideEffect: "external" as const }] } satisfies { steps: readonly BrowserTestStep[] };
+    const approved = await governedWorkspace({ policy: "human-review", dsl });
+    await approved.workspace.registerArtifactValue({
+      type: "approval-decision", relationships: [approved.registeredPlan.id], provenance: "human-approval:reviewer",
+      value: { artifactType: "approval-decision", schemaVersion: "1.0.0", producerVersion: "1.0.0", approvalId: "APPROVAL-FAILOPEN", runId: approved.workspace.runId, planArtifactId: approved.registeredPlan.id, planSha256: approved.registeredPlan.sha256, decision: "APPROVED", approvedBy: "reviewer", approvedAt: "2026-07-24T00:00:00.000Z" },
+    });
+
+    // Contrast: the identical external `open` step, run WITH `environment` and no permit, is denied by authorization (matches the `:159` `ATTEMPT-NO-PERMIT` pin).
+    const withEnvironment = await executeTestInstance({ workspace: approved.workspace, browser, attemptId: "ATTEMPT-FAILOPEN-WITH-ENV", testCaseArtifactId: approved.registeredCase.id, environment });
+    expect(withEnvironment.status).toBe("BLOCKED");
+    expect(withEnvironment.steps.map((step) => step.status)).toEqual(["BLOCKED"]);
+
+    // CHARACTERIZATION: safety authorization is currently opt-in — omitting `environment` disarms it. A later hardening will make authorization mandatory; this pin must then flip.
+    const withoutEnvironment = await executeTestInstance({ workspace: approved.workspace, browser, attemptId: "ATTEMPT-FAILOPEN-NO-ENV", testCaseArtifactId: approved.registeredCase.id });
+    expect(withoutEnvironment.status).toBe("PASSED");
+    expect(withoutEnvironment.status).not.toBe("BLOCKED");
+    expect(withoutEnvironment.steps.every((step) => step.status !== "BLOCKED")).toBe(true);
+  });
+
   it("serializes concurrent calls into distinct fresh contexts, exposes the registry during execution, and recovers after a failure", async () => {
     const { workspace, registeredCase } = await governedWorkspace();
     const contexts: object[] = [];
