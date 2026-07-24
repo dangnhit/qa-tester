@@ -26,6 +26,7 @@ import { createEntityId } from "../core/ids.js";
 import { validateArtifact } from "../contracts/validator.js";
 import type { ExternalPermitRegistry } from "../safety/external-permits.js";
 import { evaluatePublicTerminalProfile } from "../core/artifact-profiles.js";
+import { deriveTestPlanApproval, type ApprovalEnvironment } from "../planning/approval.js";
 
 /** Closed operation contracts: the public adapter cannot inject callbacks or untyped objects. */
 export type WorkflowOperationInputMap = {
@@ -283,11 +284,18 @@ function missingRuntimeLabel(runtime: QaRuntimeRegistry, input: QaWorkflowInput)
   return undefined;
 }
 
-/**
- * Imports a checked, terminal canonical planning bundle in dependency order.
- * Relationships are rebuilt locally rather than copied as foreign manifest IDs.
- */
-export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle: CanonicalPlanBundleRef): Promise<ReadonlyMap<string, ArtifactRecord>> {
+type CanonicalPlanImportType = "requirement-analysis" | "test-plan" | "test-case" | "coverage-obligation";
+type CanonicalPlanImportItem = Readonly<{
+  key: string;
+  type: CanonicalPlanImportType;
+  value: Record<string, unknown>;
+  relationshipKeys: readonly string[];
+  referenceFields?: Readonly<Record<string, string>>;
+  provenance: string;
+}>;
+
+/** Rebuild the exact canonical target batch from a checked terminal source bundle. */
+async function buildCanonicalPlanImportBatch(workspace: RunWorkspace, bundle: CanonicalPlanBundleRef): Promise<readonly CanonicalPlanImportItem[]> {
   if (bundle.sourceRunId === workspace.runId || bundle.artifacts.length === 0 || new Set(bundle.artifacts.map((item) => item.artifactId)).size !== bundle.artifacts.length) {
     throw new QaSkillsError("Canonical plan bundle reference is invalid", "ARTIFACT_BINDING");
   }
@@ -303,11 +311,11 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
     }
     const selected = loaded.filter((item) => requested.has(item.record.id));
     if (selected.length !== requested.size) throw new QaSkillsError("Canonical plan bundle references an unknown source record", "ARTIFACT_BINDING");
-    const accepted = new Set(["requirement-analysis", "test-plan", "test-case", "coverage-obligation"]);
-    if (selected.some((item) => !accepted.has(item.record.type))) throw new QaSkillsError("Canonical plan bundle contains a non-planning artifact", "ARTIFACT_BINDING");
+    const accepted = new Set<CanonicalPlanImportType>(["requirement-analysis", "test-plan", "test-case", "coverage-obligation"]);
+    if (selected.some((item) => !accepted.has(item.record.type as CanonicalPlanImportType))) throw new QaSkillsError("Canonical plan bundle contains a non-planning artifact", "ARTIFACT_BINDING");
     for (const type of accepted) if (!selected.some((item) => item.record.type === type)) throw new QaSkillsError(`Canonical plan bundle is incomplete: missing ${type}`, "ARTIFACT_BINDING");
     const selectedIds = new Set(selected.map((item) => item.record.id));
-    const sourcePlanningIds = new Set(loaded.filter((item) => accepted.has(item.record.type)).map((item) => item.record.id));
+    const sourcePlanningIds = new Set(loaded.filter((item) => accepted.has(item.record.type as CanonicalPlanImportType)).map((item) => item.record.id));
     if (selected.some((item) => item.record.relationships.some((id) => sourcePlanningIds.has(id) && !selectedIds.has(id)))) {
       throw new QaSkillsError("Canonical plan bundle omits a planning dependency", "ARTIFACT_BINDING");
     }
@@ -327,24 +335,18 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
     for (const requirementId of requiredRequirementIds) if (!obligations.some((item) => item.value.requirementId === requirementId)) throw new QaSkillsError("Canonical plan bundle omits a coverage obligation for a planned expected result", "ARTIFACT_BINDING");
     const environment = (await workspace.readRegisteredArtifacts()).find((item) => item.record.type === "environment-profile")?.value;
     if (typeof environment?.classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
-    const batch = [...selected].sort((left, right) => {
+    return [...selected].sort((left, right) => {
       const order = ["requirement-analysis", "test-plan", "test-case", "coverage-obligation"];
       return order.indexOf(left.record.type) - order.indexOf(right.record.type) || left.record.id.localeCompare(right.record.id);
     }).map((item) => {
-      const type = item.record.type as "requirement-analysis" | "test-plan" | "test-case" | "coverage-obligation";
+      const type = item.record.type as CanonicalPlanImportType;
       const value = JSON.parse(JSON.stringify(item.value)) as Record<string, unknown>;
       let referenceFields: Record<string, string> | undefined;
       if (type === "coverage-obligation") {
         const sourceAnalysis = asString(value.requirementAnalysisArtifactId, "coverage obligation requirement analysis ID");
         referenceFields = { requirementAnalysisArtifactId: sourceAnalysis };
       }
-      if (type === "test-plan") {
-        // A plan's approval is always re-derived in the target workspace from
-        // its imported requirement analyses and target environment.  Carrying
-        // the source decision across the public boundary would be a
-        // self-asserted value and is rejected by workspace registration.
-        delete value.approvalDecision;
-      }
+      if (type === "test-plan") delete value.approvalDecision;
       return {
         key: item.record.id,
         type,
@@ -354,8 +356,51 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
         provenance: canonicalImportProvenance(bundle.sourceRunId, { artifactId: item.record.id, sha256: item.record.sha256 }),
       };
     });
-    return workspace.registerArtifactValueBatch(batch);
   } finally { await source.close(); }
+}
+
+/** Imports a checked canonical planning bundle in dependency order with rebuilt target relationships. */
+export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle: CanonicalPlanBundleRef): Promise<ReadonlyMap<string, ArtifactRecord>> {
+  return workspace.registerArtifactValueBatch(await buildCanonicalPlanImportBatch(workspace, bundle));
+}
+
+async function assertCanonicalPlanImportMapping(workspace: RunWorkspace, bundle: CanonicalPlanBundleRef, imported: readonly RegisteredWorkspaceArtifact[]): Promise<readonly string[]> {
+  const batch = await buildCanonicalPlanImportBatch(workspace, bundle);
+  if (imported.length !== batch.length) throw new QaSkillsError("Canonical import does not have an exact one-to-one source artifact mapping", "ARTIFACT_BINDING");
+  const mapped = new Map<string, RegisteredWorkspaceArtifact>();
+  for (const item of batch) {
+    const matches = imported.filter((artifact) => artifact.record.provenance === item.provenance);
+    if (matches.length !== 1 || matches[0]?.record.type !== item.type) throw new QaSkillsError("Canonical import provenance does not map to the exact source artifact type", "ARTIFACT_BINDING");
+    mapped.set(item.key, matches[0]);
+  }
+  const targetArtifacts = await workspace.readRegisteredArtifacts();
+  const classification = targetArtifacts.find((artifact) => artifact.record.type === "environment-profile")?.value.classification;
+  if (!["local", "test", "staging", "production"].includes(String(classification))) throw new QaSkillsError("Import target has no valid approval environment", "ARTIFACT_BINDING");
+  const requirementAnalyses = batch.filter((item) => item.type === "requirement-analysis").map((item) => item.value);
+  for (const item of batch) {
+    const actual = mapped.get(item.key);
+    if (!actual) throw new QaSkillsError("Canonical import source artifact mapping is incomplete", "ARTIFACT_BINDING");
+    let expectedValue = JSON.parse(JSON.stringify(item.value)) as Record<string, unknown>;
+    for (const [field, key] of Object.entries(item.referenceFields ?? {})) {
+      const dependency = mapped.get(key);
+      if (!dependency) throw new QaSkillsError("Canonical import reference dependency mapping is incomplete", "ARTIFACT_BINDING");
+      expectedValue[field] = dependency.record.id;
+    }
+    if (item.type === "test-plan") {
+      expectedValue = { ...expectedValue, approvalDecision: deriveTestPlanApproval({ plan: expectedValue, requirementAnalyses, environment: { classification: classification as ApprovalEnvironment["classification"] } }) };
+    }
+    const expectedRelationships = item.relationshipKeys.map((key) => {
+      const dependency = mapped.get(key);
+      if (!dependency) throw new QaSkillsError("Canonical import relationship dependency mapping is incomplete", "ARTIFACT_BINDING");
+      return dependency.record.id;
+    });
+    const expectedChecksum = sha256Text(`${JSON.stringify(expectedValue, null, 2)}\n`);
+    if (JSON.stringify(actual.value) !== JSON.stringify(expectedValue) || actual.record.sha256 !== expectedChecksum
+      || JSON.stringify(actual.record.relationships) !== JSON.stringify(expectedRelationships)) {
+      throw new QaSkillsError("Canonical import target value, checksum, or rebuilt dependencies do not match the exact source artifact mapping", "ARTIFACT_BINDING");
+    }
+  }
+  return batch.map((item) => mapped.get(item.key)!.record.id);
 }
 
 function resolveRuntime<T>(items: Readonly<Record<string, T>> | undefined, id: string | undefined, label: string): T {
@@ -814,11 +859,9 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
     } else if (provenanceImports.length === expected.size
       && provenanceImports.every((artifact) => expected.has(artifact.record.provenance))
       && [...expected].every((provenance) => provenanceImports.filter((artifact) => artifact.record.provenance === provenance).length === 1)) {
-      // The canonical batch commit may win the crash race against the following
-      // checkpoint. Its source IDs and source checksums are embedded in the
-      // provenance, while readRegisteredArtifacts has revalidated every target
-      // checksum and semantic relationship. Adopt only that exact complete set.
-      state.importedArtifactIds = provenanceImports.map((artifact) => artifact.record.id);
+      // The batch commit may win the crash race against its checkpoint. Rebuild
+      // every exact source-to-target mapping before adopting those target IDs.
+      state.importedArtifactIds = [...await assertCanonicalPlanImportMapping(state.workspace, state.input.bundle, provenanceImports)];
     } else {
       throw new QaSkillsError("Already-imported canonical bundle mapping is partial, duplicated, or does not match the exact source checksum set", "ARTIFACT_BINDING");
     }
@@ -828,6 +871,7 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
       || [...expected].some((provenance) => !imported.some((artifact) => artifact.record.provenance === provenance))) {
       throw new QaSkillsError("Workflow checkpoint canonical bundle mapping is incomplete or does not match the exact source artifacts", "ARTIFACT_BINDING");
     }
+    await assertCanonicalPlanImportMapping(state.workspace, state.input.bundle, imported);
   }
   if (state.executionCaseIds.length === 0) state.executionCaseIds = (await state.workspace.readRegisteredArtifacts()).filter((artifact) => state.importedArtifactIds.includes(artifact.record.id) && artifact.record.type === "test-case").map((artifact) => artifact.record.id);
 }

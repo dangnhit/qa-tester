@@ -200,6 +200,29 @@ describe("public runtime QA Tester", () => {
       .rejects.toThrow(/partial|duplicated|exact source checksum set/i);
   });
 
+  it.each(["same-type", "cross-type"] as const)("rejects a complete canonical batch whose %s provenance mappings are swapped", async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), `qa-runtime-import-swap-${kind}-`)); roots.push(root);
+    const bundle = await sourceBundle(root, kind === "same-type" ? { sourceBug: "partial" } : {});
+    const targetRunId = await crashAfterCanonicalImport(root, bundle);
+    const manifestPath = join(root, "qa-results", targetRunId, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { type: string; provenance: string }[] };
+    const imported = manifest.artifacts.filter((artifact) => artifact.provenance.startsWith(`runtime-import:${bundle.sourceRunId}:`));
+    const swapped = kind === "same-type"
+      ? imported.filter((artifact) => artifact.type === "test-case").slice(0, 2)
+      : [imported.find((artifact) => artifact.type === "requirement-analysis"), imported.find((artifact) => artifact.type === "test-plan")].filter((artifact): artifact is { type: string; provenance: string } => artifact !== undefined);
+    if (swapped.length !== 2) throw new Error(`Expected two ${kind} imported artifacts`);
+    [swapped[0]!.provenance, swapped[1]!.provenance] = [swapped[1]!.provenance, swapped[0]!.provenance];
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      testDataRegistries: { trusted: new TestDataHookRegistry([], {}) },
+      evidencePolicies: { required: { safety: { screenshot: "required" } } },
+    });
+
+    await expect(tester({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } }))
+      .rejects.toThrow(/mapping|provenance|source artifact/i);
+  });
+
   it("runs a full lifecycle through a real Chromium browser and only finalizes registered evidence-backed artifacts", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-public-")); roots.push(root);
     const bundle = await sourceBundle(root);

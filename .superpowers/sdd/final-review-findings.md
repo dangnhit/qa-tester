@@ -65,6 +65,10 @@ Reviewed HEAD: `024872e`
 3. Standalone agent-authored specialist skills have no public way to create an active
    Run Workspace and Requirement Analyzer uses an unexplained `RUN_ID`. Add a safe
    public nonterminal creation command and use its returned ID in both shell recipes.
+4. Crash-recovery adoption treats canonical import provenance as an unordered set, so
+   swapping complete provenance strings between target records is accepted. Bind each
+   target one-to-one to its exact source type, artifact ID/checksum provenance,
+   transformed canonical value/checksum, and rebuilt relationships/dependencies.
 
 ### Minor
 
