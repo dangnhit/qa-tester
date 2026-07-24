@@ -30,6 +30,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/run-demo.ts",
     "scan:secrets": "tsx scripts/check-secrets.ts",
     "generate:types": "tsx scripts/generate-types.ts",
@@ -37,10 +38,10 @@
     "smoke:package": "tsx scripts/smoke-package-consumer.ts"
   },
   "dependencies": {
+    "@playwright/test": "^1.54.1",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "commander": "^14.0.0",
-    "@playwright/test": "^1.54.1",
     "sharp": "^0.34.3",
     "ulid": "^3.0.1",
     "yaml": "^2.8.1"
@@ -48,6 +49,7 @@
   "devDependencies": {
     "@eslint/js": "^9.31.0",
     "@types/node": "^24.0.15",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^9.31.0",
     "json-schema-to-typescript": "^15.0.4",
     "tsx": "^4.20.3",
