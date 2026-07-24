@@ -1,4 +1,4 @@
-import { QaSkillsError } from "../core/errors.js";
+import { QaSkillsError } from "./errors.js";
 
 export const publicWorkflowModes = ["plan", "execute", "full", "exploratory", "retest", "regression"] as const;
 export type PublicWorkflowMode = (typeof publicWorkflowModes)[number];

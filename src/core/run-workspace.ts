@@ -25,7 +25,7 @@ import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin 
 import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
-import { operationsForMode, type WorkflowOperationName } from "../orchestration/modes.js";
+import { operationsForMode, type WorkflowOperationName } from "./modes.js";
 
 export type ArtifactRecord = {
   id: string;

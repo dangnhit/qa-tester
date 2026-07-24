@@ -5,7 +5,7 @@ import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } fr
 import { sha256Text } from "../core/checksum.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
-import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../orchestration/modes.js";
+import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import { activeBrowserSessions } from "../browser/session-registry.js";
 import type { SecretResolver } from "../browser/types.js";

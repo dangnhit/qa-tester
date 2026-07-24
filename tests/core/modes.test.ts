@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { operationNames, operationsForMode, resolveOperationOrder } from "../../src/orchestration/modes.js";
+import { operationNames, operationsForMode, resolveOperationOrder } from "../../src/core/modes.js";
 import { createQaTester, createUnsafeWorkflowRunnerForTests, finalizeWorkflowOutcome, workflowOperationAdaptersForTests } from "../../src/operations/run-workflow.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
