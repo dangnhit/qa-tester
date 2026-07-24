@@ -11,5 +11,5 @@ describe("compiled package consumer surface", () => {
     expect(consumer.createQaTester).toEqual(expect.any(Function));
     expect(consumer.selectRegressionCases).toEqual(expect.any(Function));
     expect("createUnsafeWorkflowRunnerForTests" in consumer).toBe(false);
-  });
+  }, 60_000); // runs a full `npm run build` inside the test; the 5s default flakes under parallel load
 });
