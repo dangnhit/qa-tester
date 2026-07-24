@@ -128,6 +128,22 @@ _Avoid_: Canonical artifact, runtime output
 A validated, normalized, immutable artifact registered by the QA Runtime in a **Run Artifact Manifest**.
 _Avoid_: Agent draft, Markdown projection
 
+**Execution Provenance**:
+The recorded basis on which the QA Runtime accepts a test result as observed rather than merely asserted.
+_Avoid_: Result origin, test source, artifact provenance
+
+**Runtime-Observed Execution**:
+A test result produced by a runner process the QA Runtime itself started and whose exit status and output it captured.
+_Avoid_: External result, imported result, adapter result
+
+**Reviewed Test Suite**:
+A committed collection of executable test files authored outside the **Test DSL**, whose commit identity is the evidence that a human accepted them.
+_Avoid_: External tests, imported suite, legacy tests
+
+**Human Attestation**:
+An identified person's immutable signed claim that an evaluation no machine performed was actually carried out.
+_Avoid_: Manual test result, sign-off, approval decision
+
 **Artifact Version**:
 The artifact-type-specific semantic version that identifies the contract used by one canonical artifact.
 _Avoid_: Runtime version, product version
@@ -320,6 +336,13 @@ _Avoid_: Output folder template, global checklist
 - The **QA Runtime** can serve multiple agent-specific **Skill Adapters**
 - The **QA Runtime** controls the **Runtime Browser Driver** directly
 - An **Agent Browser Adapter** produces the same artifact contract as the **Runtime Browser Driver** without being controlled by the **QA Runtime**
+- Every test result carries exactly one **Execution Provenance**
+- Only a **Runtime Browser Driver** execution or a **Runtime-Observed Execution** may satisfy a **Coverage Obligation**
+- A test result supplied as an **Agent Draft** is reportable but never satisfies a **Coverage Obligation**, regardless of the evidence attached to it
+- An **Agent Browser Adapter** result is an **Agent Draft** unless the **QA Runtime** itself started and observed the run that produced it
+- A **Runtime-Observed Execution** runs exactly one **Reviewed Test Suite** and records its commit identity
+- A **Reviewed Test Suite** whose working tree differs from its recorded commit produces no **Runtime-Observed Execution**
+- Agent reasoning may propose a change to a **Reviewed Test Suite** but never executes one it authored in the same run
 - A **QA Run** contains zero or more **Test Attempts**
 - A retest or regression **QA Run** references its source run without changing the source
 - A **Test Attempt** belongs to exactly one **QA Run** and exactly one test case
@@ -337,7 +360,7 @@ _Avoid_: Output folder template, global checklist
 - A **Test Attempt** references exactly one **Test Case Revision** and preserves its input snapshot
 - A **Test Attempt** executes exactly one **Test Case Instance**
 - A product bug references the failing **Test Attempt**, not only the logical **Test Case**
-- Every executed **Test Attempt** has assertion and execution-log **Evidence Items**
+- Every executed **Test Attempt** is substantiated by **Evidence Items** bound either to that attempt or to the **Runtime-Observed Execution** that produced it
 - The required **Evidence Items** depend on the claim being substantiated rather than on a universal screenshot rule
 - Every **Evidence Item** belongs to one **Evidence Manifest** and carries a content checksum
 - Every registered artifact belongs to one **Run Artifact Manifest** and is resolved by artifact reference rather than a hard-coded path
@@ -382,7 +405,8 @@ _Avoid_: Output folder template, global checklist
 - Every member of a **Regression Selection** carries a source, reason, and confidence
 - An **Unmapped Change Risk** prevents a claim of complete regression coverage
 - An exploratory **QA Run** follows exactly one **Exploration Charter**
-- An **Exploratory Finding** may propose a requirement or test case candidate but satisfies no **Coverage Obligation**
+- An exploratory **QA Run** reaches the product only through an **Agent Browser Adapter**, never through the **Runtime Browser Driver**
+- An **Exploratory Finding** is an **Agent Draft**, so it may propose a requirement or test case candidate but satisfies no **Coverage Obligation**
 - A retest **QA Run** produces one **Retest Verdict** for each target **Product Bug**
 - A **Regression Outcome** may affect the **Release Gate** without changing the **Retest Verdict** for the original bug
 - The **Runtime Browser Driver** executes only validated **Test Case Revisions** expressed in the **Test DSL**
@@ -397,6 +421,9 @@ _Avoid_: Output folder template, global checklist
 - An unsafe or failed redaction produces an **Evidence Gap** instead of an unredacted artifact
 - An **Evidence Policy** is bounded first by environment safety, then by artifact-profile minimums, run settings, and testcase requests
 - A testcase may increase evidence capture within the safety boundary but never weaken required evidence
+- A **Browser Evidence Session** archive is retained only when the **Environment Profile** permits it, no secret has been resolved, and no redaction target is declared
+- Declaring any redaction target makes the environment protected, because no archive channel can prove that target was masked
+- A refused archive produces an **Evidence Gap**, never a silently omitted capture
 - A **Browser Evidence Session** may be created independently or attached to an active runtime browser session
 - Console and network **Evidence Items** can substantiate only events observed after their **Browser Evidence Session** began
 - Every browser **Test Attempt** owns a fresh **Browser Attempt Context**
@@ -408,11 +435,14 @@ _Avoid_: Output folder template, global checklist
 - Every observed console error and failed request becomes a **Telemetry Finding** unless classified as a normal browser cancellation
 - A **Telemetry Finding** changes an **Execution Status** only through an explicit testcase assertion or coverage policy
 - An **Accessibility Obligation** distinguishes automated analysis, keyboard evaluation, screen-reader evaluation, and cognitive/manual review
-- The MVP may satisfy automated and keyboard **Accessibility Obligations** but never infers satisfaction of manual methods
+- An automated **Accessibility Obligation** is satisfied only by a machine-produced artifact, and a manual one only by a **Human Attestation**
+- A declared evaluation method never satisfies an **Accessibility Obligation** by matching its own label
 - A **Browser Matrix** may require Chromium, Firefox, WebKit, and declared emulated devices independently
 - Missing execution for one required **Browser Matrix** member is never satisfied by another engine or viewport
-- The MVP has one executable **Execution Surface**: web browser interfaces controlled through Playwright
-- API-only, native mobile, desktop, and real-device obligations remain explicit without being credited to the browser **Execution Surface**
+- A **Browser Matrix** member is credited from the engine the **QA Runtime** observed, never from the engine a test case declared
+- Every **Coverage Obligation** declares exactly one **Execution Surface**
+- The **QA Runtime** executes the browser **Execution Surface** itself and reaches every other surface only through a **Runtime-Observed Execution**
+- An **Execution Surface** that no executor covers still produces authorable obligations, which remain explicitly unmet rather than absent
 - Every **QA Run** has one immutable **Run Identity** formed from a UTC timestamp and random suffix
 - Attempts and evidence use time-sortable globally unique IDs without shared counters
 - A **Run Outcome** is assigned only after final artifact validation
@@ -571,6 +601,10 @@ _Avoid_: Output folder template, global checklist
 - “qa-tester” could name the entire system or its entry-point skill — resolved: **QA Skills** is the system and **QA Tester** is only the orchestrator skill.
 - “Skill” was used for both agent instructions and executable QA behavior — resolved: **Skill Adapter** is agent-facing, while **QA Runtime** is the executable source of truth.
 - “Browser driver” was used for both runtime-controlled Playwright and agent-owned browser tools — resolved: only Playwright is the **Runtime Browser Driver**; built-in and MCP tools use an **Agent Browser Adapter**.
+- “Produces the same artifact contract” could imply that an **Agent Browser Adapter** result satisfies coverage — resolved: contract conformance and coverage credit are separate concerns, and only a **Runtime Browser Driver** execution or a **Runtime-Observed Execution** credits a **Coverage Obligation**.
+- “Who ran the test” was treated as the trust anchor for a result — resolved: the anchor is **Execution Provenance**, which records whether the **QA Runtime** *observed* the run, not whether it *drove the browser*.
+- An **Evidence Item** was assumed to substantiate exactly one **Test Attempt** — resolved: it binds to one attempt or to one **Runtime-Observed Execution**, so many attempts may share the runner output that substantiates them.
+- “Production-ready” could describe either QA Skills itself or the product it evaluates — resolved: **Product Readiness** describes QA Skills, while a **Release Gate** owns the **Release Recommendation** for the system under test.
 - “Retest” could imply updating an earlier result — resolved: retest and regression create new linked **QA Runs** and never overwrite prior evidence.
 - “Failed test” mixed the observed outcome with its cause — resolved: **Execution Status** and **Failure Classification** are separate concepts.
 - “Bug report” could absorb every non-passing outcome — resolved: only product defects become bugs; test/environment defects and unknown causes have distinct incident/finding artifacts.
@@ -609,6 +643,7 @@ _Avoid_: Output folder template, global checklist
 - “Permission for external side effects” could be broad prompt text — resolved: execution requires a scoped **External Effect Permit**, while real payments and destructive external actions remain prohibited in the MVP.
 - “Seed script” could mean arbitrary agent-generated shell code — resolved: execution uses only trusted, pre-registered **Test Data Hooks** with typed resource and cleanup contracts.
 - “Raw screenshot” could imply persisted sensitive pixels — resolved: protected targets produce **Sanitized Raw Evidence**, and unsafe capture becomes an explicit **Evidence Gap**.
+- “Redact before persisting” was applied only to screenshots while trace archives kept unmasked DOM and network content — resolved: an archive channel that cannot honour a declared redaction target is refused as an **Evidence Gap**, never retained unmasked.
 - Multiple evidence settings could silently override one another — resolved: **Evidence Policy** has explicit safety, profile, run, and testcase precedence.
 - “Independent evidence collection” could imply retroactive browser telemetry — resolved: console and network evidence require a live **Browser Evidence Session**, while existing screenshots may still be annotated with provenance.
 - “Reuse the browser” could mean sharing state between tests — resolved: only the browser process may be reused; every **Test Attempt** gets an isolated **Browser Attempt Context**.

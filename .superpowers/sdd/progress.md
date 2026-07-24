@@ -1,26 +1,17 @@
-# SDD Progress
+# SDD Progress — Production Readiness
 
-- Branch: `codex/qa-skills-mvp`
-- Merge base: `623f074`
-- Plan: `docs/superpowers/plans/2026-07-23-qa-skills-mvp.md`
-- Plan commit: `ac82404`
+- Branch: `feat/production-readiness`
+- Merge base: `a642777`
+- Plan: `docs/superpowers/plans/2026-07-24-production-readiness.md`
+
+## Task map (v0.2)
+
+- T1 = D1  init writes artifactDirectory + README + round-trip test
+- T2 = D2  ship dist/shared/templates + files array + smoke:package renders
+- T3 = D3  exit-code map from outcome + gate recommendation
+- T4 = D4  --help exit 0 + .description() + dedup stderr
+- T5 = D10 surface AJV diagnostics at 6 ingest sites + name file
 
 ## Tasks
 
-- Task 1: complete (commits ac82404..801ee2b, review clean)
-- Task 2: complete (commits 7497d06..2b14a3a, review clean)
-- Task 3: complete (commits 545cb2e..04c1796, review clean)
-- Task 4: complete (commits ef784ca..b271c90, review clean)
-- Task 5: complete (commits dc5f986..f369690, review clean)
-- Task 6: complete (commits f755a20..e93d69b, review clean)
-- Task 7: complete (commits 98669fc..da46b2a, review clean)
-- Task 8: complete (commits 1346bd0..68c6578, review clean)
-- Task 9: complete (commits fd3bdb7..78f8a69, review clean)
-- Task 10: complete (commits 3b9f790..d7e0b15, review clean)
-- Broad final review fix wave: complete (all Critical, Important, and Minor findings resolved).
-- Follow-up broad re-review fix wave: complete (5 Important and 1 Minor resolved; exact acceptance passed with 330 tests and clean package consumer green).
-
-## Final review
-
-- Decision after fix wave: `READY_FOR_REVIEW`.
-- Verification: exact acceptance sequence, secret scan, and `npm pack` clean-consumer smoke all pass.
+(none complete yet)
