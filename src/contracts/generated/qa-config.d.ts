@@ -23,7 +23,6 @@ export type RelativeModulePath = string;
 
 export interface QASkillsDeclarativeConfiguration {
   version: 1;
-  artifactDirectory?: string;
   headers?: {
     /**
      * This interface was referenced by `undefined`'s JSON-Schema definition

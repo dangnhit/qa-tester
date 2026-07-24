@@ -41,7 +41,7 @@ async function exists(path: string): Promise<boolean> {
 
 async function initialize(cwd: string): Promise<void> {
   const configPath = join(cwd, "qa.config.yaml");
-  if (!(await exists(configPath))) await writeFile(configPath, "version: 1\nresultsDirectory: qa-results\n", "utf8");
+  if (!(await exists(configPath))) await writeFile(configPath, "version: 1\n", "utf8");
   const ignorePath = join(cwd, ".gitignore");
   const existing = (await exists(ignorePath)) ? await readFile(ignorePath, "utf8") : "";
   if (!existing.split(/\r?\n/).includes("qa-results/")) await appendFile(ignorePath, `${existing.length > 0 && !existing.endsWith("\n") ? "\n" : ""}qa-results/\n`, "utf8");

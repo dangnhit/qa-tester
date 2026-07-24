@@ -14,27 +14,28 @@ async function config(root: string, relative: string, contents: string): Promise
 }
 
 describe("loadQaConfig", () => {
-  it("uses exactly the explicit config and resolves relative paths from its directory", async () => {
+  it("uses exactly the explicit config and reports its own directory, ignoring a nearer candidate", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
-    const explicit = await config(root, "configs/qa.config.yaml", "version: 1\nartifactDirectory: ./artifacts\n");
-    await config(root, "qa.config.yaml", "version: 1\nartifactDirectory: ./wrong\n");
+    const explicit = await config(root, "configs/qa.config.yaml", "version: 1\nheaders:\n  X-Explicit: yes-explicit\n");
+    await config(root, "qa.config.yaml", "version: 1\nheaders:\n  X-Wrong: yes-wrong\n");
 
     const loaded = await loadQaConfig({ cwd: root, configPath: explicit });
 
     expect(loaded.configPath).toBe(await import("node:fs/promises").then(({ realpath }) => realpath(explicit)));
-    expect(loaded.artifactDirectory).toBe(join(await import("node:fs/promises").then(({ realpath }) => realpath(root)), "configs", "artifacts"));
+    expect(loaded.configDirectory).toBe(join(await import("node:fs/promises").then(({ realpath }) => realpath(root)), "configs"));
+    expect(loaded.snapshot).toMatchObject({ headers: { "X-Explicit": "yes-explicit" } });
   });
 
   it("chooses the nearest supported config without merging and rejects executable TypeScript", async () => {
     const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
-    await config(root, "qa.config.yaml", "version: 1\nartifactDirectory: ./root\n");
-    const nested = await config(root, "packages/shop/qa.config.yaml", "version: 1\nartifactDirectory: ./shop\n");
+    await config(root, "qa.config.yaml", "version: 1\nheaders:\n  X-Scope: root\n");
+    const nested = await config(root, "packages/shop/qa.config.yaml", "version: 1\nheaders:\n  X-Scope: shop\n");
     await mkdir(join(root, "packages/shop/src"), { recursive: true });
     await config(root, "packages/shop/qa.config.ts", "export default {};\n");
 
     const loaded = await loadQaConfig({ cwd: join(root, "packages/shop/src") });
     expect(loaded.configPath).toBe(await import("node:fs/promises").then(({ realpath }) => realpath(nested)));
-    expect(loaded.snapshot).toMatchObject({ artifactDirectory: "./shop" });
+    expect(loaded.snapshot).toMatchObject({ headers: { "X-Scope": "shop" } });
     await expect(loadQaConfig({ cwd: root, configPath: join(root, "packages/shop/qa.config.ts") })).rejects.toThrow(/executable|typescript|json|yaml/i);
   });
 
@@ -44,6 +45,12 @@ describe("loadQaConfig", () => {
     const malformed = await config(root, "malformed.yaml", "version: 1\nhooks:\n  - id: seed\n    kind: command\n    command: node\n");
     await expect(loadQaConfig({ cwd: root, configPath: unknown })).rejects.toThrow(/config|schema|unknown/i);
     await expect(loadQaConfig({ cwd: root, configPath: malformed })).rejects.toThrow(/config|schema|hook/i);
+  });
+
+  it("rejects the removed artifactDirectory field as a schema error", async () => {
+    const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/qa-config-"));
+    const removedField = await config(root, "artifact-directory.yaml", "version: 1\nartifactDirectory: ./artifacts\n");
+    await expect(loadQaConfig({ cwd: root, configPath: removedField })).rejects.toThrow(/config|schema/i);
   });
 
   it("keeps secret references in the snapshot and resolves/scrubs only operation memory", async () => {

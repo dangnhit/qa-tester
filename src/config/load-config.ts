@@ -7,7 +7,6 @@ import { validateQaConfig } from "../contracts/validator.js";
 export type QaConfig = Readonly<{
   configPath?: string;
   configDirectory: string;
-  artifactDirectory: string;
   snapshot: Readonly<Record<string, unknown>>;
 }>;
 
@@ -58,13 +57,12 @@ export async function loadQaConfig(options: { cwd?: string; configPath?: string 
   const selected = options.configPath === undefined
     ? await discover(cwd)
     : resolve(cwd, isAbsolute(options.configPath) ? options.configPath : options.configPath);
-  if (selected === undefined) return freeze({ configDirectory: cwd, artifactDirectory: join(cwd, "qa-results"), snapshot: { version: 1 } });
+  if (selected === undefined) return freeze({ configDirectory: cwd, snapshot: { version: 1 } });
   if (!(await exists(selected))) throw new Error(`QA configuration does not exist: ${selected}`);
   const configPath = await realpath(selected);
   const parsed = parseAuthoringDocument(await readFile(configPath, "utf8"), configFormat(configPath));
   if (!validateQaConfig(parsed).valid) throw new Error("QA configuration does not match the strict declarative schema");
   const snapshot = freeze(JSON.parse(JSON.stringify(parsed)) as Record<string, unknown>);
   const configDirectory = dirname(configPath);
-  const configuredDirectory = typeof snapshot.artifactDirectory === "string" ? snapshot.artifactDirectory : "qa-results";
-  return freeze({ configPath, configDirectory, artifactDirectory: resolve(configDirectory, configuredDirectory), snapshot });
+  return freeze({ configPath, configDirectory, snapshot });
 }

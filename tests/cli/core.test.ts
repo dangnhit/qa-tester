@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ExitCode } from "../../src/cli/exit-codes.js";
 import { runCli } from "../../src/cli/program.js";
+import { loadQaConfig } from "../../src/config/load-config.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 
 const roots: string[] = [];
@@ -42,6 +43,14 @@ describe("CLI core", () => {
     expect(result.stdout).toBe("");
     expect(await readFile(join(directory, "qa.config.yaml"), "utf8")).toContain("version:");
     expect(await readFile(join(directory, ".gitignore"), "utf8")).toContain("node_modules/\nqa-results/\n");
+  });
+
+  it("writes an init config that loadQaConfig accepts without throwing", async () => {
+    const directory = await root();
+    const initialized = await runCli(["init"], { cwd: directory });
+    expect(initialized.exitCode).toBe(ExitCode.SUCCESS);
+
+    await expect(loadQaConfig({ cwd: directory })).resolves.toMatchObject({ snapshot: { version: 1 } });
   });
 
   it("publicly creates an unlocked nonterminal run workspace for standalone specialist skills", async () => {

@@ -7,7 +7,6 @@
   "required": ["version"],
   "properties": {
     "version": { "const": 1 },
-    "artifactDirectory": { "type": "string", "minLength": 1 },
     "headers": { "type": "object", "additionalProperties": false, "patternProperties": { "^[A-Za-z][A-Za-z0-9-]*$": { "type": "string", "minLength": 1 } }, "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9-]*$" } },
     "hooks": { "type": "array", "items": { "$ref": "#/$defs/hook" } }
   },

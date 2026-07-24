@@ -35,7 +35,6 @@ This creates `qa.config.yaml` if absent and ensures `qa-results/` is ignored. Th
 
 ```yaml
 version: 1
-resultsDirectory: qa-results
 ```
 
 Project configuration and Test Data Hooks must be reviewed source files. Store only Secret References in inputs; resolve secret values in memory at execution time.
