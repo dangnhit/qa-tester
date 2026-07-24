@@ -33,6 +33,14 @@ try {
   if (version !== "0.1.0") throw new Error(`installed CLI returned ${version}`);
   const installed = JSON.parse(await readFile(join(consumer, "node_modules", "@vigentix", "qa-skills", "package.json"), "utf8")) as { types?: string; private?: boolean };
   if (!installed.types || installed.private === true) throw new Error("installed package metadata is not publishable and typed");
+  const installedPackageRoot = join(consumer, "node_modules", "@vigentix", "qa-skills");
+  for (const locale of ["en", "vi"]) {
+    const templatePath = join(installedPackageRoot, "dist", "shared", "templates", `report.${locale}.md`);
+    const template = await readFile(templatePath, "utf8").catch(() => {
+      throw new Error(`installed package is missing template: ${templatePath}`);
+    });
+    if (template.trim().length === 0) throw new Error(`installed template is empty: ${templatePath}`);
+  }
   process.stdout.write(`clean consumer accepted @vigentix/qa-skills@${version}\n`);
 } finally {
   if (tarball) await rm(tarball, { force: true });
