@@ -19,10 +19,21 @@ export function regressionCaseFromCanonical(value: Record<string, unknown>): Reg
 }
 
 import { sha256Text } from "../core/checksum.js";
-import type { RunWorkspace, ArtifactRecord } from "../core/run-workspace.js";
+import type { ArtifactRecord } from "../core/artifact-record.js";
+import type { ArtifactType } from "../contracts/types.js";
+
+type ChangeScopeWorkspace = {
+  readonly runId: string;
+  registerArtifactValue(input: {
+    type: ArtifactType;
+    value: unknown;
+    relationships: string[];
+    provenance?: string;
+  }): Promise<ArtifactRecord>;
+};
 
 /** Canonicalizes an explicit change input; selection never trusts an unchecksummed caller summary. */
-export async function registerChangeScope(input: Readonly<{ workspace: RunWorkspace; changes: readonly ChangeScope[]; provenance: { kind: "git-diff" | "user-change" | "declared-change"; reference: string } }>): Promise<ArtifactRecord> {
+export async function registerChangeScope(input: Readonly<{ workspace: ChangeScopeWorkspace; changes: readonly ChangeScope[]; provenance: { kind: "git-diff" | "user-change" | "declared-change"; reference: string } }>): Promise<ArtifactRecord> {
   if (input.changes.length === 0) throw new Error("Change scope requires at least one declared change");
   const changes = [...input.changes].sort((left, right) => left.id.localeCompare(right.id)).map((change) => ({ ...change, requirementIds: [...change.requirementIds].sort(), codeSurfaces: [...change.codeSurfaces].sort(), declaredDependencies: [...change.declaredDependencies].sort(), gitPaths: [...change.gitPaths].sort(), userScope: [...change.userScope].sort() }));
   const inputChecksum = sha256Text(JSON.stringify({ changes, provenance: input.provenance }));

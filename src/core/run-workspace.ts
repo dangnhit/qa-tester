@@ -19,6 +19,7 @@ import {
   evaluateArtifactProfile,
   type ArtifactProfileName,
 } from "./artifact-profiles.js";
+import type { ArtifactRecord } from "./artifact-record.js";
 import { sha256, sha256Bytes, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
 import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin } from "./fs.js";
@@ -27,17 +28,7 @@ import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
 
-export type ArtifactRecord = {
-  id: string;
-  type: ArtifactType;
-  relativePath: string;
-  sha256: string;
-  mediaType?: string;
-  captureType?: "screenshot" | "trace" | "console" | "network" | "log";
-  dimensions?: { width: number; height: number };
-  provenance: string;
-  relationships: string[];
-};
+export type { ArtifactRecord } from "./artifact-record.js";
 
 type WorkspaceMetadata = {
   artifactType: "run-metadata";
