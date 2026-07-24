@@ -240,6 +240,9 @@ describe("public runtime QA Tester", () => {
     expect(result.outputs["ingest-coverage-obligation"]).toEqual([expect.objectContaining({ type: "coverage-obligation" })]);
     expect(artifacts.some((item) => item.record.type === "release-gate")).toBe(true);
     expect(artifacts.some((item) => item.record.type === "qa-execution-report")).toBe(true);
+    // The result surfaces the exact persisted gate value, not a recomputation.
+    expect(result.releaseRecommendation).toBe(artifacts.find((item) => item.record.type === "release-gate")?.value.recommendation);
+    expect(result.releaseRecommendation).toBe("READY");
     await workspace.close();
   });
 
@@ -352,6 +355,8 @@ describe("public runtime QA Tester", () => {
     expect(artifacts.filter((item) => item.record.type === "evidence-gap").map((item) => item.value.reason))
       .toContain("Required video capture is unsupported by the active browser manager");
     expect(artifacts.find((item) => item.record.type === "release-gate")?.value.recommendation).toBe("NOT_READY");
+    // Surfaced on the result too, sourced from the same persisted artifact.
+    expect(result.releaseRecommendation).toBe("NOT_READY");
     await workspace.close();
   });
 

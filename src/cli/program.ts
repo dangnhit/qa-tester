@@ -17,7 +17,7 @@ import { installSkills } from "../installer/install.js";
 import { uninstallSkills } from "../installer/uninstall.js";
 import { updateSkills } from "../installer/update.js";
 import { verifySkills } from "../installer/verify.js";
-import { ExitCode, type ExitCode as ExitCodeValue } from "./exit-codes.js";
+import { ExitCode, workflowExitCode, type ExitCode as ExitCodeValue } from "./exit-codes.js";
 
 export type CliResult = { exitCode: ExitCodeValue; stdout: string; stderr: string };
 export type CliOptions = { cwd: string };
@@ -114,7 +114,11 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   const workflowCommand = program.command("workflow");
   workflowCommand.command("run")
     .requiredOption("--input <json>")
-    .action(async (commandOptions: { input: string }) => { stdout += `${JSON.stringify(await runLocalWorkflow({ cwd: options.cwd, inputPath: commandOptions.input }))}\n`; });
+    .action(async (commandOptions: { input: string }) => {
+      const result = await runLocalWorkflow({ cwd: options.cwd, inputPath: commandOptions.input });
+      stdout += `${JSON.stringify(result)}\n`;
+      exitCode = workflowExitCode(result);
+    });
   workflowCommand.command("scaffold")
     .requiredOption("--root <path>").requiredOption("--mode <mode>").requiredOption("--output <path>")
     .option("--environment-file <json>").option("--source-root <path>").option("--source-run-id <id>")

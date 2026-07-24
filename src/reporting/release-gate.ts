@@ -10,6 +10,8 @@ export type ReleaseGateInput = Readonly<{
 }>;
 export type RuleVerdict = Readonly<{ rule: string; passed: boolean; reason: string }>;
 export type ReleaseGateResult = Readonly<{ recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY"; ruleInputs: ReleaseGateInput; verdicts: readonly RuleVerdict[] }>;
+/** The gate's go/no-go verdict, reused wherever a caller surfaces it without recomputing the gate. */
+export type ReleaseRecommendation = ReleaseGateResult["recommendation"];
 export type GateSourceArtifact = Readonly<{ id: string; sha256: string; type: string }>;
 export type DerivedReleaseGate = ReleaseGateResult & Readonly<{ sourceArtifacts: readonly GateSourceArtifact[] }>;
 export type GateWorkspaceArtifact = Readonly<{

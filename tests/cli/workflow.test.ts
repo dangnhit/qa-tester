@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ExitCode } from "../../src/cli/exit-codes.js";
 import { runCli } from "../../src/cli/program.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
@@ -68,6 +69,9 @@ describe("workflow scaffold", () => {
     expect(JSON.parse(await readFile(sourcePath, "utf8"))).toEqual(source);
     await scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "runnable-plan.json"), sourceRoot: root, sourceRunId: workspace.runId });
     await expect(runLocalWorkflow({ cwd: root, inputPath: join(root, "runnable-plan.json") })).resolves.toMatchObject({ mode: "plan", outcome: "COMPLETED" });
+    const successViaCli = await runCli(["workflow", "run", "--input", join(root, "runnable-plan.json")], { cwd: root });
+    expect(successViaCli.exitCode).toBe(ExitCode.SUCCESS);
+    expect(JSON.parse(successViaCli.stdout)).toMatchObject({ mode: "plan", outcome: "COMPLETED" });
     const empty = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment }); await empty.finalize("plan"); await empty.close();
     await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "empty.json"), sourceRoot: root, sourceRunId: empty.runId })).rejects.toThrow(/required canonical planning/i);
     const manifestPath = join(root, "qa-results", workspace.runId, "artifact-manifest.json");

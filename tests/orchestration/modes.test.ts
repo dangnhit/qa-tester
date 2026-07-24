@@ -97,6 +97,9 @@ describe("workflow mode operation plans", () => {
       expect(result.outcome).toBe("COMPLETED_WITH_FAILURES");
       expect(result.validation.valid).toBe(false);
       expect(metadata.status).toBe(result.outcome);
+      // No release-gate artifact was ever registered on this hand-built
+      // workspace: the recommendation must stay undefined, never guessed.
+      expect(result.releaseRecommendation).toBeUndefined();
     } finally {
       await workspace.close();
       await rm(root, { recursive: true, force: true });

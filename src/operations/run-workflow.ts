@@ -27,6 +27,7 @@ import { validateArtifact } from "../contracts/validator.js";
 import type { ExternalPermitRegistry } from "../safety/external-permits.js";
 import { evaluatePublicTerminalProfile } from "../core/artifact-profiles.js";
 import { deriveTestPlanApproval, type ApprovalEnvironment } from "../planning/approval.js";
+import type { ReleaseRecommendation } from "../reporting/release-gate.js";
 
 /** Closed operation contracts: the public adapter cannot inject callbacks or untyped objects. */
 export type WorkflowOperationInputMap = {
@@ -74,7 +75,7 @@ export type WorkflowInput = Readonly<{
   retest?: Readonly<{ sourceBugArtifactId: string; reproductionAttemptIds: readonly string[]; regressionOutcome?: RegressionOutcome }>;
 }>;
 export type WorkflowTerminalStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
-export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation }>;
+export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation }>;
 
 /** A checksum-bound immutable source record.  Public workflows never accept a raw draft. */
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
@@ -763,14 +764,24 @@ export function createQaTesterWithTraceForTests(runtime: QaRuntimeRegistry, trac
   return (input) => runQaTesterWithAdapters(runtime, input, traced);
 }
 
+/** Reads the single persisted release-gate artifact's recommendation; never recomputes the gate. */
+function releaseRecommendationFromArtifacts(artifacts: readonly RegisteredWorkspaceArtifact[]): ReleaseRecommendation | undefined {
+  const gates = artifacts.filter((artifact) => artifact.record.type === "release-gate");
+  if (gates.length !== 1) return undefined;
+  const recommendation = gates[0]!.value.recommendation;
+  if (recommendation === "READY" || recommendation === "READY_WITH_RISKS" || recommendation === "NOT_READY") return recommendation;
+  return undefined;
+}
+
 /** Finalizes once and derives the returned outcome from the same facts persisted in run metadata. */
-export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: PublicWorkflowMode): Promise<{ outcome: Extract<WorkflowTerminalStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">; validation: WorkspaceValidation }> {
+export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: PublicWorkflowMode): Promise<{ outcome: Extract<WorkflowTerminalStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation }> {
   const artifacts = await workspace.readRegisteredArtifacts();
   const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
   const terminal = evaluatePublicTerminalProfile(mode, artifacts.map((artifact) => artifact.record.type));
   const structural = await workspace.finalize(mode, hasExecutionFailures || !terminal.valid ? "COMPLETED_WITH_FAILURES" : undefined);
   const validation = { valid: structural.valid && terminal.valid, diagnostics: [...structural.diagnostics, ...terminal.diagnostics] };
-  return { outcome: hasExecutionFailures || !validation.valid ? "COMPLETED_WITH_FAILURES" : "COMPLETED", validation };
+  const releaseRecommendation = releaseRecommendationFromArtifacts(artifacts);
+  return { outcome: hasExecutionFailures || !validation.valid ? "COMPLETED_WITH_FAILURES" : "COMPLETED", validation, ...(releaseRecommendation === undefined ? {} : { releaseRecommendation }) };
 }
 
 async function outputRecords(workspace: RunWorkspace, output: WorkflowOutput): Promise<readonly ArtifactRecord[]> {
@@ -917,8 +928,8 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
       state.outputs[name] = output as never;
       state.checkpoint = await advanceCheckpoint(workspace, input, state.checkpoint, name, await outputRecords(workspace, output), state);
     }
-    const { outcome, validation } = await finalizeWorkflowOutcome(workspace, input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
+    const { outcome, validation, releaseRecommendation } = await finalizeWorkflowOutcome(workspace, input.mode);
+    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation, ...(releaseRecommendation === undefined ? {} : { releaseRecommendation }) };
   } finally { await workspace.close(); }
 }
 
@@ -1068,7 +1079,7 @@ async function runWorkflowWithRegistry(input: WorkflowInput, registry: WorkflowR
         await exactRetestReproduction(workspace, input.retest);
       }
     }
-    const { outcome, validation } = await finalizeWorkflowOutcome(workspace, input.mode);
-    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation };
+    const { outcome, validation, releaseRecommendation } = await finalizeWorkflowOutcome(workspace, input.mode);
+    return { runId: workspace.runId, mode: input.mode, outcome, operationOrder: order, outputs, validation, ...(releaseRecommendation === undefined ? {} : { releaseRecommendation }) };
   } finally { if (ownsWorkspace) await workspace.close(); }
 }
