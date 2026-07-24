@@ -13,7 +13,7 @@ import {
   evaluateArtifactProfile,
   type ArtifactProfileName,
 } from "./artifact-profiles.js";
-import type { ArtifactRecord } from "./artifact-record.js";
+import { terminalStatuses, type ArtifactRecord, type Manifest } from "./artifact-record.js";
 import { sha256, sha256Bytes, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
 import { assertPathWithin, assertRealpathWithin, atomicWriteFile, resolveWithin } from "./fs.js";
@@ -21,7 +21,7 @@ import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
-import { semanticRules, terminalStatuses, type Manifest, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
+import { semanticRules, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
 import { array, canonicalJson, isRecord } from "./values.js";
 
 export type { ArtifactRecord } from "./artifact-record.js";
@@ -184,6 +184,7 @@ function buildReadContext(
   artifact: LoadedArtifact,
   value: Record<string, unknown>,
   validArtifacts: readonly LoadedArtifact[],
+  artifacts: readonly LoadedArtifact[],
   manifest: Manifest,
   metadata: WorkspaceMetadata,
   path: string,
@@ -206,6 +207,7 @@ function buildReadContext(
     mode: metadata.mode,
     relatedOfType: (type) => validArtifacts.filter((candidate) => candidate.record.type === type).map(toRelated),
     related: () => validArtifacts.map(toRelated),
+    loadedOfType: (type) => artifacts.filter((candidate) => candidate.record.type === type).map(toRelated),
     registeredRecord: (id, type) => manifest.artifacts.find((candidate) => candidate.id === id && (type === undefined || candidate.type === type)),
     openRun: (runId) => RunWorkspace.open(root, runId),
   };
@@ -346,7 +348,7 @@ async function inspectWorkspaceState(
       if (!value) continue;
       const rule = semanticRules[artifact.record.type];
       if (!rule || !rule.appliesTo.read) continue;
-      const violation = await rule.evaluate(buildReadContext(artifact, value, validArtifacts, manifest, metadata, path, expectedRunId));
+      const violation = await rule.evaluate(buildReadContext(artifact, value, validArtifacts, artifacts, manifest, metadata, path, expectedRunId));
       if (violation) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", violation.message) || changed;
       }
@@ -360,35 +362,6 @@ async function inspectWorkspaceState(
       if (duplicates.length > 1) {
         for (const artifact of duplicates) {
           changed = invalidate(artifact, diagnostics, "AMBIGUOUS_ATTEMPT", `Attempt ${String(artifact.value?.attemptId)} has multiple definitions`) || changed;
-        }
-      }
-    }
-    for (const artifact of validArtifacts) {
-      const value = artifact.value as Record<string, unknown>;
-      if (artifact.record.type === "evidence") {
-        const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
-        const match = matches[0];
-        if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
-          || value.testCaseId !== match.value?.testCaseId || value.testCaseRevisionId !== match.value?.testCaseRevisionId || value.testCaseInstanceId !== match.value?.testCaseInstanceId) {
-          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
-        }
-        const evidenceRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "evidence" && candidate.value));
-        const derivation = isRecord(value.derivation) ? value.derivation : undefined;
-        if (evidenceRelationships.length > 0) {
-          const sourceDescriptor = artifacts.find((candidate) => candidate.record.id === derivation?.sourceEvidenceArtifactId && candidate.record.type === "evidence" && candidate.value);
-          const sourceBinary = artifacts.find((candidate) => candidate.record.id === derivation?.sourceBinaryArtifactId && candidate.record.type === "evidence" && !candidate.value);
-          if (!derivation || !sourceDescriptor || !sourceBinary
-            || derivation.sourceEvidenceSha256 !== sourceDescriptor.record.sha256
-            || derivation.sourceRawSha256 !== sourceBinary.record.sha256
-            || !artifact.record.relationships.includes(sourceDescriptor.record.id)
-            || !artifact.record.relationships.includes(sourceBinary.record.id)) {
-            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Derived screenshot must preserve exact source descriptor and raw checksum relationships") || changed;
-          }
-        }
-      } else if (artifact.record.type === "change-scope") {
-        const expectedChecksum = sha256Text(JSON.stringify({ changes: value.changes, provenance: value.provenance }));
-        if (value.runId !== expectedRunId || value.inputChecksum !== expectedChecksum) {
-          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Change scope checksum does not match its registered mapping input") || changed;
         }
       }
     }
@@ -1071,18 +1044,6 @@ export class RunWorkspace {
     }));
   }
 
-  private async readGateWorkspaceArtifacts(manifest: Manifest): Promise<readonly { record: { id: string; sha256: string; type: string; provenance: string }; value: Record<string, unknown> }[]> {
-    return Promise.all(manifest.artifacts
-      .filter((artifact) => artifact.mediaType === undefined && artifact.type !== "release-gate" && artifact.type !== "qa-execution-report")
-      .map(async (artifact) => {
-        const path = await assertRealpathWithin(this.path, artifact.relativePath);
-        if (await sha256(path) !== artifact.sha256) throw new QaSkillsError(`Referenced ${artifact.type} checksum mismatch`, "ARTIFACT_BINDING");
-        const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-        if (!isRecord(value) || !validateArtifact(artifact.type, value).valid) throw new QaSkillsError(`Referenced ${artifact.type} is invalid`, "ARTIFACT_BINDING");
-        return { record: { id: artifact.id, sha256: artifact.sha256, type: artifact.type, provenance: artifact.provenance }, value };
-      }));
-  }
-
   /** Pairs `manifest.artifacts.filter(type && mediaType===undefined)` with `readRegisteredValues`
    *  (which applies the identical filter, in manifest order), so record[i] corresponds to value[i].
    *  Asserts equal length to fail loudly if the two filters ever diverge (design §8 risk 4). */
@@ -1113,6 +1074,16 @@ export class RunWorkspace {
     for (const relatedType of new Set(manifest.artifacts.filter((artifact) => artifact.mediaType === undefined).map((artifact) => artifact.type))) {
       byType.set(relatedType, await this.readRegisteredRelated(manifest, relatedType));
     }
+    // `loadedByType` mirrors the read path's full (validity-agnostic) loaded set: the on-disk
+    // registered descriptors (value present, reused from `byType`) plus media/binary records (no
+    // value), so a write rule needing binary lookups sees the same shape as read's `loadedOfType`.
+    const loadedByType = new Map<ArtifactType, readonly RelatedArtifact[]>();
+    for (const relatedType of new Set(manifest.artifacts.map((artifact) => artifact.type))) {
+      const media = manifest.artifacts
+        .filter((artifact) => artifact.type === relatedType && artifact.mediaType !== undefined)
+        .map((record): RelatedArtifact => ({ record }));
+      loadedByType.set(relatedType, [...(byType.get(relatedType) ?? []), ...media]);
+    }
     const self: ArtifactRecord = { id: "", type, relativePath: "", sha256: "", provenance: "", relationships: [...relationships] };
     return {
       stage: "write",
@@ -1128,70 +1099,29 @@ export class RunWorkspace {
       mode: this.mode,
       relatedOfType: (relatedType) => byType.get(relatedType) ?? [],
       related: () => [...byType.values()].flat(),
+      loadedOfType: (relatedType) => loadedByType.get(relatedType) ?? [],
       registeredRecord: (id, relatedType) => manifest.artifacts.find((artifact) => artifact.id === id && (relatedType === undefined || artifact.type === relatedType)),
       openRun: (runId) => RunWorkspace.open(this.root, runId),
     };
   }
 
-  /** Write-path adapter: looks up the shared rule for `type`, runs it against the write context, and
-   *  throws `QaSkillsError(v.message, v.code)` on a violation. Returns true when it handled the type;
-   *  false falls through to the legacy `if/else` chain for not-yet-migrated types. */
-  private async runSemanticRule(
-    type: ArtifactType,
-    value: Record<string, unknown>,
-    relationships: string[],
-    manifest: Manifest,
-  ): Promise<boolean> {
-    const rule = semanticRules[type];
-    if (!rule || !rule.appliesTo.write) return false;
-    const violation = await rule.evaluate(await this.buildWriteContext(type, value, relationships, manifest));
-    if (violation) throw new QaSkillsError(violation.message, violation.code);
-    return true;
-  }
-
+  /** Write-path adapter (finalized): every write-semantic type now lives in the shared
+   *  `semanticRules` table, so this is purely the rule dispatch — no legacy `if/else` chain remains.
+   *  Looks up the rule for `type`, runs it against the write context, and throws
+   *  `QaSkillsError(v.message, v.code)` on a violation. Types without a write rule (e.g.
+   *  `change-scope`, `workflow-checkpoint`, the no-rule types, and `environment-profile` — whose
+   *  semantic binding is handled inline in `assertArtifactBinding`) are simply not dispatched. The
+   *  universal `runId`/`environmentProfileId` binding stays in `assertArtifactBinding`, not the table. */
   private async assertSemanticReferences(
     type: ArtifactType,
     value: Record<string, unknown>,
     relationships: string[],
     manifest: Manifest,
   ): Promise<void> {
-    if (await this.runSemanticRule(type, value, relationships, manifest)) return;
-    if (type === "evidence") {
-      const records = await this.readGateWorkspaceArtifacts(manifest);
-      const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
-      if (result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
-        || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
-        || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
-        throw new QaSkillsError("Evidence binding requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
-      }
-      const evidenceRelationships = relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "evidence" && artifact.mediaType === undefined));
-      const derivation = isRecord(value.derivation) ? value.derivation : undefined;
-      if (evidenceRelationships.length > 0) {
-        const sourceDescriptor = manifest.artifacts.find((artifact) => artifact.id === derivation?.sourceEvidenceArtifactId && artifact.type === "evidence" && artifact.mediaType === undefined);
-        const sourceBinary = manifest.artifacts.find((artifact) => artifact.id === derivation?.sourceBinaryArtifactId && artifact.type === "evidence" && artifact.mediaType === "image/png");
-        if (!derivation || !sourceDescriptor || !sourceBinary
-          || derivation.sourceEvidenceSha256 !== sourceDescriptor.sha256
-          || derivation.sourceRawSha256 !== sourceBinary.sha256
-          || !relationships.includes(sourceDescriptor.id)
-          || !relationships.includes(sourceBinary.id)) {
-          throw new QaSkillsError("Derived screenshot must preserve exact source descriptor and raw checksum relationships", "ARTIFACT_BINDING");
-        }
-      }
-    } else if (type === "evidence-gap") {
-      if (value.scope === "operational") {
-        if (value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined || relationships.some((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result"))) {
-          throw new QaSkillsError("Operational Evidence Gap must not claim an attempt binding", "ARTIFACT_BINDING");
-        }
-      } else {
-        const records = await this.readGateWorkspaceArtifacts(manifest);
-        const result = records.filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === value.attemptId);
-        if (value.scope !== "attempt" || result.length !== 1 || relationships.filter((id) => id === result[0]?.record.id).length !== 1
-          || relationships.filter((id) => manifest.artifacts.some((artifact) => artifact.id === id && artifact.type === "test-result")).length !== 1
-          || value.testCaseId !== result[0]?.value.testCaseId || value.testCaseRevisionId !== result[0]?.value.testCaseRevisionId || value.testCaseInstanceId !== result[0]?.value.testCaseInstanceId) {
-          throw new QaSkillsError("Attempt-scoped Evidence Gap requires one exact registered test result relationship and matching testcase identity", "ARTIFACT_BINDING");
-        }
-      }
-    }
+    const rule = semanticRules[type];
+    if (!rule || !rule.appliesTo.write) return;
+    const violation = await rule.evaluate(await this.buildWriteContext(type, value, relationships, manifest));
+    if (violation) throw new QaSkillsError(violation.message, violation.code);
   }
 
   private async withDerivedTestPlanApproval(value: unknown, manifest: Manifest): Promise<Record<string, unknown>> {

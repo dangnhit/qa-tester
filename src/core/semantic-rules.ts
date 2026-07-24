@@ -11,7 +11,7 @@ import { regressionCaseFromCanonical } from "../regression/change-scope.js";
 import { selectRegressionCases } from "../regression/selector.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId } from "../retest/verdict.js";
-import type { ArtifactRecord } from "./artifact-record.js";
+import { terminalStatuses, type ArtifactRecord, type Manifest } from "./artifact-record.js";
 import type { ArtifactProfileName } from "./artifact-profiles.js";
 import { sha256, sha256Text } from "./checksum.js";
 import { assertRealpathWithin } from "./fs.js";
@@ -82,6 +82,14 @@ export type SemanticContext = Readonly<{
   relatedOfType(type: ArtifactType): readonly RelatedArtifact[];
   related(): readonly RelatedArtifact[];
 
+  /** ALL loaded/registered artifacts of a type, VALIDITY-AGNOSTIC and value-aware — unlike
+   *  `relatedOfType` (the cascade-sensitive valid pool), this includes binary/media records (no
+   *  `value`) and read-path descriptors that loaded but were later invalidated (`value` present).
+   *  The evidence-derivation check must resolve its source descriptor/binary by id regardless of
+   *  validity, exactly matching the read path's use of the full loaded list (design §2: "media/binary
+   *  lookups use the full artifacts list where a rule needs invalid/binary records"). */
+  loadedOfType(type: ArtifactType): readonly RelatedArtifact[];
+
   /** Manifest-record existence, INDEPENDENT of validity. Stable on both paths (backed by the full
    *  manifest, not the valid pool). Used where a rule must distinguish "record absent from the
    *  manifest" from "record present but not resolvable" — e.g. coverage-obligation's two messages. */
@@ -102,23 +110,6 @@ export type SemanticRule = Readonly<{
    *  One violation per evaluation matches write's throw-on-first and read's invalidate-on-first. */
   evaluate(ctx: SemanticContext): SemanticViolation | undefined | Promise<SemanticViolation | undefined>;
 }>;
-
-/**
- * Shared manifest shape + terminal-status set, MOVED here (single source of truth) from
- * `run-workspace.ts`, which now imports both. The `cleanup-run` rule invokes `assertCleanupProvenance`,
- * the cross-run file-provenance validator, which parses a source run's manifest (`Manifest`) and
- * asserts the source run is terminal (`terminalStatuses`) — so both belong beside it. Neither pulls in
- * the `RunWorkspace` class, keeping this module free of a static dependency on it (cycle-free).
- */
-export type Manifest = {
-  artifactType: "artifact-manifest";
-  schemaVersion: "1.0.0";
-  producerVersion: string;
-  runId: string;
-  artifacts: ArtifactRecord[];
-};
-
-export const terminalStatuses = new Set<RunStatus>(["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"]);
 
 /** Moved VERBATIM from `run-workspace.ts` (retest reproduction-occurrence comparison). */
 function sameStringOccurrences(left: readonly string[], right: readonly string[]): boolean {
@@ -838,10 +829,137 @@ const retestResultRule: SemanticRule = {
   },
 };
 
+/** Rule: `evidence` — carries per-path drift on the attempt-binding message and per-path POOL logic on
+ *  both checks. Block A (attempt binding) uses `ctx.relatedOfType("test-result")` (WRITE = the on-disk
+ *  registered set; READ = the cascade-sensitive valid pool) and drifts only in its MESSAGE plus a
+ *  WRITE-only "exactly one test-result relationship" guard. Block B (derived-screenshot derivation)
+ *  shares its message on both paths but partitions descriptor↔binary differently: WRITE keys on the
+ *  manifest record's `mediaType` (`ctx.registeredRecord`), READ keys on loaded `value` presence
+ *  (`ctx.loadedOfType`, validity-agnostic — a source descriptor that loaded but was later invalidated
+ *  is still found, matching the current read path). Both stages short-circuit block A→block B, exactly
+ *  as the write path throws-on-first; the read path's independent non-short-circuit emission of BOTH
+ *  block A and block B for a simultaneously-tampered derived screenshot collapses to the first
+ *  violation here (an inherent consequence of unifying onto the single-violation rule; the artifact is
+ *  invalid, and the workspace outcome, unchanged). Faithful to write `assertSemanticReferences`
+ *  evidence branch and read `inspectWorkspaceState` in-fixpoint evidence branch. */
+const evidenceRule: SemanticRule = {
+  type: "evidence",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const matches = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    const match = matches[0];
+    const identityFail = matches.length !== 1 || match === undefined
+      || ctx.relationships.filter((id) => id === match.record.id).length !== 1
+      || value.testCaseId !== match.value?.testCaseId
+      || value.testCaseRevisionId !== match.value?.testCaseRevisionId
+      || value.testCaseInstanceId !== match.value?.testCaseInstanceId;
+    if (ctx.stage === "write") {
+      if (identityFail || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Evidence binding requires one exact registered test result relationship and matching testcase identity" };
+      }
+    } else if (identityFail) {
+      return { code: "ARTIFACT_BINDING", message: "Evidence must reference one exact registered attempt and matching testcase identity" };
+    }
+    const derivation = isRecord(value.derivation) ? value.derivation : undefined;
+    const sourceEvidenceId = derivation?.sourceEvidenceArtifactId;
+    const sourceBinaryId = derivation?.sourceBinaryArtifactId;
+    if (ctx.stage === "write") {
+      const derivedFromDescriptor = ctx.relationships.some((id) => {
+        const record = ctx.registeredRecord(id, "evidence");
+        return record !== undefined && record.mediaType === undefined;
+      });
+      if (derivedFromDescriptor) {
+        const descriptorRecord = typeof sourceEvidenceId === "string" ? ctx.registeredRecord(sourceEvidenceId, "evidence") : undefined;
+        const sourceDescriptor = descriptorRecord !== undefined && descriptorRecord.mediaType === undefined ? descriptorRecord : undefined;
+        const binaryRecord = typeof sourceBinaryId === "string" ? ctx.registeredRecord(sourceBinaryId, "evidence") : undefined;
+        const sourceBinary = binaryRecord !== undefined && binaryRecord.mediaType === "image/png" ? binaryRecord : undefined;
+        if (!derivation || !sourceDescriptor || !sourceBinary
+          || derivation.sourceEvidenceSha256 !== sourceDescriptor.sha256
+          || derivation.sourceRawSha256 !== sourceBinary.sha256
+          || !ctx.relationships.includes(sourceDescriptor.id)
+          || !ctx.relationships.includes(sourceBinary.id)) {
+          return { code: "ARTIFACT_BINDING", message: "Derived screenshot must preserve exact source descriptor and raw checksum relationships" };
+        }
+      }
+    } else {
+      const derivedFromDescriptor = ctx.relationships.some((id) => ctx.loadedOfType("evidence").some((candidate) => candidate.record.id === id && candidate.value !== undefined));
+      if (derivedFromDescriptor) {
+        const sourceDescriptor = ctx.loadedOfType("evidence").find((candidate) => candidate.record.id === sourceEvidenceId && candidate.value !== undefined);
+        const sourceBinary = ctx.loadedOfType("evidence").find((candidate) => candidate.record.id === sourceBinaryId && candidate.value === undefined);
+        if (!derivation || !sourceDescriptor || !sourceBinary
+          || derivation.sourceEvidenceSha256 !== sourceDescriptor.record.sha256
+          || derivation.sourceRawSha256 !== sourceBinary.record.sha256
+          || !ctx.relationships.includes(sourceDescriptor.record.id)
+          || !ctx.relationships.includes(sourceBinary.record.id)) {
+          return { code: "ARTIFACT_BINDING", message: "Derived screenshot must preserve exact source descriptor and raw checksum relationships" };
+        }
+      }
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `evidence-gap` — WRITE-only (`appliesTo.read === false`). The READ side is DELIBERATELY LEFT
+ *  INLINE in `inspectWorkspaceState`'s POST-fixpoint evidence/evidence-gap loop and is NOT migrated:
+ *  routing it through the in-fixpoint rule dispatch would move it out of its post-fixpoint slot and
+ *  could cascade-invalidate an `incident` that binds a malformed-scope evidence-gap (which the current
+ *  post-fixpoint timing keeps valid during the fixpoint), changing the diagnostic set — exactly the
+ *  ordering hazard the design flags (risk 3). Migrating only the WRITE branch still collapses the write
+ *  chain; the write/read drift is PRESERVED (not reconciled). Faithful to write
+ *  `assertSemanticReferences` evidence-gap branch. */
+const evidenceGapRule: SemanticRule = {
+  type: "evidence-gap",
+  appliesTo: { write: true, read: false },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    if (value.scope === "operational") {
+      if (value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined
+        || ctx.relationships.some((id) => ctx.registeredRecord(id, "test-result") !== undefined)) {
+        return { code: "ARTIFACT_BINDING", message: "Operational Evidence Gap must not claim an attempt binding" };
+      }
+      return undefined;
+    }
+    const results = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    const result = results[0];
+    if (value.scope !== "attempt" || results.length !== 1
+      || ctx.relationships.filter((id) => id === result?.record.id).length !== 1
+      || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1
+      || value.testCaseId !== result?.value?.testCaseId || value.testCaseRevisionId !== result?.value?.testCaseRevisionId || value.testCaseInstanceId !== result?.value?.testCaseInstanceId) {
+      return { code: "ARTIFACT_BINDING", message: "Attempt-scoped Evidence Gap requires one exact registered test result relationship and matching testcase identity" };
+    }
+    return undefined;
+  },
+};
+
+/** Rule: `change-scope` — READ-only (`appliesTo.write === false`); `change-scope` has no write
+ *  `assertSemanticReferences` branch today. Re-verifies the persisted input checksum and run binding.
+ *  Dispatched in the in-fixpoint read slot (identical to its former inline position — cascade to
+ *  `regression-selection` preserved). Faithful to read `inspectWorkspaceState` in-fixpoint change-scope
+ *  branch. */
+const changeScopeRule: SemanticRule = {
+  type: "change-scope",
+  appliesTo: { write: false, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const expectedChecksum = sha256Text(JSON.stringify({ changes: value.changes, provenance: value.provenance }));
+    if (value.runId !== ctx.runId || value.inputChecksum !== expectedChecksum) {
+      return { code: "ARTIFACT_BINDING", message: "Change scope checksum does not match its registered mapping input" };
+    }
+    return undefined;
+  },
+};
+
 /** The shared table. Task 14 migrated the three overlapping planning types; Task 15a added the eight
- *  synchronous "both-path" types; Task 15b adds the three async + regression heavy-derivation types.
- *  Every remaining type stays on its legacy write branch / read inline-chain branch (the adapters fall
- *  through). */
+ *  synchronous "both-path" types; Task 15b added the three async + regression heavy-derivation types;
+ *  Task 15c adds `evidence` (both), `evidence-gap` (write-only — read stays inline post-fixpoint), and
+ *  `change-scope` (read-only), finalizing the in-fixpoint migration. Types with no per-type semantic
+ *  rule on either path (`test-case`, `exploratory-finding`, `run-metadata`, `artifact-manifest`),
+ *  `environment-profile` (inline in `assertArtifactBinding`), and `workflow-checkpoint` (read-only,
+ *  post-fixpoint inline) intentionally remain outside the table. */
 export const semanticRules: Partial<Record<ArtifactType, SemanticRule>> = {
   "requirement-analysis": requirementAnalysisRule,
   "coverage-obligation": coverageObligationRule,
@@ -858,4 +976,7 @@ export const semanticRules: Partial<Record<ArtifactType, SemanticRule>> = {
   "cleanup-run": cleanupRunRule,
   "regression-selection": regressionSelectionRule,
   "retest-result": retestResultRule,
+  "evidence": evidenceRule,
+  "evidence-gap": evidenceGapRule,
+  "change-scope": changeScopeRule,
 };
