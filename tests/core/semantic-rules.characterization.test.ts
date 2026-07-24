@@ -236,18 +236,22 @@ describe("semantic-rule characterization: coverage-obligation", () => {
     expect(await targetDiagnostics(workspace, obligation.relativePath)).toHaveLength(0);
   });
 
-  // READ-path branches. All three inputs collapse to the SAME combined message — including
-  // the orphan-analysis-artifact input, which the WRITE path reports with a distinct message.
+  // READ-path branches. After Phase 2a (drift reconciliation #1, product-owner approved), the
+  // orphan-ANALYSIS-ARTIFACT input adopts the WRITE path's specific message on BOTH paths; the
+  // orphan-REQUIREMENT and ambiguous-STATEMENT inputs keep the combined message. See
+  // docs/reports/semantic-rule-drift.md "What Phase 2 must decide" item 1.
   it.each([
     {
       label: "requirementAnalysisArtifactId is tampered to reference no analysis artifact",
       tamper: (workspacePath: string) => tamperRegistered(workspacePath, "coverage-obligation", (value) => { value.requirementAnalysisArtifactId = "does-not-exist-artifact-id"; }),
       analysisStatements: 1,
+      message: "Coverage obligation references an orphan requirement analysis artifact",   // drift 1: was the combined message
     },
     {
       label: "requirementId is tampered to one absent from the analysis (orphan)",
       tamper: (workspacePath: string) => tamperRegistered(workspacePath, "coverage-obligation", (value) => { value.requirementId = "REQ-MISSING"; }),
       analysisStatements: 1,
+      message: "Coverage obligation references an orphan or ambiguous requirement",
     },
     {
       label: "the analysis is tampered to duplicate the matching statement (ambiguous)",
@@ -257,12 +261,30 @@ describe("semantic-rule characterization: coverage-obligation", () => {
         statements.push(JSON.parse(JSON.stringify(statements[0])) as Record<string, unknown>);
       }),
       analysisStatements: 1,
+      message: "Coverage obligation references an orphan or ambiguous requirement",
     },
-  ])("READ rejects with the combined message when $label", async ({ tamper, analysisStatements }) => {
+  ])("READ rejects when $label", async ({ tamper, analysisStatements, message }) => {
     const workspace = await freshWorkspace();
     const analysis = await workspace.registerArtifactValue({ type: "requirement-analysis", value: requirementAnalysis({ statementCount: analysisStatements }), relationships: [] });
     const obligation = await workspace.registerArtifactValue({ type: "coverage-obligation", value: coverageObligation(analysis.id), relationships: [] });
     await tamper(workspace.path);
+    expect(await targetDiagnostics(workspace, obligation.relativePath)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "INVALID_REFERENCE", message }),
+    ]));
+  });
+
+  // §8 risk 1 CASCADE LOCK: drift 1 must NOT leak into the cascade case. When the referenced analysis
+  // is INVALIDATED (checksum mismatch) but its record REMAINS registered in the manifest, message 2
+  // keys on manifest existence (record still present → skipped) and message 3 keys on the
+  // cascade-sensitive valid pool (analysis dropped out → fires), so the COMBINED message still
+  // surfaces. This confines drift 1 to the genuinely-missing-record case.
+  it("READ keeps the combined message when the referenced analysis is invalidated but still registered (cascade)", async () => {
+    const workspace = await freshWorkspace();
+    const analysis = await workspace.registerArtifactValue({ type: "requirement-analysis", value: requirementAnalysis(), relationships: [] });
+    const obligation = await workspace.registerArtifactValue({ type: "coverage-obligation", value: coverageObligation(analysis.id), relationships: [] });
+    // Corrupt the analysis bytes WITHOUT recomputing its checksum: inspectWorkspaceState invalidates
+    // it on CHECKSUM_MISMATCH, so it drops out of the valid pool while its manifest record survives.
+    await corruptWithoutRechecksum(workspace.path, "requirement-analysis", (value) => { value.requirementAnalysisId = "TAMPERED"; });
     expect(await targetDiagnostics(workspace, obligation.relativePath)).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "INVALID_REFERENCE", message: "Coverage obligation references an orphan or ambiguous requirement" }),
     ]));

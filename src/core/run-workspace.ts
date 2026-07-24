@@ -27,6 +27,7 @@ import { createEntityId, createRunId } from "./ids.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
 import { utcNow } from "./time.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
+import { semanticRules, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
 import { isRecord, canonicalJson } from "./values.js";
 
 export type { ArtifactRecord } from "./artifact-record.js";
@@ -229,36 +230,41 @@ function invalidate(
   return true;
 }
 
-function assertPersistedPlanningSemantics(artifact: LoadedArtifact, artifacts: readonly LoadedArtifact[]): void {
-  const value = artifact.value;
-  if (!value) return;
-  if (artifact.record.type === "requirement-analysis") {
-    assertRequirementAuthorities(value);
-    return;
-  }
-  if (artifact.record.type === "coverage-obligation") {
-    if (typeof value.requirementId !== "string" || typeof value.requirementAnalysisArtifactId !== "string") {
-      throw new Error("Coverage obligation requirement binding is invalid");
-    }
-    const source = artifacts.find((candidate) => candidate.valid
-      && candidate.record.id === value.requirementAnalysisArtifactId
-      && candidate.record.type === "requirement-analysis");
-    const statements = source?.value?.statements;
-    if (!Array.isArray(statements) || statements.filter((statement) => isRecord(statement) && statement.requirementId === value.requirementId).length !== 1) {
-      throw new Error("Coverage obligation references an orphan or ambiguous requirement");
-    }
-    return;
-  }
-  if (artifact.record.type !== "test-plan") return;
-  const environments = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "environment-profile");
-  const classification = environments.length === 1 ? environments[0]?.value?.classification : undefined;
-  if (typeof classification !== "string") throw new Error("Test plan requires one authoritative environment profile");
-  const decision = deriveTestPlanApproval({
-    plan: value,
-    requirementAnalyses: artifacts.filter((candidate): candidate is LoadedArtifact & { value: Record<string, unknown> } => candidate.valid && candidate.record.type === "requirement-analysis" && candidate.value !== undefined).map((candidate) => candidate.value),
-    environment: { classification } as ApprovalEnvironment,
-  });
-  if (JSON.stringify(value.approvalDecision) !== JSON.stringify(decision)) throw new Error("Persisted test plan approval decision does not equal the derived decision");
+/** Builds the READ-path `SemanticContext` for one persisted artifact. The related-artifact pool is
+ *  the cascade-sensitive valid set (`validArtifacts`, recomputed each fixpoint pass), so an artifact
+ *  invalidated earlier this pass drops out of any later rule's view — preserving the read-path
+ *  cascade. `registeredRecord` is backed by the full manifest and is therefore stable regardless of
+ *  validity. Cross-run access reopens via `dirname(dirname(path))`, matching the current read-path
+ *  `RunWorkspace.open` call sites. */
+function buildReadContext(
+  artifact: LoadedArtifact,
+  value: Record<string, unknown>,
+  validArtifacts: readonly LoadedArtifact[],
+  manifest: Manifest,
+  metadata: WorkspaceMetadata,
+  path: string,
+  expectedRunId: string,
+): SemanticContext {
+  const root = dirname(dirname(path));
+  const toRelated = (candidate: LoadedArtifact): RelatedArtifact =>
+    candidate.value === undefined ? { record: candidate.record } : { record: candidate.record, value: candidate.value };
+  return {
+    stage: "read",
+    type: artifact.record.type,
+    value,
+    self: artifact.record,
+    relationships: artifact.record.relationships,
+    runId: expectedRunId,
+    path,
+    root,
+    linkedRunId: metadata.linkedRunId,
+    environmentProfileId: metadata.environmentProfileId,
+    mode: metadata.mode,
+    relatedOfType: (type) => validArtifacts.filter((candidate) => candidate.record.type === type).map(toRelated),
+    related: () => validArtifacts.map(toRelated),
+    registeredRecord: (id, type) => manifest.artifacts.find((candidate) => candidate.id === id && (type === undefined || candidate.type === type)),
+    openRun: (runId) => RunWorkspace.open(root, runId),
+  };
 }
 
 async function filesUnder(root: string, directory: string): Promise<string[]> {
@@ -392,15 +398,13 @@ async function inspectWorkspaceState(
     const valuesOf = (type: ArtifactType): LoadedArtifact[] =>
       validArtifacts.filter((artifact) => artifact.record.type === type);
     for (const artifact of validArtifacts) {
-      try {
-        assertPersistedPlanningSemantics(artifact, validArtifacts);
-      } catch (error: unknown) {
-        changed = invalidate(
-          artifact,
-          diagnostics,
-          "INVALID_REFERENCE",
-          error instanceof Error ? error.message : "Persisted planning semantic validation failed",
-        ) || changed;
+      const value = artifact.value;
+      if (!value) continue;
+      const rule = semanticRules[artifact.record.type];
+      if (!rule || !rule.appliesTo.read) continue;
+      const violation = await rule.evaluate(buildReadContext(artifact, value, validArtifacts, manifest, metadata, path, expectedRunId));
+      if (violation) {
+        changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", violation.message) || changed;
       }
     }
     const attempts = new Map<unknown, LoadedArtifact[]>();
@@ -1317,23 +1321,80 @@ export class RunWorkspace {
       }));
   }
 
+  /** Pairs `manifest.artifacts.filter(type && mediaType===undefined)` with `readRegisteredValues`
+   *  (which applies the identical filter, in manifest order), so record[i] corresponds to value[i].
+   *  Asserts equal length to fail loudly if the two filters ever diverge (design §8 risk 4). */
+  private async readRegisteredRelated(manifest: Manifest, type: ArtifactType): Promise<readonly RelatedArtifact[]> {
+    const records = manifest.artifacts.filter((artifact) => artifact.type === type && artifact.mediaType === undefined);
+    const values = await this.readRegisteredValues(manifest, type);
+    if (records.length !== values.length) {
+      throw new QaSkillsError("Registered artifact record/value pairing is inconsistent", "ARTIFACT_BINDING");
+    }
+    return records.map((record, index): RelatedArtifact => {
+      const value = values[index];
+      return value === undefined ? { record } : { record, value };
+    });
+  }
+
+  /** Builds the WRITE-path `SemanticContext`. The related-artifact pool is re-read from disk, where
+   *  every referenced artifact is valid by construction (registration is serialized), so there is no
+   *  cascade on write. `self` is a synthetic record (the artifact is not yet in the manifest). Only
+   *  the type dispatched by `runSemanticRule` reaches here, so this is built solely for migrated
+   *  types; the related pool is pre-read once per distinct registered non-media type. */
+  private async buildWriteContext(
+    type: ArtifactType,
+    value: Record<string, unknown>,
+    relationships: string[],
+    manifest: Manifest,
+  ): Promise<SemanticContext> {
+    const byType = new Map<ArtifactType, readonly RelatedArtifact[]>();
+    for (const relatedType of new Set(manifest.artifacts.filter((artifact) => artifact.mediaType === undefined).map((artifact) => artifact.type))) {
+      byType.set(relatedType, await this.readRegisteredRelated(manifest, relatedType));
+    }
+    const self: ArtifactRecord = { id: "", type, relativePath: "", sha256: "", provenance: "", relationships: [...relationships] };
+    return {
+      stage: "write",
+      type,
+      value,
+      self,
+      relationships,
+      runId: this.runId,
+      path: this.path,
+      root: this.root,
+      linkedRunId: this.metadata.linkedRunId,
+      environmentProfileId: this.metadata.environmentProfileId,
+      mode: this.mode,
+      relatedOfType: (relatedType) => byType.get(relatedType) ?? [],
+      related: () => [...byType.values()].flat(),
+      registeredRecord: (id, relatedType) => manifest.artifacts.find((artifact) => artifact.id === id && (relatedType === undefined || artifact.type === relatedType)),
+      openRun: (runId) => RunWorkspace.open(this.root, runId),
+    };
+  }
+
+  /** Write-path adapter: looks up the shared rule for `type`, runs it against the write context, and
+   *  throws `QaSkillsError(v.message, v.code)` on a violation. Returns true when it handled the type;
+   *  false falls through to the legacy `if/else` chain for not-yet-migrated types. */
+  private async runSemanticRule(
+    type: ArtifactType,
+    value: Record<string, unknown>,
+    relationships: string[],
+    manifest: Manifest,
+  ): Promise<boolean> {
+    const rule = semanticRules[type];
+    if (!rule || !rule.appliesTo.write) return false;
+    const violation = await rule.evaluate(await this.buildWriteContext(type, value, relationships, manifest));
+    if (violation) throw new QaSkillsError(violation.message, violation.code);
+    return true;
+  }
+
   private async assertSemanticReferences(
     type: ArtifactType,
     value: Record<string, unknown>,
     relationships: string[],
     manifest: Manifest,
   ): Promise<void> {
-    if (type === "requirement-analysis") {
-      try {
-        assertRequirementAuthorities(value);
-      } catch (error: unknown) {
-        throw new QaSkillsError(error instanceof Error ? error.message : "Requirement authority verification failed", "ARTIFACT_BINDING");
-      }
-    } else if (type === "test-plan") {
-      await this.assertTestPlanPolicy(value, manifest);
-    } else if (type === "coverage-obligation") {
-      await this.assertCoverageObligationBinding(value, manifest);
-    } else if (type === "test-result") {
+    if (await this.runSemanticRule(type, value, relationships, manifest)) return;
+    if (type === "test-result") {
       const records = await this.readGateWorkspaceArtifacts(manifest);
       const testCases = records.filter((artifact) => artifact.record.type === "test-case"
         && artifact.value.testCaseId === value.testCaseId
@@ -1628,21 +1689,6 @@ export class RunWorkspace {
         }).filter((id): id is string => id !== undefined).sort();
         if (!scenarioValid || regression.some((attempt) => !attempt) || value.regressionOutcome !== regressionOutcome || value.verdict !== derived.verdict || JSON.stringify([...relationships].sort()) !== JSON.stringify([...expectedRelationships, ...regressionRelationships].sort())) throw new QaSkillsError("Retest verdict and relationships must derive from the exact reproduction independently of regression", "ARTIFACT_BINDING");
       } finally { await source.close(); }
-    }
-  }
-
-  private async assertCoverageObligationBinding(value: Record<string, unknown>, manifest: Manifest): Promise<void> {
-    if (typeof value.requirementId !== "string" || typeof value.requirementAnalysisArtifactId !== "string") {
-      throw new QaSkillsError("Coverage obligation requirement binding is invalid", "ARTIFACT_BINDING");
-    }
-    const record = manifest.artifacts.find((artifact) => artifact.id === value.requirementAnalysisArtifactId && artifact.type === "requirement-analysis");
-    if (!record) throw new QaSkillsError("Coverage obligation references an orphan requirement analysis artifact", "ARTIFACT_BINDING");
-    const analyses = await this.readRegisteredValues(manifest, "requirement-analysis");
-    const index = manifest.artifacts.filter((artifact) => artifact.type === "requirement-analysis").findIndex((artifact) => artifact.id === record.id);
-    const analysis = analyses[index];
-    const statements = analysis?.statements;
-    if (!Array.isArray(statements) || statements.filter((statement) => isRecord(statement) && statement.requirementId === value.requirementId).length !== 1) {
-      throw new QaSkillsError("Coverage obligation references an orphan or ambiguous requirement", "ARTIFACT_BINDING");
     }
   }
 
