@@ -18,6 +18,13 @@ describe("portable QA skill bundle", () => {
       expect(text).toMatch(/full/i);
       if (!["requirement-analyzer", "testcase-designer"].includes(name)) expect(text).toContain("workflow run --input");
     }
+    const requirementAnalyzer = await readFile(resolve(root, "requirement-analyzer", "SKILL.md"), "utf8");
+    expect(requirementAnalyzer).toContain("run create --root . --mode plan --environment-file environment.json");
+    expect(requirementAnalyzer).toContain("--run-id $Run.runId");
+    expect(requirementAnalyzer).not.toContain("--run-id RUN_ID");
+    const qaTester = await readFile(resolve(root, "qa-tester", "SKILL.md"), "utf8");
+    const powerShell = qaTester.slice(qaTester.indexOf("PowerShell:"));
+    expect(powerShell).toContain("& $QaSkill workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json");
     expect(await readdir(resolve(root, "qa-tester"))).not.toContain("agents");
   });
 });

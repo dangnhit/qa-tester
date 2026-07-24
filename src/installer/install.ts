@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { atomicWriteFile } from "../core/fs.js";
 import { QaSkillsError } from "../core/errors.js";
 import { sha256Bytes } from "../core/checksum.js";
-import { resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
+import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
 import { createManifest, manifestFilename, runtimeVersion, serializeManifest, validateRelativeFilePath } from "./manifest.js";
 
 export type FailurePhase = "stage:first" | "write:middle" | "write:final" | "swap";
@@ -74,7 +74,8 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
   try { runtime = await resolveCompatibleRuntime(options.projectRoot); } catch (error: unknown) { throw new QaSkillsError(error instanceof Error ? error.message : "Local qa-skill setup failed", "INSTALLER_INPUT"); }
   const sourceRoot = resolve(options.sourceRoot ?? defaultBundleRoot());
   await assertNoSymlinksTree(sourceRoot); await assertTargetComponents(root); await assertNoSymlinksTree(root);
-  const manifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, sourceVersion: options.sourceVersion ?? runtimeVersion });
+  const runtimeBinding = await captureRuntimeBinding(runtime);
+  const manifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, runtime: runtimeBinding, sourceVersion: options.sourceVersion ?? runtimeVersion });
   const paths = manifest.files.map((file) => validateRelativeFilePath(file.path));
   const contents = await Promise.all(paths.map(async (file) => ({ file, contents: await readFile(join(sourceRoot, file)) })));
   if (!overwrite) {
@@ -103,7 +104,7 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
     if (await exists(root)) { await rename(root, previous); originalMoved = true; }
     try { await rename(stage, root); } catch (error) { if (await exists(previous)) await rename(previous, root); originalMoved = false; throw error; }
     if (await exists(previous)) await rm(previous, { recursive: true, force: true });
-    return { root, files: paths.map((file) => join(root, file)), runtime: { command: runtime.command, version: runtime.version } };
+    return { root, files: paths.map((file) => join(root, file)), runtime: { command: runtimeBinding.command, version: runtimeBinding.version } };
   } catch (error) {
     if (originalMoved) await restore(root, previous, stage); else if (await exists(stage)) await rm(stage, { recursive: true, force: true });
     throw error;

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,24 @@ describe("CLI core", () => {
     expect(result.stdout).toBe("");
     expect(await readFile(join(directory, "qa.config.yaml"), "utf8")).toContain("version:");
     expect(await readFile(join(directory, ".gitignore"), "utf8")).toContain("node_modules/\nqa-results/\n");
+  });
+
+  it("publicly creates an unlocked nonterminal run workspace for standalone specialist skills", async () => {
+    const directory = await root();
+    const environmentPath = join(directory, "environment.json");
+    await writeFile(environmentPath, JSON.stringify({
+      artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "env-standalone", name: "Standalone", classification: "test", baseUrl: "https://test.example.test", productionReadOnly: false,
+    }));
+
+    const created = await runCli(["run", "create", "--root", directory, "--mode", "plan", "--environment-file", environmentPath], { cwd: directory });
+
+    expect(created.exitCode).toBe(ExitCode.SUCCESS);
+    const result = JSON.parse(created.stdout) as { runId: string; root: string; mode: string; status: string };
+    expect(result).toMatchObject({ root: await realpath(directory), mode: "plan", status: "CREATED" });
+    const workspace = await RunWorkspace.open(directory, result.runId);
+    expect(workspace.mode).toBe("plan");
+    await workspace.transition("RUNNING");
+    await workspace.close();
   });
 
   it("lists skill execution kinds and reports invalid commands as invalid input", async () => {

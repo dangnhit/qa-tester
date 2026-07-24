@@ -78,6 +78,10 @@ export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode;
 /** A checksum-bound immutable source record.  Public workflows never accept a raw draft. */
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
 export type CanonicalPlanBundleRef = Readonly<{ sourceRunId: string; artifacts: readonly RegisteredArtifactRef[] }>;
+
+function canonicalImportProvenance(sourceRunId: string, artifact: RegisteredArtifactRef): string {
+  return `runtime-import:${sourceRunId}:${artifact.artifactId}:${artifact.sha256}`;
+}
 export type QaRuntimeRegistry = Readonly<{
   browserManagers?: Readonly<Record<string, Readonly<{ browser: Browser; annotateFailures?: boolean }>>>;
   secretResolvers?: Readonly<Record<string, SecretResolver>>;
@@ -347,7 +351,7 @@ export async function importCanonicalPlanBundle(workspace: RunWorkspace, bundle:
         value,
         relationshipKeys: item.record.relationships.filter((id) => selectedIds.has(id)),
         ...(referenceFields === undefined ? {} : { referenceFields }),
-        provenance: `runtime-import:${bundle.sourceRunId}:${item.record.id}`,
+        provenance: canonicalImportProvenance(bundle.sourceRunId, { artifactId: item.record.id, sha256: item.record.sha256 }),
       };
     });
     return workspace.registerArtifactValueBatch(batch);
@@ -800,15 +804,26 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
   if (!needsBundle) return;
   if (!state.input.bundle) throw new QaSkillsError("Workflow requires a checksum-bound canonical plan bundle", "ARTIFACT_BINDING");
   const all = await state.workspace.readRegisteredArtifacts();
+  const importPrefix = `runtime-import:${state.input.bundle.sourceRunId}:`;
+  const expected = new Set(state.input.bundle.artifacts.map((artifact) => canonicalImportProvenance(state.input.bundle!.sourceRunId, artifact)));
+  const provenanceImports = all.filter((artifact) => artifact.record.provenance.startsWith(importPrefix));
   if (state.importedArtifactIds.length === 0) {
-    if (all.some((artifact) => artifact.record.provenance.startsWith(`runtime-import:${state.input.bundle!.sourceRunId}:`))) {
-      throw new QaSkillsError("Workflow checkpoint omits already-imported canonical bundle artifacts", "ARTIFACT_BINDING");
+    if (provenanceImports.length === 0) {
+      const imported = await importCanonicalPlanBundle(state.workspace, state.input.bundle);
+      state.importedArtifactIds = [...imported.values()].map((artifact) => artifact.id);
+    } else if (provenanceImports.length === expected.size
+      && provenanceImports.every((artifact) => expected.has(artifact.record.provenance))
+      && [...expected].every((provenance) => provenanceImports.filter((artifact) => artifact.record.provenance === provenance).length === 1)) {
+      // The canonical batch commit may win the crash race against the following
+      // checkpoint. Its source IDs and source checksums are embedded in the
+      // provenance, while readRegisteredArtifacts has revalidated every target
+      // checksum and semantic relationship. Adopt only that exact complete set.
+      state.importedArtifactIds = provenanceImports.map((artifact) => artifact.record.id);
+    } else {
+      throw new QaSkillsError("Already-imported canonical bundle mapping is partial, duplicated, or does not match the exact source checksum set", "ARTIFACT_BINDING");
     }
-    const imported = await importCanonicalPlanBundle(state.workspace, state.input.bundle);
-    state.importedArtifactIds = [...imported.values()].map((artifact) => artifact.id);
   } else {
     const imported = all.filter((artifact) => state.importedArtifactIds.includes(artifact.record.id));
-    const expected = new Set(state.input.bundle.artifacts.map((artifact) => `runtime-import:${state.input.bundle!.sourceRunId}:${artifact.artifactId}`));
     if (imported.length !== expected.size || imported.some((artifact) => !expected.has(artifact.record.provenance))
       || [...expected].some((provenance) => !imported.some((artifact) => artifact.record.provenance === provenance))) {
       throw new QaSkillsError("Workflow checkpoint canonical bundle mapping is incomplete or does not match the exact source artifacts", "ARTIFACT_BINDING");

@@ -7,6 +7,7 @@ import { artifactTypes, type ArtifactType } from "../contracts/types.js";
 import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact-profiles.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
+import { createRun } from "../operations/create-run.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { recordHumanApproval } from "../operations/record-human-approval.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
@@ -73,6 +74,18 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   program.name("qa-skill").version(runtimeVersion).exitOverride();
   program.configureOutput({ writeOut: (value) => { stdout += value; }, writeErr: (value) => { stderr += value; } });
   program.command("init").action(async () => { await initialize(options.cwd); });
+  program.command("run").command("create")
+    .requiredOption("--root <path>").requiredOption("--mode <mode>").requiredOption("--environment-file <json>")
+    .action(async (commandOptions: { root: string; mode: string; environmentFile: string }) => {
+      if (!isProfile(commandOptions.mode)) throw new QaSkillsError("Unsupported artifact profile", "INVALID_ARTIFACT");
+      const environmentProfile = JSON.parse(await readFile(commandOptions.environmentFile, "utf8")) as Record<string, unknown>;
+      const workspace = await createRun({ root: commandOptions.root, mode: commandOptions.mode, environmentProfile });
+      try {
+        stdout += `${JSON.stringify({ runId: workspace.runId, root: workspace.root, mode: workspace.mode, status: "CREATED" })}\n`;
+      } finally {
+        await workspace.close();
+      }
+    });
   const skillsCommand = program.command("skills");
   skillsCommand.command("list").action(() => { stdout += `${skills.map((skill) => JSON.stringify(skill)).join("\n")}\n`; });
   const configureSkillTarget = (command: Command, includeForce = false): Command => {

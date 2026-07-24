@@ -62,10 +62,11 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill init` | Create minimal project config and ignore `qa-results/`; success has no stdout. |
 | `qa-skill skills list` | List the orchestrator and standalone Skill Adapters with execution kinds. |
 | `qa-skill skills install --agent <codex\|claude\|cursor> [--target project\|user]` | Install a checksummed copy of the canonical Skill Bundle. |
-| `qa-skill skills verify --agent ...` | Detect missing, modified, or unexpected installed files. |
+| `qa-skill skills verify --agent ...` | Detect installed-file drift plus typed `runtime-missing`, `runtime-changed`, or `runtime-incompatible` Runtime Binding failures. |
 | `qa-skill skills update --agent ... [--force]` | Refresh an installation; drift is preserved unless force is explicit. |
 | `qa-skill skills uninstall --agent ...` | Remove owned unchanged files and report drift leftovers. |
 | `qa-skill runtime verify [--range <semver>]` | Verify the local runtime binding and compatibility. |
+| `qa-skill run create --root <path> --mode <profile> --environment-file <json>` | Create an unlocked, nonterminal Run Workspace for standalone specialist skills and return its run ID as JSON. |
 | `qa-skill workflow bootstrap --root <path> --environment-file <json> --requirement-file <json> --plan-file <json> --test-case-file <json> --coverage-file <json>` | Atomically create the first complete terminal planning run and return its checksum-bound bundle reference; repeat testcase and coverage options as needed. |
 | `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
@@ -125,7 +126,7 @@ qa-skill skills install --agent claude --target project
 qa-skill skills install --agent cursor --target project
 ```
 
-The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--target user` for the corresponding directory under the user home. After source updates, run `skills verify`, then `skills update`; never patch an installed copy directly.
+The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--target user` for the corresponding directory under the user home. The installation manifest binds the runtime command, real path, resolution source, version, and executable checksum; `skills verify` fails closed with a typed Runtime Binding status if any of that identity is missing, changed, or incompatible. After source updates, run `skills verify`, then `skills update`; never patch an installed copy directly.
 
 ## Environment and side-effect safety
 

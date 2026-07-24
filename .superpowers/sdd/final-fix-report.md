@@ -33,17 +33,38 @@ Decision: `READY_FOR_REVIEW`
   development-only sources, and installs successfully in a clean typed
   consumer.
 - Every portable skill contains POSIX and PowerShell examples.
+- Follow-up crash recovery adopts only a complete, one-to-one canonical provenance
+  set containing exact source artifact IDs and source checksums. Partial, duplicated,
+  mismatched, and checkpoint-tampered imports fail closed.
+- Skill Installation manifests bind the runtime command, real path, resolution source,
+  version, and executable checksum. Verification reports typed `runtime-missing`,
+  `runtime-changed`, and `runtime-incompatible` states.
+- Public `run create` returns an unlocked, nonterminal Run Workspace for standalone
+  specialist skills. Requirement Analyzer creates and consumes that run ID in POSIX
+  and PowerShell; QA Tester’s PowerShell full workflow now bootstraps planning first.
+
+## RED/GREEN evidence
+
+- Preserved crash-recovery and Runtime Binding slices were resumed from their
+  interrupted test-first diff, then re-run through their public seams: runtime public
+  17/17, installer lifecycle 8/8, and installed packed CLI 1/1 passed.
+- RED for standalone creation and portable recipes:
+  `npx vitest run tests/cli/core.test.ts tests/skills/bundle.test.ts` failed in two
+  expected places: unknown `run create` returned exit code 3 instead of 0, and the
+  Requirement Analyzer lacked the creation recipe.
+- GREEN for the same command: 2 files, 11/11 passed after adding the public command,
+  returned-ID recipes, and PowerShell bootstrap coverage.
 
 ## Focused verification
 
-- Runtime public workflow: 14/14 passed, including required-video readiness,
-  exact resume, and checkpoint tamper rejection.
-- Workspace, coverage, and release-gate suites: 71/71 passed after provenance
-  hardening.
-- Bootstrap/scaffold: 2/2 passed.
-- Evidence collector, redaction, and annotation suites passed.
-- Browser approval and permit integration passed.
-- Publish contract and clean tarball consumer passed.
+- Runtime public workflow: 17/17 passed, including exact post-import crash adoption,
+  partial/mismatched import rejection, resume, required-video readiness, and checkpoint
+  tamper rejection.
+- Runtime Binding lifecycle: 8/8 passed; the packed installed CLI clean-removal
+  reproduction also passed 1/1 with typed `runtime-missing` output.
+- CLI core and portable Skill Bundle: 11/11 passed, including unlocked nonterminal run
+  creation and symmetric full-run bootstrap recipes.
+- Combined follow-up command: 5 files, 37/37 passed with pristine output.
 
 ## Complete verification
 
@@ -69,14 +90,15 @@ npm run smoke:package
 
 Results:
 
-- Full suite: 54 files, 322 tests passed.
+- Full suite: 54 files, 327 tests passed.
 - Demo: intentional desktop/mobile product defects, schema-valid
   `COMPLETED_WITH_FAILURES`, deterministic `NOT_READY`, valid Full Artifact
   Profile, and successful cleanup.
-- Secret scan: passed for 254 tracked files; `qa-results/` remains ignored.
-- Clean package consumer: imported the typed public API and executed installed
-  `qa-skill --version` as `0.1.0`; tarball contained no tests, fixtures, or
-  scripts.
+- Secret scan: passed for 257 tracked files; `qa-results/` remains ignored.
+- Clean package consumer accepted `@vigentix/qa-skills@0.1.0`; the installed CLI pack
+  test separately executed `qa-skill --version` and reproduced removal of the recorded
+  executable as typed `runtime-missing`. The tarball contains no tests, fixtures, or
+  development scripts.
 
 No remote was configured, no push or pull request was created, and nothing was
 deployed.

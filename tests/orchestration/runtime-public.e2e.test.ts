@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 
 import { RunWorkspace } from "../../src/core/run-workspace.js";
-import { createQaTester, createQaTesterWithTraceForTests, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
+import { createQaTester, createQaTesterWithTraceForTests, importCanonicalPlanBundle, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
 import { generateBugReport } from "../../src/operations/generate-bug-report.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { TestDataHookRegistry } from "../../src/test-data/hooks.js";
@@ -108,6 +108,17 @@ async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId:
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+async function crashAfterCanonicalImport(root: string, bundle: CanonicalPlanBundleRef): Promise<string> {
+  const waiting = await createQaTester({})({ root, mode: "full", environmentProfile: environment, bundle, runtime: {} });
+  expect(waiting.outcome).toBe("AWAITING_RUNTIME");
+  const targetRunId = (await readdir(join(root, "qa-results"))).find((runId) => runId !== bundle.sourceRunId);
+  if (!targetRunId) throw new Error("Expected checkpointed target run");
+  const workspace = await RunWorkspace.open(root, targetRunId);
+  await importCanonicalPlanBundle(workspace, bundle);
+  await workspace.close();
+  return targetRunId;
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (typeof value === "object" && value !== null) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
@@ -138,6 +149,55 @@ describe("public runtime QA Tester", () => {
     const resumed = await createQaTester({ browserManagers: { chromium: { browser } }, testDataRegistries: { trusted: new TestDataHookRegistry([], {}) }, evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } } })({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
     expect(resumed.runId).toBe(targetRunId);
     expect(resumed.outcome).toBe("COMPLETED");
+  });
+
+  it("adopts an exact complete canonical batch after a crash before its checkpoint and resumes safely", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-import-crash-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const targetRunId = await crashAfterCanonicalImport(root, bundle);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      testDataRegistries: { trusted: new TestDataHookRegistry([], {}) },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+    });
+
+    const resumed = await tester({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
+
+    expect(resumed.runId).toBe(targetRunId);
+    expect(resumed.outcome).toBe("COMPLETED");
+    const workspace = await RunWorkspace.open(root, targetRunId);
+    const imported = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.provenance.startsWith(`runtime-import:${bundle.sourceRunId}:`));
+    expect(imported).toHaveLength(bundle.artifacts.length);
+    await workspace.close();
+  });
+
+  it.each(["partial", "mismatched"] as const)("rejects a %s canonical batch left before the checkpoint", async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), `qa-runtime-import-${kind}-`)); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const targetRunId = await crashAfterCanonicalImport(root, bundle);
+    const workspacePath = join(root, "qa-results", targetRunId);
+    const manifestPath = join(workspacePath, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { type: string; relativePath: string; provenance: string }[] };
+    const imported = manifest.artifacts.filter((artifact) => artifact.provenance.startsWith(`runtime-import:${bundle.sourceRunId}:`));
+    if (kind === "partial") {
+      const removed = imported.find((artifact) => artifact.type === "coverage-obligation");
+      if (!removed) throw new Error("Expected imported coverage obligation");
+      manifest.artifacts = manifest.artifacts.filter((artifact) => artifact !== removed);
+      await rm(join(workspacePath, removed.relativePath), { force: true });
+    } else {
+      const changed = imported[0];
+      if (!changed) throw new Error("Expected imported artifact");
+      changed.provenance = `${changed.provenance}:tampered`;
+    }
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      testDataRegistries: { trusted: new TestDataHookRegistry([], {}) },
+      evidencePolicies: { required: { safety: { screenshot: "required" } } },
+    });
+
+    await expect(tester({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } }))
+      .rejects.toThrow(/partial|duplicated|exact source checksum set/i);
   });
 
   it("runs a full lifecycle through a real Chromium browser and only finalizes registered evidence-backed artifacts", async () => {

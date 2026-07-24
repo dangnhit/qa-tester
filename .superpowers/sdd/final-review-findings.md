@@ -48,6 +48,31 @@ Decision: `RESOLVED — READY_FOR_REVIEW`
 1. Add Windows-compatible portable-skill command examples alongside POSIX examples.
 2. Exclude tests/fixtures/dev scripts from production compilation/package contents.
 
+## Follow-up broad re-review
+
+Reviewed HEAD: `024872e`
+
+### Important
+
+1. A crash after canonical planning-bundle commit but before checkpoint persistence
+   leaves a complete import that resume rejects. Resume may adopt only one complete,
+   exact source-ID/source-checksum provenance set and must reject partial, duplicate,
+   or mismatched imports.
+2. Skill Installation manifests do not bind the executable identity they verified.
+   Record the command, real path, resolution source, compatible version, and binary
+   checksum; verification must return typed missing, changed, and incompatible
+   Runtime Binding failures.
+3. Standalone agent-authored specialist skills have no public way to create an active
+   Run Workspace and Requirement Analyzer uses an unexplained `RUN_ID`. Add a safe
+   public nonterminal creation command and use its returned ID in both shell recipes.
+
+### Minor
+
+1. QA Tester’s PowerShell full-run recipe omits the planning bootstrap that its POSIX
+   recipe performs.
+
+All follow-up findings are resolved and the decision remains `READY_FOR_REVIEW`.
+
 ## Required Fix Protocol
 
 - Use RED/GREEN tests for every finding.

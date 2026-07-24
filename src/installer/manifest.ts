@@ -8,12 +8,20 @@ export const runtimeVersion = "0.1.0";
 export const runtimeCompatibility = ">=0.1.0 <1.0.0";
 
 export type ManifestFile = Readonly<{ path: string; sha256: string }>;
+export type RuntimeBinding = Readonly<{
+  command: string;
+  resolvedPath: string;
+  source: "project" | "path";
+  version: string;
+  sha256: string;
+}>;
 export type SkillManifest = Readonly<{
   manifestVersion: 1;
   sourceVersion: string;
   runtimeRange: string;
   agent: "codex" | "claude" | "cursor";
   target: "project" | "user";
+  runtime: RuntimeBinding;
   files: readonly ManifestFile[];
 }>;
 
@@ -42,7 +50,7 @@ async function listFiles(root: string, directory = root): Promise<string[]> {
   return files;
 }
 
-export async function createManifest(options: Readonly<{ sourceRoot: string; agent: SkillManifest["agent"]; target: SkillManifest["target"]; sourceVersion?: string }>): Promise<SkillManifest> {
+export async function createManifest(options: Readonly<{ sourceRoot: string; agent: SkillManifest["agent"]; target: SkillManifest["target"]; runtime: RuntimeBinding; sourceVersion?: string }>): Promise<SkillManifest> {
   const sourceRoot = resolve(options.sourceRoot);
   const sourceVersion = options.sourceVersion ?? runtimeVersion;
   if (!isRuntimeCompatible(sourceVersion)) throw new Error(`Skill bundle requires ${runtimeCompatibility}; received runtime ${sourceVersion}`);
@@ -53,6 +61,7 @@ export async function createManifest(options: Readonly<{ sourceRoot: string; age
     runtimeRange: runtimeCompatibility,
     agent: options.agent,
     target: options.target,
+    runtime: options.runtime,
     files: await Promise.all(files.map(async (file) => ({ path: validateRelativeFilePath(file), sha256: sha256Text(await readFile(join(sourceRoot, file), "utf8")) }))),
   };
 }
@@ -75,9 +84,18 @@ export function serializeManifest(manifest: SkillManifest): string {
 function isManifest(value: unknown): value is SkillManifest {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
+  const runtime = candidate.runtime;
   return candidate.manifestVersion === 1 && typeof candidate.sourceVersion === "string" && typeof candidate.runtimeRange === "string" && isRuntimeCompatible(candidate.sourceVersion, candidate.runtimeRange)
     && (candidate.agent === "codex" || candidate.agent === "claude" || candidate.agent === "cursor")
     && (candidate.target === "project" || candidate.target === "user")
+    && runtime !== null && typeof runtime === "object"
+    && typeof (runtime as Record<string, unknown>).command === "string"
+    && typeof (runtime as Record<string, unknown>).resolvedPath === "string"
+    && ((runtime as Record<string, unknown>).source === "project" || (runtime as Record<string, unknown>).source === "path")
+    && typeof (runtime as Record<string, unknown>).version === "string"
+    && isRuntimeCompatible(String((runtime as Record<string, unknown>).version), candidate.runtimeRange)
+    && typeof (runtime as Record<string, unknown>).sha256 === "string"
+    && /^[a-f0-9]{64}$/.test(String((runtime as Record<string, unknown>).sha256))
     && Array.isArray(candidate.files) && candidate.files.every((file: unknown) => {
       if (!file || typeof file !== "object") return false;
       const record = file as Record<string, unknown>;

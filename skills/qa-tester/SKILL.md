@@ -27,6 +27,7 @@ PowerShell:
 $QaSkill = Join-Path $PWD "node_modules/.bin/qa-skill.cmd"
 if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction Stop).Source }
 & $QaSkill runtime verify --range ">=0.1.0 <1.0.0"
+& $QaSkill workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json
 & $QaSkill workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id SOURCE_RUN_ID
 & $QaSkill workflow run --input full-workflow.json
 ```

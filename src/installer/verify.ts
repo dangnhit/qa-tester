@@ -2,13 +2,14 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { sha256Text } from "../core/checksum.js";
-import { type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
-import { manifestFilename, readManifest, type SkillManifest, validateRelativeFilePath } from "./manifest.js";
+import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
+import { manifestFilename, readManifest, type RuntimeBinding, type SkillManifest, validateRelativeFilePath } from "./manifest.js";
 
-export type DriftStatus = "missing" | "modified" | "unexpected" | "valid";
+export type DriftStatus = "missing" | "modified" | "unexpected" | "runtime-missing" | "runtime-changed" | "runtime-incompatible" | "valid";
 export type VerificationEntry = Readonly<{ path: string; status: DriftStatus }>;
 export type VerifyOptions = Readonly<{ sourceRoot?: string; projectRoot: string; userHome?: string; agent: AgentName; target: InstallTarget }>;
-export type Verification = Readonly<{ root: string; manifest?: SkillManifest; status: DriftStatus; entries: readonly VerificationEntry[] }>;
+export type RuntimeVerification = Readonly<{ status: "valid" | "runtime-missing" | "runtime-changed" | "runtime-incompatible"; expected: RuntimeBinding; actual?: RuntimeBinding; reason?: string }>;
+export type Verification = Readonly<{ root: string; manifest?: SkillManifest; runtime?: RuntimeVerification; status: DriftStatus; entries: readonly VerificationEntry[] }>;
 
 async function filesBelow(root: string, current = root): Promise<string[]> {
   try {
@@ -34,10 +35,31 @@ function overall(entries: readonly VerificationEntry[]): DriftStatus {
   return "valid";
 }
 
+async function verifyRuntimeBinding(manifest: SkillManifest, projectRoot: string): Promise<RuntimeVerification> {
+  try {
+    await lstat(manifest.runtime.command);
+  } catch {
+    return { status: "runtime-missing", expected: manifest.runtime, reason: `Recorded runtime is missing: ${manifest.runtime.command}` };
+  }
+  let actual: RuntimeBinding;
+  try {
+    actual = await captureRuntimeBinding(await resolveCompatibleRuntime(projectRoot));
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : "Runtime resolution failed";
+    return { status: /incompatible/i.test(reason) ? "runtime-incompatible" : "runtime-missing", expected: manifest.runtime, reason };
+  }
+  if (actual.command !== manifest.runtime.command || actual.resolvedPath !== manifest.runtime.resolvedPath
+    || actual.source !== manifest.runtime.source || actual.version !== manifest.runtime.version || actual.sha256 !== manifest.runtime.sha256) {
+    return { status: "runtime-changed", expected: manifest.runtime, actual, reason: "Resolved runtime identity no longer matches the installed binding" };
+  }
+  return { status: "valid", expected: manifest.runtime, actual };
+}
+
 export async function verifySkills(options: VerifyOptions): Promise<Verification> {
   const root = resolveAgentRoot(options.agent, options.target, options);
   const manifest = await readManifest(root);
   if (!manifest) return { root, status: "missing", entries: [{ path: join(root, manifestFilename), status: "missing" }] };
+  const runtime = await verifyRuntimeBinding(manifest, options.projectRoot);
   const entries: VerificationEntry[] = [];
   const expected = new Set(manifest.files.map((file) => file.path));
   for (const file of manifest.files) {
@@ -59,5 +81,5 @@ export async function verifySkills(options: VerifyOptions): Promise<Verification
       if (!expected.has(relativePath)) entries.push({ path: absolute, status: "unexpected" });
     }
   }
-  return { root, manifest, status: overall(entries), entries };
+  return { root, manifest, runtime, status: runtime.status === "valid" ? overall(entries) : runtime.status, entries };
 }

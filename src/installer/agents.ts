@@ -1,10 +1,12 @@
-import { access } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { isRuntimeCompatible, runtimeCompatibility } from "./manifest.js";
+import type { RuntimeBinding } from "./manifest.js";
+import { sha256Bytes } from "../core/checksum.js";
 
 export const agentNames = ["codex", "claude", "cursor"] as const;
 export const installTargets = ["project", "user"] as const;
@@ -39,15 +41,20 @@ export type RuntimeCommand = Readonly<{ command: string; source: "project" | "pa
 const runFile = promisify(execFile);
 export type RuntimeExecutionOptions = Readonly<{ platform?: NodeJS.Platform; execute?: (command: string, args: readonly string[]) => Promise<string> }>;
 
+export async function captureRuntimeBinding(runtime: RuntimeCommand): Promise<RuntimeBinding> {
+  const resolvedPath = await realpath(runtime.command);
+  return { ...runtime, resolvedPath, sha256: sha256Bytes(await readFile(resolvedPath)) };
+}
+
 /** Prefer the project's binary; callers execute only this returned local/PATH command. */
 export async function resolveCompatibleRuntime(projectRoot: string, pathValue = process.env.PATH ?? "", range = runtimeCompatibility, execution: RuntimeExecutionOptions = {}): Promise<RuntimeCommand> {
   const binary = (execution.platform ?? process.platform) === "win32" ? "qa-skill.cmd" : "qa-skill";
   const projectBinary = path.join(projectRoot, "node_modules", ".bin", binary);
   try {
     await access(projectBinary);
-    return inspectRuntime(projectBinary, "project", range, execution);
-  } catch {
-    // Continue with PATH, never a package-fetching fallback.
+    return await inspectRuntime(projectBinary, "project", range, execution);
+  } catch (error: unknown) {
+    if (error instanceof Error && /incompatible|Unable to execute/i.test(error.message)) throw error;
   }
   for (const segment of pathValue.split(path.delimiter).filter(Boolean)) {
     try {

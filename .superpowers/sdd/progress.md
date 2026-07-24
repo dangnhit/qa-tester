@@ -17,7 +17,8 @@
 - Task 8: complete (commits 1346bd0..68c6578, review clean)
 - Task 9: complete (commits fd3bdb7..78f8a69, review clean)
 - Task 10: complete (commits 3b9f790..d7e0b15, review clean)
-- Broad final review fix wave: complete (all Critical, Important, and Minor findings resolved; 322 tests and clean package consumer green)
+- Broad final review fix wave: complete (all Critical, Important, and Minor findings resolved).
+- Follow-up broad re-review fix wave: complete (3 Important and 1 Minor resolved; exact acceptance passed with 327 tests and clean package consumer green).
 
 ## Final review
 

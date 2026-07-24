@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import { verifySkills } from "../../src/installer/verify.js";
 import { uninstallSkills } from "../../src/installer/uninstall.js";
 import { runCli } from "../../src/cli/program.js";
 import { resolveCompatibleRuntime } from "../../src/installer/agents.js";
+import { manifestFilename } from "../../src/installer/manifest.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -35,7 +36,24 @@ describe("portable skill installer", () => {
     const installed = await installSkills(options);
     expect(installed.root).toMatch(/\.codex[\\/]skills$/);
     expect(await readFile(join(installed.root, "qa-tester", "SKILL.md"), "utf8")).toContain("name: qa-tester");
-    expect((await verifySkills(options)).status).toBe("valid");
+    const manifest = JSON.parse(await readFile(join(installed.root, manifestFilename), "utf8")) as { runtime: { command: string; resolvedPath: string; source: string; version: string; sha256: string } };
+    expect(manifest.runtime).toMatchObject({ command: join(options.projectRoot, "node_modules", ".bin", "qa-skill"), source: "project", version: "0.1.0" });
+    expect(manifest.runtime.resolvedPath).toBe(await realpath(manifest.runtime.command));
+    expect(manifest.runtime.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(await verifySkills(options)).toMatchObject({ status: "valid", runtime: { status: "valid", expected: manifest.runtime, actual: manifest.runtime } });
+  });
+
+  it("reports a changed, incompatible, or missing recorded runtime binding with typed verification status", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await installSkills(options);
+    const runtime = join(options.projectRoot, "node_modules", ".bin", "qa-skill");
+
+    await writeFile(runtime, "#!/bin/sh\n# compatible but different identity\necho 0.1.0\n");
+    expect(await verifySkills(options)).toMatchObject({ status: "runtime-changed", runtime: { status: "runtime-changed" } });
+    await writeFile(runtime, "#!/bin/sh\necho 9.0.0\n");
+    expect(await verifySkills(options)).toMatchObject({ status: "runtime-incompatible", runtime: { status: "runtime-incompatible" } });
+    await rm(runtime);
+    expect(await verifySkills(options)).toMatchObject({ status: "runtime-missing", runtime: { status: "runtime-missing" } });
   });
 
   it("uses the requested user home instead of the project for user installs", async () => {
