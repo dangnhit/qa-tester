@@ -297,6 +297,14 @@ describe("semantic-rule characterization: test-plan", () => {
       code: "ARTIFACT_BINDING",
       message: "Test plan has an orphan or ambiguous expected result requirement",
     },
+    {
+      // The schema lets expectedResults[].authority be any enum value with no tie to the
+      // referenced requirement's own authority, so this mismatch is independently triggerable.
+      label: "an expected result's authority disagrees with its registered requirement's authority",
+      value: () => testPlan({}, { expectedResults: [{ id: "ER", requirementId: "REQ", authority: "ASSUMED", text: "Saved" }] }),
+      code: "ARTIFACT_BINDING",
+      message: "Test plan expected authority does not match its registered requirement",
+    },
   ])("WRITE rejects when $label", async ({ value, code, message }) => {
     const workspace = await freshWorkspace();
     const analysis = await workspace.registerArtifactValue({ type: "requirement-analysis", value: requirementAnalysis(), relationships: [] });
@@ -324,6 +332,11 @@ describe("semantic-rule characterization: test-plan", () => {
       label: "an expected result is tampered to reference an orphan requirement",
       tamper: (workspacePath: string) => tamperRegistered(workspacePath, "test-plan", (value) => { firstExpectedResult(value).requirementId = "REQ-ORPHAN"; }),
       message: "Test plan has an orphan or ambiguous expected result requirement",
+    },
+    {
+      label: "an expected result's authority is tampered to disagree with its registered requirement",
+      tamper: (workspacePath: string) => tamperRegistered(workspacePath, "test-plan", (value) => { firstExpectedResult(value).authority = "ASSUMED"; }),
+      message: "Test plan expected authority does not match its registered requirement",
     },
     {
       label: "the single authoritative environment profile drops out of the valid set",

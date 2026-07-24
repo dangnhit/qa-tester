@@ -74,6 +74,7 @@ analysis was invalidated" notion (referenced analyses are always valid at regist
 | Persisted `approvalDecision` ≠ derived decision | UNREACHABLE — `withDerivedTestPlanApproval` strips/derives the field, so the write-path equality branch (`~1695`) can never observe a mismatch | INVALID_REFERENCE — `Persisted test plan approval decision does not equal the derived decision` | **ASYMMETRY** — checked only on read; write branch is dead code |
 | `auto-approve-safe` policy whose derived decision is non-approved (e.g. open questions) | THROW `UNSAFE_OPERATION` — `Unsafe auto-approval: open-questions` | ACCEPT — read has **no** unsafe-auto-approval guard | **DRIFT-OUTCOME + ASYMMETRY** — write rejects unsafe auto-approval; read accepts the persisted result |
 | Expected result references a requirement absent from every analysis (orphan/ambiguous) | THROW `ARTIFACT_BINDING` — `Test plan has an orphan or ambiguous expected result requirement` | INVALID_REFERENCE — `Test plan has an orphan or ambiguous expected result requirement` | AGREE (same message, via `deriveTestPlanApproval`) |
+| Expected result's `authority` disagrees with its registered requirement's authority (`ASSUMED` on the expected result vs `AUTHORITATIVE` on the statement) | THROW `ARTIFACT_BINDING` — `Test plan expected authority does not match its registered requirement` | INVALID_REFERENCE — `Test plan expected authority does not match its registered requirement` | AGREE (same message, via `deriveTestPlanApproval:73`; independently triggerable — the schema does not tie `expectedResults[].authority` to the referenced requirement's authority) |
 | Not exactly one authoritative environment profile | UNREACHABLE (as a failure) — the workspace always holds exactly one valid environment profile at registration; `assertArtifactBinding` forbids registering a second, and the profile is created with the workspace | INVALID_REFERENCE — `Test plan requires one authoritative environment profile` (reached when the profile is invalidated, e.g. checksum corruption) | **ASYMMETRY** — a reachable read failure with no reachable write counterpart |
 | Registered requirement analyses re-checked for authority | Write re-runs `assertRequirementAuthorities` over ALL registered analyses (dead as a failure: each analysis already passed at its own registration) | Read's test-plan branch does **not** re-check requirement authorities (only `deriveTestPlanApproval`, which checks expected-result↔requirement authority equality) | **ASYMMETRY** — write re-validates authorities the read path does not |
 
@@ -81,7 +82,8 @@ analysis was invalidated" notion (referenced analyses are always valid at regist
 
 **Reached and pinned on both paths:** requirement-analysis authority mismatch;
 coverage-obligation orphan-analysis-artifact / orphan-requirement / ambiguous-requirement;
-test-plan orphan expected result; all three valid/accept cases.
+test-plan orphan expected result; test-plan expected-result authority mismatch; all three
+valid/accept cases.
 
 **Reached on one path only (accept-vs-reject or asymmetry, pinned):** test-plan
 self-asserted decision (write reject / read accept); test-plan tampered decision (read only);
