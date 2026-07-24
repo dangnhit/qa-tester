@@ -82,14 +82,6 @@ export type SemanticContext = Readonly<{
   relatedOfType(type: ArtifactType): readonly RelatedArtifact[];
   related(): readonly RelatedArtifact[];
 
-  /** ALL loaded/registered artifacts of a type, VALIDITY-AGNOSTIC and value-aware — unlike
-   *  `relatedOfType` (the cascade-sensitive valid pool), this includes binary/media records (no
-   *  `value`) and read-path descriptors that loaded but were later invalidated (`value` present).
-   *  The evidence-derivation check must resolve its source descriptor/binary by id regardless of
-   *  validity, exactly matching the read path's use of the full loaded list (design §2: "media/binary
-   *  lookups use the full artifacts list where a rule needs invalid/binary records"). */
-  loadedOfType(type: ArtifactType): readonly RelatedArtifact[];
-
   /** Manifest-record existence, INDEPENDENT of validity. Stable on both paths (backed by the full
    *  manifest, not the valid pool). Used where a rule must distinguish "record absent from the
    *  manifest" from "record present but not resolvable" — e.g. coverage-obligation's two messages. */
@@ -829,22 +821,22 @@ const retestResultRule: SemanticRule = {
   },
 };
 
-/** Rule: `evidence` — carries per-path drift on the attempt-binding message and per-path POOL logic on
- *  both checks. Block A (attempt binding) uses `ctx.relatedOfType("test-result")` (WRITE = the on-disk
- *  registered set; READ = the cascade-sensitive valid pool) and drifts only in its MESSAGE plus a
- *  WRITE-only "exactly one test-result relationship" guard. Block B (derived-screenshot derivation)
- *  shares its message on both paths but partitions descriptor↔binary differently: WRITE keys on the
- *  manifest record's `mediaType` (`ctx.registeredRecord`), READ keys on loaded `value` presence
- *  (`ctx.loadedOfType`, validity-agnostic — a source descriptor that loaded but was later invalidated
- *  is still found, matching the current read path). Both stages short-circuit block A→block B, exactly
- *  as the write path throws-on-first; the read path's independent non-short-circuit emission of BOTH
- *  block A and block B for a simultaneously-tampered derived screenshot collapses to the first
- *  violation here (an inherent consequence of unifying onto the single-violation rule; the artifact is
- *  invalid, and the workspace outcome, unchanged). Faithful to write `assertSemanticReferences`
- *  evidence branch and read `inspectWorkspaceState` in-fixpoint evidence branch. */
+/** Rule: `evidence` — WRITE-only (`appliesTo.read === false`). Like `evidence-gap`, the READ side is
+ *  DELIBERATELY LEFT INLINE in `inspectWorkspaceState`'s in-fixpoint loop and is NOT migrated: the old
+ *  read code ran block A (attempt/testcase identity) and block B (derived-screenshot descriptor↔raw
+ *  checksum) as two INDEPENDENT `if`s, so a derived screenshot with BOTH its attempt binding AND its
+ *  derivation tampered emits TWO `INVALID_REFERENCE` diagnostics in one pass. Routing read through this
+ *  single-violation rule (which returns the FIRST violation) would collapse that to ONE diagnostic — an
+ *  observable change to the diagnostic set/count for a constructible input. So read stays inline
+ *  (two independent emissions preserved); only the WRITE branch is migrated here, and the write path
+ *  faithfully throws on the FIRST violation. The per-path message drift (write message here; read block
+ *  A message inline) is preserved, not reconciled. Block A uses `ctx.relatedOfType("test-result")` (the
+ *  on-disk registered set) with the WRITE-only "exactly one test-result relationship" guard; block B
+ *  keys descriptor↔binary on the manifest record's `mediaType` via `ctx.registeredRecord`. Faithful to
+ *  the write `assertSemanticReferences` evidence branch. */
 const evidenceRule: SemanticRule = {
   type: "evidence",
-  appliesTo: { write: true, read: true },
+  appliesTo: { write: true, read: false },
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
@@ -855,46 +847,27 @@ const evidenceRule: SemanticRule = {
       || value.testCaseId !== match.value?.testCaseId
       || value.testCaseRevisionId !== match.value?.testCaseRevisionId
       || value.testCaseInstanceId !== match.value?.testCaseInstanceId;
-    if (ctx.stage === "write") {
-      if (identityFail || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1) {
-        return { code: "ARTIFACT_BINDING", message: "Evidence binding requires one exact registered test result relationship and matching testcase identity" };
-      }
-    } else if (identityFail) {
-      return { code: "ARTIFACT_BINDING", message: "Evidence must reference one exact registered attempt and matching testcase identity" };
+    if (identityFail || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1) {
+      return { code: "ARTIFACT_BINDING", message: "Evidence binding requires one exact registered test result relationship and matching testcase identity" };
     }
     const derivation = isRecord(value.derivation) ? value.derivation : undefined;
     const sourceEvidenceId = derivation?.sourceEvidenceArtifactId;
     const sourceBinaryId = derivation?.sourceBinaryArtifactId;
-    if (ctx.stage === "write") {
-      const derivedFromDescriptor = ctx.relationships.some((id) => {
-        const record = ctx.registeredRecord(id, "evidence");
-        return record !== undefined && record.mediaType === undefined;
-      });
-      if (derivedFromDescriptor) {
-        const descriptorRecord = typeof sourceEvidenceId === "string" ? ctx.registeredRecord(sourceEvidenceId, "evidence") : undefined;
-        const sourceDescriptor = descriptorRecord !== undefined && descriptorRecord.mediaType === undefined ? descriptorRecord : undefined;
-        const binaryRecord = typeof sourceBinaryId === "string" ? ctx.registeredRecord(sourceBinaryId, "evidence") : undefined;
-        const sourceBinary = binaryRecord !== undefined && binaryRecord.mediaType === "image/png" ? binaryRecord : undefined;
-        if (!derivation || !sourceDescriptor || !sourceBinary
-          || derivation.sourceEvidenceSha256 !== sourceDescriptor.sha256
-          || derivation.sourceRawSha256 !== sourceBinary.sha256
-          || !ctx.relationships.includes(sourceDescriptor.id)
-          || !ctx.relationships.includes(sourceBinary.id)) {
-          return { code: "ARTIFACT_BINDING", message: "Derived screenshot must preserve exact source descriptor and raw checksum relationships" };
-        }
-      }
-    } else {
-      const derivedFromDescriptor = ctx.relationships.some((id) => ctx.loadedOfType("evidence").some((candidate) => candidate.record.id === id && candidate.value !== undefined));
-      if (derivedFromDescriptor) {
-        const sourceDescriptor = ctx.loadedOfType("evidence").find((candidate) => candidate.record.id === sourceEvidenceId && candidate.value !== undefined);
-        const sourceBinary = ctx.loadedOfType("evidence").find((candidate) => candidate.record.id === sourceBinaryId && candidate.value === undefined);
-        if (!derivation || !sourceDescriptor || !sourceBinary
-          || derivation.sourceEvidenceSha256 !== sourceDescriptor.record.sha256
-          || derivation.sourceRawSha256 !== sourceBinary.record.sha256
-          || !ctx.relationships.includes(sourceDescriptor.record.id)
-          || !ctx.relationships.includes(sourceBinary.record.id)) {
-          return { code: "ARTIFACT_BINDING", message: "Derived screenshot must preserve exact source descriptor and raw checksum relationships" };
-        }
+    const derivedFromDescriptor = ctx.relationships.some((id) => {
+      const record = ctx.registeredRecord(id, "evidence");
+      return record !== undefined && record.mediaType === undefined;
+    });
+    if (derivedFromDescriptor) {
+      const descriptorRecord = typeof sourceEvidenceId === "string" ? ctx.registeredRecord(sourceEvidenceId, "evidence") : undefined;
+      const sourceDescriptor = descriptorRecord !== undefined && descriptorRecord.mediaType === undefined ? descriptorRecord : undefined;
+      const binaryRecord = typeof sourceBinaryId === "string" ? ctx.registeredRecord(sourceBinaryId, "evidence") : undefined;
+      const sourceBinary = binaryRecord !== undefined && binaryRecord.mediaType === "image/png" ? binaryRecord : undefined;
+      if (!derivation || !sourceDescriptor || !sourceBinary
+        || derivation.sourceEvidenceSha256 !== sourceDescriptor.sha256
+        || derivation.sourceRawSha256 !== sourceBinary.sha256
+        || !ctx.relationships.includes(sourceDescriptor.id)
+        || !ctx.relationships.includes(sourceBinary.id)) {
+        return { code: "ARTIFACT_BINDING", message: "Derived screenshot must preserve exact source descriptor and raw checksum relationships" };
       }
     }
     return undefined;
@@ -955,8 +928,9 @@ const changeScopeRule: SemanticRule = {
 
 /** The shared table. Task 14 migrated the three overlapping planning types; Task 15a added the eight
  *  synchronous "both-path" types; Task 15b added the three async + regression heavy-derivation types;
- *  Task 15c adds `evidence` (both), `evidence-gap` (write-only — read stays inline post-fixpoint), and
- *  `change-scope` (read-only), finalizing the in-fixpoint migration. Types with no per-type semantic
+ *  Task 15c adds `evidence` (write-only — read stays inline in-fixpoint to preserve its two independent
+ *  diagnostics), `evidence-gap` (write-only — read stays inline post-fixpoint), and `change-scope`
+ *  (read-only), finalizing the in-fixpoint migration. Types with no per-type semantic
  *  rule on either path (`test-case`, `exploratory-finding`, `run-metadata`, `artifact-manifest`),
  *  `environment-profile` (inline in `assertArtifactBinding`), and `workflow-checkpoint` (read-only,
  *  post-fixpoint inline) intentionally remain outside the table. */

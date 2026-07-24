@@ -184,7 +184,6 @@ function buildReadContext(
   artifact: LoadedArtifact,
   value: Record<string, unknown>,
   validArtifacts: readonly LoadedArtifact[],
-  artifacts: readonly LoadedArtifact[],
   manifest: Manifest,
   metadata: WorkspaceMetadata,
   path: string,
@@ -207,7 +206,6 @@ function buildReadContext(
     mode: metadata.mode,
     relatedOfType: (type) => validArtifacts.filter((candidate) => candidate.record.type === type).map(toRelated),
     related: () => validArtifacts.map(toRelated),
-    loadedOfType: (type) => artifacts.filter((candidate) => candidate.record.type === type).map(toRelated),
     registeredRecord: (id, type) => manifest.artifacts.find((candidate) => candidate.id === id && (type === undefined || candidate.type === type)),
     openRun: (runId) => RunWorkspace.open(root, runId),
   };
@@ -348,7 +346,7 @@ async function inspectWorkspaceState(
       if (!value) continue;
       const rule = semanticRules[artifact.record.type];
       if (!rule || !rule.appliesTo.read) continue;
-      const violation = await rule.evaluate(buildReadContext(artifact, value, validArtifacts, artifacts, manifest, metadata, path, expectedRunId));
+      const violation = await rule.evaluate(buildReadContext(artifact, value, validArtifacts, manifest, metadata, path, expectedRunId));
       if (violation) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", violation.message) || changed;
       }
@@ -362,6 +360,35 @@ async function inspectWorkspaceState(
       if (duplicates.length > 1) {
         for (const artifact of duplicates) {
           changed = invalidate(artifact, diagnostics, "AMBIGUOUS_ATTEMPT", `Attempt ${String(artifact.value?.attemptId)} has multiple definitions`) || changed;
+        }
+      }
+    }
+    // Evidence READ stays inline (NOT migrated onto the single-violation `semanticRules` table): block A
+    // (attempt/testcase identity) and block B (derived-screenshot descriptor↔raw checksum) are two
+    // INDEPENDENT `if`s, so a derived screenshot with BOTH tampered emits TWO diagnostics in one pass —
+    // a distinction the return-first rule would collapse. Restored byte-for-byte from the pre-Task-15c
+    // read branch; the write path lives in `evidenceRule`, and the per-path message drift is preserved.
+    for (const artifact of validArtifacts) {
+      const value = artifact.value as Record<string, unknown>;
+      if (artifact.record.type === "evidence") {
+        const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+        const match = matches[0];
+        if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
+          || value.testCaseId !== match.value?.testCaseId || value.testCaseRevisionId !== match.value?.testCaseRevisionId || value.testCaseInstanceId !== match.value?.testCaseInstanceId) {
+          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
+        }
+        const evidenceRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "evidence" && candidate.value));
+        const derivation = isRecord(value.derivation) ? value.derivation : undefined;
+        if (evidenceRelationships.length > 0) {
+          const sourceDescriptor = artifacts.find((candidate) => candidate.record.id === derivation?.sourceEvidenceArtifactId && candidate.record.type === "evidence" && candidate.value);
+          const sourceBinary = artifacts.find((candidate) => candidate.record.id === derivation?.sourceBinaryArtifactId && candidate.record.type === "evidence" && !candidate.value);
+          if (!derivation || !sourceDescriptor || !sourceBinary
+            || derivation.sourceEvidenceSha256 !== sourceDescriptor.record.sha256
+            || derivation.sourceRawSha256 !== sourceBinary.record.sha256
+            || !artifact.record.relationships.includes(sourceDescriptor.record.id)
+            || !artifact.record.relationships.includes(sourceBinary.record.id)) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Derived screenshot must preserve exact source descriptor and raw checksum relationships") || changed;
+          }
         }
       }
     }
@@ -1074,16 +1101,6 @@ export class RunWorkspace {
     for (const relatedType of new Set(manifest.artifacts.filter((artifact) => artifact.mediaType === undefined).map((artifact) => artifact.type))) {
       byType.set(relatedType, await this.readRegisteredRelated(manifest, relatedType));
     }
-    // `loadedByType` mirrors the read path's full (validity-agnostic) loaded set: the on-disk
-    // registered descriptors (value present, reused from `byType`) plus media/binary records (no
-    // value), so a write rule needing binary lookups sees the same shape as read's `loadedOfType`.
-    const loadedByType = new Map<ArtifactType, readonly RelatedArtifact[]>();
-    for (const relatedType of new Set(manifest.artifacts.map((artifact) => artifact.type))) {
-      const media = manifest.artifacts
-        .filter((artifact) => artifact.type === relatedType && artifact.mediaType !== undefined)
-        .map((record): RelatedArtifact => ({ record }));
-      loadedByType.set(relatedType, [...(byType.get(relatedType) ?? []), ...media]);
-    }
     const self: ArtifactRecord = { id: "", type, relativePath: "", sha256: "", provenance: "", relationships: [...relationships] };
     return {
       stage: "write",
@@ -1099,7 +1116,6 @@ export class RunWorkspace {
       mode: this.mode,
       relatedOfType: (relatedType) => byType.get(relatedType) ?? [],
       related: () => [...byType.values()].flat(),
-      loadedOfType: (relatedType) => loadedByType.get(relatedType) ?? [],
       registeredRecord: (id, relatedType) => manifest.artifacts.find((artifact) => artifact.id === id && (relatedType === undefined || artifact.type === relatedType)),
       openRun: (runId) => RunWorkspace.open(this.root, runId),
     };
