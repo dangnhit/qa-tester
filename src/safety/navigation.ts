@@ -142,10 +142,22 @@ function embeddedIpv4(bytes: readonly number[]): Ipv4 | null {
   return [a, b, c, d];
 }
 
+/**
+ * The low 32 bits of a deprecated IPv4-COMPATIBLE IPv6 address (`::a.b.c.d`, high
+ * 96 bits all zero — RFC 4291 §2.5.5.1), as a 4-octet tuple; null otherwise.
+ * NOTE this also matches `::` (low32 == 0) and `::1` (low32 == 1); callers must
+ * exclude those — `::` is the unspecified address and `::1` is IPv6 loopback.
+ */
+function ipv4CompatibleLow32(bytes: readonly number[]): Ipv4 | null {
+  if (!bytes.slice(0, 12).every((byte) => byte === 0)) return null;
+  const [a = 0, b = 0, c = 0, d = 0] = bytes.slice(12, 16);
+  return [a, b, c, d];
+}
+
 // --- IPv4 range predicates (operate on normalized 4-octet tuples) ---
 
-function isUnspecifiedV4([a, b, c, d]: Ipv4): boolean {
-  return a === 0 && b === 0 && c === 0 && d === 0;
+function isThisHostNetworkV4([a]: Ipv4): boolean {
+  return a === 0; // 0.0.0.0/8 "this host on this network" (RFC 1122 §3.2.1.3); includes the 0.0.0.0 unspecified address
 }
 
 function isMetadataOrLinkLocalV4([a, b]: Ipv4): boolean {
@@ -167,17 +179,27 @@ function isPrivateV4([a, b]: Ipv4): boolean {
 /**
  * True for addresses that are NEVER a legitimate QA navigation target, in every
  * classification: cloud-metadata / IPv4 link-local (169.254.0.0/16), the
- * unspecified address (0.0.0.0 / ::), IPv6 link-local (fe80::/10), and the
- * IPv4-mapped forms of these. An unparseable value is treated conservatively as
- * blocked (guards against a misbehaving injected resolver).
+ * 0.0.0.0/8 this-host network (incl. the 0.0.0.0 unspecified address) and IPv6
+ * `::`, IPv6 link-local (fe80::/10), deprecated IPv4-compatible IPv6 (::a.b.c.d),
+ * and the IPv4-mapped forms of these. An unparseable value is treated
+ * conservatively as blocked (guards against a misbehaving injected resolver).
  */
+function isBlockedAlwaysV4(bytes: Ipv4): boolean {
+  return isThisHostNetworkV4(bytes) || isMetadataOrLinkLocalV4(bytes);
+}
+
 export function isBlockedAlways(ip: string): boolean {
   const parsed = parseIp(ip);
   if (parsed === null) return true;
-  if (parsed.kind === "v4") return isUnspecifiedV4(parsed.bytes) || isMetadataOrLinkLocalV4(parsed.bytes);
+  if (parsed.kind === "v4") return isBlockedAlwaysV4(parsed.bytes);
   const embedded = embeddedIpv4(parsed.bytes);
-  if (embedded !== null) return isUnspecifiedV4(embedded) || isMetadataOrLinkLocalV4(embedded);
-  if (parsed.bytes.every((byte) => byte === 0)) return true; // :: unspecified
+  if (embedded !== null) return isBlockedAlwaysV4(embedded);
+  if (parsed.bytes.every((byte) => byte === 0)) return true; // :: unspecified (low32 == 0)
+  // Deprecated IPv4-compatible IPv6 (::a.b.c.d, high 96 bits zero — RFC 4291 §2.5.5.1): never a
+  // legitimate QA target, so block unconditionally. `::` (low32 == 0) is handled above as unspecified;
+  // `::1` (low32 == 1) is IPv6 loopback and must stay classification-aware via isPrivateOrLoopback.
+  const compat = ipv4CompatibleLow32(parsed.bytes);
+  if (compat !== null && !(compat[0] === 0 && compat[1] === 0 && compat[2] === 0 && compat[3] === 1)) return true;
   return parsed.bytes[0] === 0xfe && ((parsed.bytes[1] ?? 0) & 0xc0) === 0x80; // fe80::/10 link-local
 }
 

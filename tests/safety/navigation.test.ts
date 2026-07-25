@@ -79,6 +79,49 @@ describe("assertNavigable always-blocked IP ranges (all classifications)", () =>
   });
 });
 
+describe("assertNavigable IPv4-compatible IPv6 + 0.0.0.0/8 (Finding 1 + 2 fixes)", () => {
+  it("blocks IPv4-compatible ::169.254.169.254 (embedded cloud-metadata) for EVERY classification", async () => {
+    for (const classification of allClassifications) {
+      const error = await refusal(() => assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo(["::169.254.169.254"])));
+      expect(error.message).toMatch(/blocked|metadata|link-local/i);
+    }
+  });
+
+  it("blocks IPv4-compatible ::127.0.0.1 (deprecated form — NOT treated as friendly loopback) for EVERY classification", async () => {
+    for (const classification of allClassifications) {
+      await refusal(() => assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo(["::127.0.0.1"])));
+    }
+  });
+
+  it("keeps ::1 IPv6 loopback classified: ALLOWED for local/test, BLOCKED for staging/production (ordering regression lock)", async () => {
+    for (const classification of ["local", "test"] as const) {
+      await expect(assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo(["::1"]))).resolves.toBeUndefined();
+    }
+    for (const classification of ["staging", "production"] as const) {
+      const error = await refusal(() => assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo(["::1"])));
+      expect(error.message).toMatch(/private|loopback/i);
+    }
+  });
+
+  it("keeps :: (unspecified) always-blocked for EVERY classification (not caught by the new compatible rule)", async () => {
+    for (const classification of allClassifications) {
+      await refusal(() => assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo(["::"])));
+    }
+  });
+
+  it("blocks the whole 0.0.0.0/8 this-host network (0.1.2.3, 0.0.0.1) for EVERY classification", async () => {
+    for (const classification of allClassifications) {
+      for (const ip of ["0.1.2.3", "0.0.0.1"]) {
+        await refusal(() => assertNavigable("https://app.example.test/", sameHostPolicy(classification), resolvesTo([ip])));
+      }
+    }
+  });
+
+  it("still allows 172.15.255.255 (just below RFC1918 172.16/12) for production — no boundary regression", async () => {
+    await expect(assertNavigable("https://app.example.test/", sameHostPolicy("production"), resolvesTo(["172.15.255.255"]))).resolves.toBeUndefined();
+  });
+});
+
 describe("assertNavigable private/loopback ranges (staging + production only)", () => {
   const privateIps = ["127.0.0.1", "10.0.0.5", "192.168.1.10", "172.16.0.1", "100.64.0.1", "::1", "fc00::1", "::ffff:10.0.0.5"];
 
@@ -138,9 +181,16 @@ describe("navigationPolicyFromProfile fail-closed", () => {
 
 describe("isBlockedAlways / isPrivateOrLoopback helpers", () => {
   it("classifies always-blocked addresses (v4, v6, IPv4-mapped)", () => {
-    for (const ip of ["169.254.169.254", "169.254.0.1", "0.0.0.0", "::", "fe80::1", "fe80::abcd:1", "febf::1", "::ffff:169.254.169.254", "::ffff:0.0.0.0"]) {
+    for (const ip of [
+      "169.254.169.254", "169.254.0.1", "0.0.0.0", "::", "fe80::1", "fe80::abcd:1", "febf::1", "::ffff:169.254.169.254", "::ffff:0.0.0.0",
+      // Finding 1: deprecated IPv4-compatible IPv6 (::a.b.c.d, high 96 bits zero, low32 ∉ {0,1}) is always-blocked.
+      "::169.254.169.254", "::127.0.0.1", "::0.1.2.3",
+      // Finding 2: the whole 0.0.0.0/8 this-host network (incl. the embedded/mapped path).
+      "0.1.2.3", "0.0.0.1", "::ffff:0.1.2.3",
+    ]) {
       expect(isBlockedAlways(ip)).toBe(true);
     }
+    // ::1 (IPv6 loopback) MUST NOT be caught by the compatible rule — it stays classification-aware loopback.
     for (const ip of ["93.184.216.34", "127.0.0.1", "10.0.0.1", "::1", "2606:2800:220:1:248:1893:25c8:1946"]) {
       expect(isBlockedAlways(ip)).toBe(false);
     }
