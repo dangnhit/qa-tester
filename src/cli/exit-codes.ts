@@ -21,7 +21,9 @@ export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
  *   6. COMPLETED_WITH_FAILURES              -> UNMET_OBLIGATIONS (1)
  *   7. otherwise                            -> SUCCESS (0)
  * READY_WITH_RISKS and "no gate" both fall through to SUCCESS: the gate itself
- * treats READY_WITH_RISKS as a go verdict, and non-full modes register no gate.
+ * treats READY_WITH_RISKS as a go verdict, and a gate is registered only when the
+ * generate-qa-report operation runs (full and regression modes); plan, execute,
+ * exploratory, and retest modes register no gate.
  */
 export function workflowExitCode(result: Pick<WorkflowResult, "outcome" | "validation" | "releaseRecommendation">): ExitCode {
   if (result.outcome === "ABORTED") return ExitCode.ABORTED_OR_INTERNAL;

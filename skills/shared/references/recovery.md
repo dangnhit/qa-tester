@@ -26,8 +26,9 @@ wins:
 6. `outcome === "COMPLETED_WITH_FAILURES"` → `1` (`UNMET_OBLIGATIONS`)
 7. otherwise → `0` (`SUCCESS`)
 
-`READY_WITH_RISKS` and "no gate registered" (non-`full` modes) both fall through to `0` — a risk-flagged
-go verdict is still success at the process boundary; read `releaseRecommendation` to see the risk.
+`READY_WITH_RISKS` and "no gate registered" (`plan`, `execute`, `exploratory`, and `retest` modes) both
+fall through to `0` — a risk-flagged go verdict is still success at the process boundary; read
+`releaseRecommendation` to see the risk.
 
 For every other `qa-skill` command, a thrown error maps by its internal code: `LIVE_LOCK` → `2`
 (`BLOCKED`); `PATH_ESCAPE`, `SYMLINK_ESCAPE`, or `INSTALLER_SAFETY` → `4` (`SAFETY_DENIED`); anything
@@ -80,7 +81,9 @@ claim, not a verified pass).
 
 - `outcome`: `"AWAITING_RUNTIME" | "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED"`
 - `validation`: `{ valid: boolean, diagnostics: [...] }`
-- `releaseRecommendation` (only registered for `full` mode): `"READY" | "READY_WITH_RISKS" | "NOT_READY"`
+- `releaseRecommendation` (registered when the `generate-qa-report` operation runs — `full` and
+  `regression` modes; not `plan`, `execute`, `exploratory`, or `retest`): `"READY" | "READY_WITH_RISKS" |
+  "NOT_READY"`
 
 The process exit code **collapses distinct situations together**. Exit code `1` alone does not tell you
 whether the gate said "not ready" (`releaseRecommendation === "NOT_READY"`, with `validation.valid ===
