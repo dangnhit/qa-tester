@@ -26,4 +26,4 @@ if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction S
 
 Example — standalone: bootstrap the complete planning bundle and validate the terminal `plan` profile.
 
-Example — full run: register approved cases, scaffold `full-workflow.json` from `SOURCE_RUN_ID`, then run it.
+Example — full run: register approved cases, scaffold `full-workflow.json` from the returned source run ID, then run it.
