@@ -507,11 +507,14 @@ describe("public runtime QA Tester", () => {
     const tester = createQaTester(runtime);
 
     const exploratory = await tester({ root, mode: "exploratory", environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" }, charter: { charterId: "CHAR-TAMPER", mission: "Explore save", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actions: [{ actionId: "open", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget"] } });
+    // Exploratory mode is charter-registration-only: it registers the immutable charter and drives nothing.
+    expect(exploratory.operationOrder).toEqual(["register-exploration-charter"]);
     expect(exploratory.validation.valid).toBe(true);
     const charterRunId = (await readdir(join(root, "qa-results"))).find((id) => id !== bundle.sourceRunId)!;
     const charterWorkspace = await RunWorkspace.open(root, charterRunId);
     const charter = (await charterWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "exploration-charter")!;
-    expect((await charterWorkspace.readRegisteredArtifacts()).find((item) => item.record.type === "exploratory-finding")?.value).toMatchObject({ authority: "EXPLORATORY", satisfiesCoverage: false });
+    // The runtime no longer produces exploratory findings or evidence — those become agent drafts (Phase 4).
+    expect((await charterWorkspace.readRegisteredArtifacts()).some((item) => item.record.type === "exploratory-finding" || item.record.type === "evidence" || item.record.type === "test-result")).toBe(false);
     await rechecksumRegisteredArtifact(charterWorkspace, charter.record.id, (value) => { value.actionBudget = 0; });
     await charterWorkspace.close();
     await expect(RunWorkspace.open(root, charterRunId)).rejects.toThrow(/contract|binding|invalid/i);
@@ -544,20 +547,24 @@ describe("public runtime QA Tester", () => {
     }
   }, 15_000);
 
-  it("enforces exploratory URL scope, side-effect safety, declared budgets, and stop conditions through the public Chromium adapter", async () => {
+  it("registers the exploration charter as its only runtime deliverable, validates the bounded contract, and never drives the browser", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-exploration-contract-")); roots.push(root);
     const tester = createQaTester({ browserManagers: { chromium: { browser } }, evidencePolicies: { required: { safety: { screenshot: "required", console: "off", network: "off", logs: "off" } } } });
     const base = { charterId: "CHAR-CONTRACT", mission: "Explore fixture", scope: ["/"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["fixture"], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["stop"] } as const;
     const input = { root, mode: "exploratory" as const, environmentProfile: { ...environment, baseUrl }, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } };
 
-    await expect(tester({ ...input, charter: { ...base, actions: [{ actionId: "outside", target: "/outside", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } })).rejects.toThrow(/outside.*scope/i);
-    await expect(tester({ ...input, charter: { ...base, charterId: "CHAR-UNSAFE", actions: [{ actionId: "write", target: "/", kind: "navigate", sideEffect: "write", safetyRuleId: "fixture" }] } })).rejects.toThrow(/unsafe.*side effect/i);
+    // The bounded charter contract is still validated at registration; scope/side-effect execution moved to the agent lane (Phase 4).
     await expect(tester({ ...input, charter: { ...base, charterId: "CHAR-BUDGET", actions: [{ actionId: "one", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }, { actionId: "two", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } })).rejects.toThrow(/action list exceeds.*budget/i);
+    await expect(tester({ ...input, charter: { ...base, charterId: "CHAR-UNAUTHORIZED", actions: [{ actionId: "one", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "unlisted" }] } })).rejects.toThrow(/authorized by safety/i);
 
-    const stopped = await tester({ ...input, charter: { ...base, charterId: "CHAR-STOP", actionBudget: 2, actions: [{ actionId: "first", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture", stopCondition: "stop" }, { actionId: "second", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture" }] } });
-    const workspace = await RunWorkspace.open(root, stopped.runId);
-    const finding = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "exploratory-finding");
-    expect(finding?.value.observation).toMatch(/Navigation telemetry/);
+    const registered = await tester({ ...input, charter: { ...base, charterId: "CHAR-VALID", actions: [{ actionId: "first", target: "/", kind: "navigate", sideEffect: "none", safetyRuleId: "fixture", stopCondition: "stop" }] } });
+    expect(registered.operationOrder).toEqual(["register-exploration-charter"]);
+    expect(registered.validation.valid).toBe(true);
+    const workspace = await RunWorkspace.open(root, registered.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    expect(artifacts.some((artifact) => artifact.record.type === "exploration-charter")).toBe(true);
+    // No runtime navigation, evidence, or finding — the SSRF-prone runtime exploration lane is gone.
+    expect(artifacts.some((artifact) => artifact.record.type === "exploratory-finding" || artifact.record.type === "evidence" || artifact.record.type === "test-result")).toBe(false);
     await workspace.close();
   });
 });

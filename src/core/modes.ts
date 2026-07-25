@@ -29,7 +29,7 @@ const directOperations: Readonly<Record<PublicWorkflowMode, readonly WorkflowOpe
   plan: ["ingest-requirement-analysis", "ingest-testcases", "ingest-coverage-obligation"],
   execute: ["execute-browser-test", "collect-evidence"],
   full: ["ingest-requirement-analysis", "ingest-testcases", "ingest-coverage-obligation", "prepare-test-data", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"],
-  exploratory: ["register-exploration-charter", "collect-evidence", "generate-qa-report"],
+  exploratory: ["register-exploration-charter"],
   retest: ["reproduce-bug", "select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "derive-retest-verdict"],
   regression: ["select-regression", "execute-browser-test", "collect-evidence", "generate-bug-report", "generate-qa-report"],
 };

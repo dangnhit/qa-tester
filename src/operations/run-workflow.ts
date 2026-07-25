@@ -8,10 +8,8 @@ import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, ty
 import { isRecord, canonicalJson } from "../core/values.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
-import { activeBrowserSessions } from "../browser/session-registry.js";
 import type { SecretResolver } from "../browser/types.js";
 import { executeTestInstance } from "./execute-browser-test.js";
-import { createBrowserAttemptSession } from "../browser/playwright/session.js";
 import { attachEvidence, captureEvidence, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
 import { normalizeGeometry } from "../evidence/geometry.js";
@@ -639,46 +637,6 @@ async function registerCharter(workspace: RunWorkspace, charter: ExplorationChar
   }, relationships: [environment.record.id], provenance: "runtime" });
 }
 
-/** Bounded exploration uses a runtime-owned browser context, never an agent callback or arbitrary script. */
-async function executeExploration(workspace: RunWorkspace, runtime: QaRuntimeRegistry, ids: NonNullable<QaWorkflowInput["runtime"]>, charter: ExplorationCharter): Promise<readonly ArtifactRecord[]> {
-  const manager = resolveRuntime(runtime.browserManagers, ids.browserManagerId, "browser manager");
-  const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile")?.value;
-  if (!isRecord(environment) || typeof environment.baseUrl !== "string") throw new QaSkillsError("Exploration requires its registered environment", "ARTIFACT_BINDING");
-  const policyLayers = ids.evidencePolicyId === undefined ? {} : resolveRuntime(runtime.evidencePolicies, ids.evidencePolicyId, "evidence policy");
-  const capturePolicy = capturePolicyForEnvironment(environment, policyLayers);
-  const attemptId = `EXP-${workspace.runId}-${createEntityId()}`;
-  const session = await createBrowserAttemptSession(manager.browser, { testCaseId: `EXP-${charter.charterId}`, revisionId: charter.charterId, instanceId: charter.charterId });
-  activeBrowserSessions.set(attemptId, session);
-  try {
-    const started = Date.now();
-    const scope = new Set(charter.scope.map((target) => new URL(target, asString(environment.baseUrl, "environment base URL")).toString()));
-    const observations: string[] = [];
-    for (const action of charter.actions.slice(0, charter.actionBudget)) {
-      if (Date.now() - started > charter.timeBudgetMinutes * 60_000) break;
-      if (action.sideEffect === "write") throw new QaSkillsError(`Exploration action ${action.actionId} requests an unsafe side effect`, "ARTIFACT_BINDING");
-      if (!charter.safetyRules.includes(action.safetyRuleId)) throw new QaSkillsError(`Exploration action ${action.actionId} lacks safety authorization`, "ARTIFACT_BINDING");
-      const target = new URL(action.target, environment.baseUrl);
-      if (!scope.has(target.toString())) throw new QaSkillsError(`Exploration action ${action.actionId} is outside the declared scope`, "ARTIFACT_BINDING");
-      const response = await session.page.goto(target.toString());
-      observations.push(`Navigation telemetry for ${target.pathname}: HTTP ${response?.status() ?? "unavailable"}.`);
-      if (action.stopCondition !== undefined || charter.stopConditions.includes("after-action")) break;
-    }
-    if (observations.length === 0) throw new QaSkillsError("Exploration stopped before any authorized action could be observed", "ARTIFACT_BINDING");
-    const evidence = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: capturePolicy.protectedEnvironment, redaction: capturePolicy.redaction, testcaseId: `EXP-${charter.charterId}` });
-    const charterRecord = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "exploration-charter");
-    if (!charterRecord) throw new QaSkillsError("Exploration finding requires its registered charter", "ARTIFACT_BINDING");
-    const finding = await workspace.registerArtifactValue({ type: "exploratory-finding", value: {
-      artifactType: "exploratory-finding", schemaVersion: "1.0.0", producerVersion: "0.1.0", findingId: `EXP-FIND-${createEntityId()}`, runId: workspace.runId, charterId: charter.charterId,
-      observation: observations.join(" "), authority: "EXPLORATORY", satisfiesCoverage: false,
-    }, relationships: [charterRecord.record.id, evidence.descriptorArtifactId], provenance: "runtime" });
-    return [await workspace.readArtifactRecord(evidence.descriptorArtifactId), finding];
-  } finally {
-    activeBrowserSessions.delete(attemptId);
-    session.secrets.clear();
-    await session.context.close();
-  }
-}
-
 async function registerSelection(workspace: RunWorkspace, selection: RegressionSelection, changeScope: ArtifactRecord): Promise<ArtifactRecord> {
   const artifacts = await workspace.readRegisteredArtifacts();
   const decisions = [...selection.selected, ...selection.excluded];
@@ -999,12 +957,6 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     return executeWithRuntime(workspace, runtime, input.runtime ?? {}, state.executionCaseIds) as Promise<WorkflowOperationOutputMap[Name]>;
   }
   if (name === "collect-evidence") {
-    if (input.mode === "exploratory") {
-      if (!input.charter) throw new QaSkillsError("Exploratory workflow requires exactly one charter", "INVALID_ARTIFACT");
-      const records = await executeExploration(workspace, runtime, input.runtime ?? {}, input.charter);
-      state.exploratoryFindingIds = records.filter((item) => item.type === "exploratory-finding").map((item) => item.id);
-      return records as WorkflowOperationOutputMap[Name];
-    }
     if (input.mode === "retest") {
       const reproduced = new Set(state.reproductionAttemptIds);
       return (await artifacts()).filter((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && (reproduced.has(String(artifact.value.attemptId)) || state.regressionAttemptIds.includes(String(artifact.value.attemptId)))).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];

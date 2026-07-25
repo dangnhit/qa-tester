@@ -45,17 +45,20 @@ describe("workflow mode operation plans", () => {
     expect(operationsForMode("retest").indexOf("generate-bug-report")).toBeLessThan(operationsForMode("retest").indexOf("derive-retest-verdict"));
   });
 
-  it("runs typed exploratory operations in order and never requires a skill shell", async () => {
+  it("runs exploratory mode as charter-registration-only and never drives evidence or report operations", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-workflow-"));
     const calls: string[] = [];
     try {
-      const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); }, "generate-qa-report": () => Promise.resolve() })({
+      const result = await createUnsafeWorkflowRunnerForTests({ "collect-evidence": () => { calls.push("collect-evidence"); return Promise.resolve(); }, "generate-qa-report": () => { calls.push("generate-qa-report"); return Promise.resolve(); } })({
         root, mode: "exploratory",
         environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-1", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false },
         charter: { charterId: "CHAR-1", mission: "Explore sign in", scope: ["/login"], roles: ["member"], heuristics: ["boundary"], safetyRules: ["test account"], actions: [{ actionId: "open", target: "/login", kind: "navigate", sideEffect: "none", safetyRuleId: "test account" }], actionBudget: 1, timeBudgetMinutes: 1, stopConditions: ["budget reached"] },
       });
-      expect(result.operationOrder).toEqual(["register-exploration-charter", "collect-evidence", "generate-qa-report"]);
-      expect(calls).toEqual(["collect-evidence"]);
+      // Exploration moved to the agent lane: the runtime's exploratory deliverable is only the immutable charter.
+      expect(result.operationOrder).toEqual(["register-exploration-charter"]);
+      expect(calls).toEqual([]);
+      expect(result.validation.valid).toBe(true);
+      expect(result.outcome).toBe("COMPLETED");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

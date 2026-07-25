@@ -11,7 +11,7 @@ const requirements: Readonly<Record<ArtifactProfileName, readonly (readonly stri
   plan: [["run-metadata"], ["environment-profile"]],
   execute: [["run-metadata"], ["environment-profile"], ["test-case"], ["test-result"]],
   full: [["run-metadata"], ["environment-profile"], ["test-case"], ["test-result"], ["qa-execution-report"], ["evidence", "evidence-gap"]],
-  exploratory: [["run-metadata"], ["environment-profile"], ["exploration-charter"], ["exploratory-finding"], ["evidence", "evidence-gap"], ["qa-execution-report"]],
+  exploratory: [["run-metadata"], ["environment-profile"], ["exploration-charter"]],
   retest: [["run-metadata"], ["environment-profile"], ["test-result"], ["retest-result"]],
   regression: [["run-metadata"], ["environment-profile"], ["regression-selection"], ["test-case"], ["test-result"]],
   cleanup: [["run-metadata"], ["environment-profile"], ["cleanup-run"]],
