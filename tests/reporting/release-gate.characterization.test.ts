@@ -229,6 +229,58 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — protected-environment labe
   });
 });
 
+describe("deriveReleaseGateFromWorkspaceArtifacts — coverage credit by provenance (Task 27)", () => {
+  // Shared dimensions for an authoritative, required, high-risk coverage
+  // obligation and the test case / test result that can (or cannot) satisfy it.
+  const dimensions = {
+    requirementId: "REQ-CREDIT", role: "member", behavior: "save profile", browser: "chromium",
+    viewport: { width: 1440, height: 900 }, risk: "high", outcome: "confirmation shown",
+  };
+
+  /** Builds a minimal workspace with one obligation and one matching test-result at the given provenance. */
+  function fixtureArtifacts(resultProvenance?: string): GateWorkspaceArtifact[] {
+    return [
+      artifact("requirement-analysis", {
+        statements: [{ requirementId: dimensions.requirementId, authority: "AUTHORITATIVE" }],
+      }, "RA-CREDIT"),
+      artifact("coverage-obligation", {
+        obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, ...dimensions,
+      }, "OBL-CREDIT"),
+      artifact("test-case", {
+        testCaseId: "TC-CREDIT", revisionId: "REV-CREDIT", instanceId: "INST-CREDIT", coverage: dimensions,
+      }, "TC-ART-CREDIT"),
+      artifact("test-result", {
+        attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT",
+      }, "RES-CREDIT", resultProvenance),
+    ];
+  }
+
+  it("credits coverage from a runtime-execution (lane 1) test-result", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts(fixtureArtifacts("runtime-execution"));
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+  });
+
+  it("credits coverage from a runtime-observed (lane 2) test-result", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts(fixtureArtifacts("runtime-observed"));
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+  });
+
+  it("does not credit coverage from an agent-draft test-result", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts(fixtureArtifacts("agent-draft"));
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+  });
+
+  it("does not credit coverage from an unrelated provenance value", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts(fixtureArtifacts("runtime"));
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+  });
+
+  it("does not credit coverage from an undefined provenance", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts(fixtureArtifacts(undefined));
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+  });
+});
+
 describe("deriveReleaseGateFromArtifacts — ignored incident/evidence-gap/cleanup inputs (fail-OPEN)", () => {
   it("accepts but never reads incidents, evidenceGaps, or cleanupLeaks", () => {
     const result = deriveReleaseGateFromArtifacts({

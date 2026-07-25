@@ -8,6 +8,7 @@ import { activeBrowserSessions } from "../browser/session-registry.js";
 import type { BrowserStepResult, BrowserTestStep, CanonicalBrowserTestCase, ExecuteTestInput, InternalExecuteTestInput, TestAttempt } from "../browser/types.js";
 import { validateBrowserTestDsl } from "../contracts/validator.js";
 import { QaSkillsError } from "../core/errors.js";
+import type { ExecutionProvenance } from "../core/provenance.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
@@ -171,7 +172,9 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
           startedAt: attempt.startedAt, finishedAt: attempt.finishedAt,
         },
         relationships: [testCase.artifact.record.id],
-        provenance: "runtime-execution",
+        // Load-bearing type: a typo here becomes a compile error rather than a
+        // silently non-crediting `test-result` (see creditsCoverage).
+        provenance: "runtime-execution" satisfies ExecutionProvenance,
       });
     } });
     return attempt;

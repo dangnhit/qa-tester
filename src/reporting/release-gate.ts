@@ -1,4 +1,5 @@
 import type { DefectSeverity } from "../defects/triage.js";
+import { creditsCoverage } from "../core/provenance.js";
 import { isRecord } from "../core/values.js";
 import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
 import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
@@ -94,7 +95,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (!fields.every((field) => string(field) !== undefined)) return [];
     return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, role: value.role as string, behavior: value.behavior as string, browser: value.browser as string, viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
   });
-  const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => artifact.record.provenance === "runtime-execution").flatMap((artifact) => {
+  const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance)).flatMap((artifact) => {
     const value = artifact.value;
     const testCase = cases.find((candidate) => candidate.value.testCaseId === value.testCaseId && candidate.value.revisionId === value.testCaseRevisionId && candidate.value.instanceId === value.testCaseInstanceId);
     const dimensions = testCase?.value.coverage;

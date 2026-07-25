@@ -81,6 +81,18 @@ describe("evaluateWorkspaceCoverage", () => {
     await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
   });
 
+  it("lets a runtime-observed (lane 2) result satisfy authoritative release coverage", async () => {
+    const fixture = await setup({ resultProvenance: "runtime-observed" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ATTEMPT-SAVE"] });
+  });
+
+  it("does not let an unrelated provenance value satisfy authoritative release coverage", async () => {
+    const fixture = await setup({ resultProvenance: "runtime" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+  });
+
   it("does not accept caller-constructed IDs or verification context", async () => {
     const fixture = await setup({ requirementAuthority: "INFERRED" });
 

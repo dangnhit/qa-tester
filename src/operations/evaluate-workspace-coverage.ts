@@ -1,4 +1,5 @@
 import { QaSkillsError } from "../core/errors.js";
+import { creditsCoverage } from "../core/provenance.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
 import {
@@ -61,7 +62,7 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
     const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
     const cases = artifacts.filter((artifact) => artifact.record.type === "test-case");
     const attempts: CoverageAttempt[] = artifacts
-      .filter((artifact) => artifact.record.type === "test-result" && artifact.record.provenance === "runtime-execution")
+      .filter((artifact) => artifact.record.type === "test-result" && creditsCoverage(artifact.record.provenance))
       .map((result) => {
       const testCaseId = requireString(result.value.testCaseId, "test result test case ID");
       const revisionId = requireString(result.value.testCaseRevisionId, "test result test case revision ID");
