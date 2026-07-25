@@ -65,6 +65,9 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill skills update --agent ... [--force]` | Refresh an installation; drift is preserved unless force is explicit. |
 | `qa-skill skills uninstall --agent ...` | Remove owned unchanged files and report drift leftovers. |
 | `qa-skill runtime verify [--range <semver>]` | Verify the local runtime binding and compatibility. |
+| `qa-skill schema show --type <type>` | Print the compiled JSON Schema for an artifact type. |
+| `qa-skill draft init --type <type>` | Print a minimal valid draft skeleton for one of the 4 agent-authored artifact types (`requirement-analysis`, `test-plan`, `test-case`, `coverage-obligation`); other types error as runtime-owned. |
+| `qa-skill fingerprint --file <json>` | Print the sha256 content fingerprint of a JSON file; matches a registered `test-case`'s `revisionId`. |
 | `qa-skill run create --root <path> --mode <profile> --environment-file <json>` | Create an unlocked, nonterminal Run Workspace for standalone specialist skills and return its run ID as JSON. |
 | `qa-skill workflow bootstrap --root <path> --environment-file <json> --requirement-file <json> --plan-file <json> --test-case-file <json> --coverage-file <json>` | Atomically create the first complete terminal planning run and return its checksum-bound bundle reference; repeat testcase and coverage options as needed. |
 | `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |

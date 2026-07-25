@@ -1,15 +1,18 @@
 import { access, appendFile, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { Command, CommanderError } from "commander";
 
+import { agentDraftSkeletons, agentDraftTypes, isAgentDraftType } from "./artifact-drafts.js";
 import { artifactTypes, type ArtifactType } from "../contracts/types.js";
+import { schemas } from "../contracts/catalog.js";
 import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact-profiles.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { createRun } from "../operations/create-run.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { recordHumanApproval } from "../operations/record-human-approval.js";
+import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
 import { isRuntimeCompatible, runtimeCompatibility, runtimeVersion } from "../installer/manifest.js";
 import { isAgentName, isInstallTarget } from "../installer/agents.js";
@@ -151,6 +154,38 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .action((commandOptions: { range: string }) => {
       if (!isRuntimeCompatible(runtimeVersion, commandOptions.range)) throw new QaSkillsError(`Runtime ${runtimeVersion} is not compatible with ${commandOptions.range}`, "INVALID_ARTIFACT");
       stdout += `${JSON.stringify({ executable: process.argv[1], version: runtimeVersion, range: commandOptions.range, compatible: true })}\n`;
+    });
+  program.command("schema").description("Inspect artifact JSON Schemas").command("show")
+    .description("Print the JSON Schema for an artifact type")
+    .requiredOption("--type <type>", "Artifact type")
+    .action((commandOptions: { type: string }) => {
+      if (!isArtifactType(commandOptions.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
+      stdout += `${JSON.stringify(schemas[commandOptions.type], null, 2)}\n`;
+    });
+  program.command("draft").description("Author agent-drafted artifacts").command("init")
+    .description("Print a minimal valid draft skeleton for an agent-authored artifact type")
+    .requiredOption("--type <type>", `Artifact type: ${agentDraftTypes.join(", ")}`)
+    .action((commandOptions: { type: string }) => {
+      if (!isArtifactType(commandOptions.type)) throw new QaSkillsError("Unsupported artifact type", "INVALID_ARTIFACT");
+      if (!isAgentDraftType(commandOptions.type)) {
+        throw new QaSkillsError(`${commandOptions.type} is runtime-owned; agent drafts exist only for ${agentDraftTypes.join(", ")}`, "INVALID_ARTIFACT");
+      }
+      if (commandOptions.type === "test-case") {
+        stderr += "Note: test-case has no standalone `artifact ingest`; register it only via `qa-skill workflow bootstrap`. revisionId/instanceId below are placeholders -- compute them with `qa-skill fingerprint --file <this-file>` (revisionId is the fingerprint; instanceId is \"<testCaseId>--<first 16 hex characters of the fingerprint>\").\n";
+      }
+      stdout += `${JSON.stringify(agentDraftSkeletons[commandOptions.type], null, 2)}\n`;
+    });
+  program.command("fingerprint")
+    .description("Compute the sha256 content fingerprint of a JSON file (matches a registered test-case's revisionId)")
+    .requiredOption("--file <path>", "Path to a JSON file")
+    .action(async (commandOptions: { file: string }) => {
+      let content: unknown;
+      try {
+        content = JSON.parse(await readFile(resolve(commandOptions.file), "utf8"));
+      } catch (error: unknown) {
+        throw new QaSkillsError(`Unable to read or parse JSON at ${commandOptions.file}: ${error instanceof Error ? error.message : "unknown error"}`, "INVALID_ARTIFACT");
+      }
+      stdout += `${sha256Fingerprint(content)}\n`;
     });
   program.command("artifact").description("Manage QA artifacts within a run workspace").command("ingest")
     .description("Ingest an artifact file into a run workspace")

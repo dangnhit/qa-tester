@@ -33,7 +33,8 @@ import type { Ajv2020 as Ajv2020Instance, ValidateFunction } from "ajv/dist/2020
 
 import type { ArtifactType } from "./types.js";
 
-const schemas: Record<ArtifactType, object> = {
+/** Compiled JSON Schema objects by artifact type; the single source `qa-skill schema show` prints from. */
+export const schemas: Record<ArtifactType, object> = {
   "run-metadata": runMetadataSchema,
   "artifact-manifest": artifactManifestSchema,
   "environment-profile": environmentProfileSchema,
