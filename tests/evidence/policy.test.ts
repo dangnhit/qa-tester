@@ -18,14 +18,26 @@ describe("resolveEvidencePolicy", () => {
     expect(policy.video).toBe("forbidden");
   });
 
-  it("uses the safe defaults for a live browser attempt", () => {
+  it("uses the safe defaults for a live browser attempt with trace opt-in off", () => {
     expect(resolveEvidencePolicy({})).toEqual({
       logs: "always",
       console: "always",
       network: "always",
       screenshot: "on-failure",
-      trace: "on-failure",
+      trace: "off",
       video: "off",
     });
+  });
+
+  it("defaults trace to off so archive retention is opt-in, not an un-overridable floor", () => {
+    expect(resolveEvidencePolicy({}).trace).toBe("off");
+    // No configured layer means the off floor holds.
+    expect(resolveEvidencePolicy({ profile: { screenshot: "on-failure" } }).trace).toBe("off");
+  });
+
+  it("still lets a layer raise trace above the off floor (strongest-wins preserved)", () => {
+    expect(resolveEvidencePolicy({ run: { trace: "always" } }).trace).toBe("always");
+    expect(resolveEvidencePolicy({ profile: { trace: "on-failure" } }).trace).toBe("on-failure");
+    expect(resolveEvidencePolicy({ testcase: { trace: "required" } }).trace).toBe("required");
   });
 });

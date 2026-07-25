@@ -412,17 +412,25 @@ function redactionRegions(value: unknown): readonly { x: number; y: number; widt
     ? value as { x: number; y: number; width: number; height: number }[] : [];
 }
 
-/** Environment identity is canonical; host policy may only add protection/redaction. */
-function capturePolicyForEnvironment(environment: Record<string, unknown>, host: EvidencePolicyLayers) {
+/**
+ * Environment identity is canonical; host policy may only add protection/redaction.
+ * Trace retention is authorized solely by the Environment Profile's `retainTrace` permission
+ * (the host runtime layer can only strengthen protection, never grant retention), and declaring
+ * ANY redaction target (dom selector or region) makes the environment protected — because no
+ * archive channel can prove that target was masked (ADR-0009, CONTEXT.md redaction invariant).
+ */
+export function capturePolicyForEnvironment(environment: Record<string, unknown>, host: EvidencePolicyLayers) {
   const profile = isRecord(environment.evidenceProtection) ? environment.evidenceProtection : {};
   const runtime = host.protection ?? {};
+  const redaction = {
+    domSelectors: [...new Set([...stringArray(profile.domSelectors), ...stringArray(runtime.domSelectors)])],
+    regions: [...redactionRegions(profile.regions), ...redactionRegions(runtime.regions)],
+  };
   return {
-    protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true,
+    protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true || redaction.domSelectors.length > 0 || redaction.regions.length > 0,
+    retainTrace: profile.retainTrace === true,
     telemetryScrubberId: runtime.telemetryScrubberId,
-    redaction: {
-      domSelectors: [...new Set([...stringArray(profile.domSelectors), ...stringArray(runtime.domSelectors)])],
-      regions: [...redactionRegions(profile.regions), ...redactionRegions(runtime.regions)],
-    },
+    redaction,
   };
 }
 
@@ -460,18 +468,20 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
       results.push(registered.record); continue;
     }
     const attemptId = `ATT-${workspace.runId}-${createEntityId()}`;
-    const traceActive = policy.trace === "on-failure" || policy.trace === "always" || policy.trace === "required";
+    // Only start tracing when retention is permitted up front (ADR-0009): if the Environment Profile has
+    // not opted in, buffer no bytes we could never keep. A false permit starts nothing and records no gap.
+    const traceActive = capturePolicy.retainTrace === true && (policy.trace === "on-failure" || policy.trace === "always" || policy.trace === "required");
     await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, environment: executionEnvironment, ...(externalPermitRegistry === undefined ? {} : { externalPermitRegistry }), ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(traceActive ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
-      const retainTrace = policy.trace === "always" || policy.trace === "required" || (policy.trace === "on-failure" && attempt.status !== "PASSED");
+      const retainForStatus = policy.trace === "always" || policy.trace === "required" || (policy.trace === "on-failure" && attempt.status !== "PASSED");
       if (traceActive) {
         const unsafeTraceReason = capturePolicy.protectedEnvironment
           ? "Trace bytes are unavailable for a protected environment because deterministic archive redaction cannot be proven"
           : session.secrets.size > 0
             ? "Trace bytes are unavailable after secret resolution because deterministic archive redaction cannot be proven"
             : undefined;
-        if (!retainTrace || unsafeTraceReason !== undefined) {
+        if (!retainForStatus || unsafeTraceReason !== undefined) {
           await session.context.tracing.stop();
-          if (retainTrace && unsafeTraceReason !== undefined) await recordEvidenceGap({ workspace, attemptId, reason: unsafeTraceReason, affectedClaim: "trace capture" });
+          if (retainForStatus && unsafeTraceReason !== undefined) await recordEvidenceGap({ workspace, attemptId, reason: unsafeTraceReason, affectedClaim: "trace capture" });
         } else {
           const traceDirectory = await mkdtemp(join(tmpdir(), "qa-skills-trace-"));
           const tracePath = join(traceDirectory, "trace.zip");

@@ -339,6 +339,65 @@ describe("public runtime QA Tester", () => {
     await workspace.close();
   });
 
+  it("does not start or retain a trace when the environment profile has not opted in to retention", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-trace-optout-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      // Required trace mode, but the base `environment` never sets evidenceProtection.retainTrace.
+      // Logs stay on so the attempt still registers evidence (the trace simply never starts).
+      evidencePolicies: { required: { safety: { trace: "required", screenshot: "off", console: "off", network: "off", logs: "required" } } },
+    });
+
+    const result = await tester({ root, mode: "execute", environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+
+    // Retention was never permitted: no trace bytes were buffered, so there is nothing to retain and nothing to refuse.
+    expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "trace")).toBe(false);
+    expect(artifacts.some((item) => item.record.type === "evidence-gap" && item.value.affectedClaim === "trace capture")).toBe(false);
+    await workspace.close();
+  });
+
+  it("retains a trace archive when the profile opts in and no secret or redaction target applies", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-trace-retain-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    const optedIn = { ...environment, environmentProfileId: "ENV-TRACE-OPTIN", evidenceProtection: { retainTrace: true } } as const;
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { trace: "required", screenshot: "off", console: "off", network: "off", logs: "off" } } },
+    });
+
+    const result = await tester({ root, mode: "execute", environmentProfile: optedIn, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+
+    expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "trace")).toBe(true);
+    expect(artifacts.some((item) => item.record.type === "evidence-gap" && item.value.affectedClaim === "trace capture")).toBe(false);
+    await workspace.close();
+  });
+
+  it("treats a declared redaction target as a protected environment and refuses the trace as an Evidence Gap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-trace-redaction-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    // Opts in to retention AND declares a dom-selector redaction target, but leaves `protected` unset.
+    const redacted = { ...environment, environmentProfileId: "ENV-TRACE-REDACT", evidenceProtection: { retainTrace: true, domSelectors: ["input"] } } as const;
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      evidencePolicies: { required: { safety: { trace: "required", screenshot: "off", console: "off", network: "off", logs: "off" } } },
+    });
+
+    const result = await tester({ root, mode: "execute", environmentProfile: redacted, bundle, runtime: { browserManagerId: "chromium", evidencePolicyId: "required" } });
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+
+    // Declaring the selector makes the environment protected, so the trace is discarded and a gap replaces it.
+    expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "trace")).toBe(false);
+    expect(artifacts.filter((item) => item.record.type === "evidence-gap" && item.value.affectedClaim === "trace capture").map((item) => String(item.value.reason)).every((reason) => /protected/i.test(reason))).toBe(true);
+    expect(artifacts.some((item) => item.record.type === "evidence-gap" && item.value.affectedClaim === "trace capture")).toBe(true);
+    await workspace.close();
+  });
+
   it("records required video as an evidence gap and makes the deterministic full release gate NOT_READY", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-runtime-video-gap-")); roots.push(root);
     const bundle = await sourceBundle(root);

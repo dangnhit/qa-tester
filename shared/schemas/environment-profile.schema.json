@@ -18,6 +18,7 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "protected": { "type": "boolean" },
+        "retainTrace": { "type": "boolean" },
         "domSelectors": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "regions": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number" }, "height": { "type": "number" } } } }
       }

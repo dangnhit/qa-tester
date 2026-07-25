@@ -228,7 +228,7 @@ export async function runDemo(options: Readonly<{ root?: string; protectedEnviro
     const cleanupStatuses: string[] = [];
     try {
       const bundle = await createSourceBundle(root, server.baseUrl, testcase, resolveDemoSecret);
-      const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "ENV-DEMO-LOCAL", name: "Local intentional-failure fixture", classification: "test", baseUrl: server.baseUrl, productionReadOnly: false };
+      const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "ENV-DEMO-LOCAL", name: "Local intentional-failure fixture", classification: "test", baseUrl: server.baseUrl, productionReadOnly: false, evidenceProtection: { retainTrace: true } };
       const testDataRegistry = new TestDataHookRegistry([{ id: "demo-owned-resource", kind: "api", fixture: "local-marker" }], {
         api: async () => {
           await writeFile(markerPath, "owned demo resource", { flag: "wx" });

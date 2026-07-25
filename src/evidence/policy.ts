@@ -18,7 +18,10 @@ const defaults: ResolvedEvidencePolicy = {
   console: "always",
   network: "always",
   screenshot: "on-failure",
-  trace: "on-failure",
+  // Trace archives embed un-provably-redacted DOM + network content, so retention is opt-in (ADR-0009).
+  // A profile/run/testcase layer may still raise this floor; the Environment Profile's retainTrace
+  // permission (capturePolicyForEnvironment) then gates whether an active trace is ever retained.
+  trace: "off",
   video: "off",
 };
 const rank: Record<Exclude<EvidenceMode, "forbidden">, number> = { off: 0, optional: 1, "on-failure": 2, always: 3, required: 4 };

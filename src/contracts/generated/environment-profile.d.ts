@@ -11,6 +11,7 @@ export interface EnvironmentProfile {
   productionReadOnly: boolean;
   evidenceProtection?: {
     protected?: boolean;
+    retainTrace?: boolean;
     domSelectors?: string[];
     regions?: {
       x: number;

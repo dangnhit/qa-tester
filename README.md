@@ -140,6 +140,10 @@ The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--ta
 
 Evidence listeners start before the actions they observe. Protected targets persist Sanitized Raw Evidence only; annotations are derived separately. Mandatory selectors or regions are masked before screenshot bytes are registered. After any secret is resolved, screenshots require provable secret-derived masking regardless of environment classification; otherwise the runtime registers an Evidence Gap without creating PNG bytes. Other unsafe captures likewise become Evidence Gaps.
 
+### Trace retention is opt-in
+
+A browser trace archive embeds un-provably-redacted DOM and network content, so trace retention is **off by default** and no trace is even started unless the environment permits it. To opt in, set `evidenceProtection.retainTrace: true` on the Environment Profile and raise the trace evidence mode above `off` (for example `on-failure`, `always`, or `required`). Even when retention is permitted, a trace is still refused — recorded as an Evidence Gap instead of an archive — if a secret was resolved during the attempt or the environment is protected. Declaring any `domSelectors` or `regions` redaction target makes the environment protected (no archive channel can prove that target was masked), so traces are never retained there. When `retainTrace` is absent or `false`, nothing is captured and no gap is recorded — the environment has simply opted out.
+
 Known secrets are scrubbed from errors and telemetry. Never put resolved credentials, cookies, personal data, or production payloads in testcases, examples, bug reports, or logs. The checked-in `examples/` use fixed synthetic identifiers and `.test`-style data.
 
 ## Artifact layout
