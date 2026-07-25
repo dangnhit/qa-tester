@@ -165,6 +165,34 @@ function buildReadContext(
   };
 }
 
+/** Concurrency ceiling for the per-artifact revalidation fan-out below: a workspace's evidence set can
+ *  include many large binaries (screenshots, traces), and hashing them all at once on every
+ *  `RunWorkspace.open()` / `readRegisteredArtifacts()` call is an unbounded I/O burst. 16 mirrors the
+ *  cap used by the workflow's own fan-out. */
+const INSPECTION_FANOUT_CONCURRENCY = 16;
+
+/** Bounded-concurrency counterpart to `Promise.all(items.map(mapper))`: runs at most `limit` mapper
+ *  invocations at a time via a shared-cursor worker pool, while preserving both the result order (each
+ *  result is written to its origin index, not push order) and full coverage (every item is visited
+ *  exactly once). Output is therefore identical to the unbounded map it replaces — same results, same
+ *  positions, same propagated rejection — just without opening every file at once. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  const iterator = items.entries();
+  const worker = async (): Promise<void> => {
+    for (let next = iterator.next(); !next.done; next = iterator.next()) {
+      const [index, item] = next.value;
+      results[index] = await mapper(item, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 async function filesUnder(root: string, directory: string): Promise<string[]> {
   await assertPathWithin(root, directory);
   let entries: string[];
@@ -229,7 +257,7 @@ export async function inspectWorkspaceState(
     }
   }
 
-  const artifacts = await Promise.all(manifest.artifacts.map(async (record): Promise<LoadedArtifact> => {
+  const artifacts = await mapWithConcurrency(manifest.artifacts, INSPECTION_FANOUT_CONCURRENCY, async (record): Promise<LoadedArtifact> => {
     const loaded: LoadedArtifact = { record, valid: true };
     if (duplicateIds.has(record.id)) {
       invalidate(loaded, diagnostics, "DUPLICATE_ARTIFACT_ID", `Manifest artifact ID ${record.id} is ambiguous`);
@@ -244,6 +272,18 @@ export async function inspectWorkspaceState(
       }
       throw error;
     }
+    // INVESTIGATED (Task 26/D14) and deliberately NOT hoisted: this is the ONLY place in the read path
+    // that recomputes a hash from actual file BYTES on disk and compares it to the manifest's declared
+    // `record.sha256` — including for binaries (`record.mediaType !== undefined`). The evidence
+    // descriptor <-> binary rule below (the `evidenceDescriptors`/`binaryRecords` loop) does NOT
+    // re-derive a checksum from disk for binaries; it only cross-checks two already-DECLARED values
+    // (`binary.record.sha256` from this manifest vs. `detail.sha256` from the descriptor JSON) for
+    // internal consistency. A binary whose file bytes are tampered in place, with `record.sha256` and
+    // the descriptor's declared checksum left untouched (both still reflect the pre-tamper hash), would
+    // pass that rule and every other read-path check. So skipping this call for binaries (the literal
+    // "hoist mediaType above sha256") would let such a tampered binary load as valid — an integrity
+    // regression. Keep the hash here for every record, binary or not; Part 1's bounded fan-out is the
+    // safe perf win instead.
     if (await sha256(absolutePath) !== record.sha256) {
       invalidate(loaded, diagnostics, "CHECKSUM_MISMATCH", `Checksum mismatch for ${record.relativePath}`);
       return loaded;
@@ -262,7 +302,7 @@ export async function inspectWorkspaceState(
     }
     loaded.value = value;
     return loaded;
-  }));
+  });
 
   for (const artifact of artifacts) {
     if (artifact.record.relationships.some((relationship) => !knownIds.has(relationship))) artifact.valid = false;

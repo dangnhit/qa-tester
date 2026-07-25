@@ -268,3 +268,118 @@ describe("inspectWorkspaceState — diagnostic run golden", () => {
     await workspace.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 26 (Phase 4 / D14): the per-artifact revalidation fan-out is now bounded to a concurrency of 16
+// (a shared-cursor worker pool) instead of an unbounded `Promise.all`. These goldens exercise a
+// workspace with MORE artifacts than the cap, so at least two concurrency "waves" run, and assert the
+// bounded fan-out is behaviorally identical to the unbounded version it replaced: every artifact is
+// processed exactly once, results land in registration order, and diagnostics are produced (or not) for
+// artifacts regardless of which wave picks them up.
+// ---------------------------------------------------------------------------
+describe("inspectWorkspaceState — bounded fan-out golden (Task 26 / D14)", () => {
+  const artifactCount = 24; // > the 16-wide concurrency cap, forcing a second wave
+  const caseId = (index: number) => `TC-${String(index).padStart(3, "0")}`;
+
+  async function buildManyArtifactWorkspace() {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const registered = [];
+    for (let index = 0; index < artifactCount; index += 1) {
+      registered.push(await registerDocument(workspace, "test-case", `case-${caseId(index)}.json`, testCase(caseId(index))));
+    }
+    return { workspace, registered };
+  }
+
+  it("returns all artifacts from a many-artifact workspace in registration order with no diagnostics", async () => {
+    const { workspace } = await buildManyArtifactWorkspace();
+
+    const registeredArtifacts = await workspace.readRegisteredArtifacts();
+    const cases = registeredArtifacts.filter((artifact) => artifact.record.type === "test-case");
+    expect(cases.map((artifact) => artifact.value.testCaseId)).toEqual(
+      Array.from({ length: artifactCount }, (_, index) => caseId(index)),
+    );
+    expect(await workspace.validate("plan")).toEqual({ valid: true, diagnostics: [] });
+
+    await workspace.close();
+  });
+
+  it("still reports every diagnostic for artifacts tampered across both concurrency waves", async () => {
+    const { workspace, registered } = await buildManyArtifactWorkspace();
+
+    // Indices 0 and 15 are claimed by the first wave (the initial 16 workers); 16 and 23 can only be
+    // reached once a first-wave worker frees up and pulls the next item — proving the pool keeps
+    // draining past the cap instead of dropping anything.
+    const tamperedIndices = [0, 15, 16, 23];
+    for (const index of tamperedIndices) {
+      const artifact = registered[index];
+      if (!artifact) throw new Error(`Expected registered artifact at index ${index}`);
+      await writeFile(artifact.absolutePath, "not the registered contents");
+    }
+
+    const validation = await workspace.validate("plan");
+    expect(validation.valid).toBe(false);
+    expect(sortDiagnostics(validation.diagnostics)).toEqual(sortDiagnostics(tamperedIndices.map((index) => {
+      const artifact = registered[index];
+      if (!artifact) throw new Error(`Expected registered artifact at index ${index}`);
+      return { code: "CHECKSUM_MISMATCH", message: `Checksum mismatch for ${artifact.relativePath}`, relativePath: artifact.relativePath };
+    })));
+
+    await workspace.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 26 (Phase 4 / D14): the mediaType hoist investigation. The evidence descriptor <-> binary rule
+// (inspect-workspace-state.ts, the `evidenceDescriptors`/`binaryRecords` loop) only cross-checks two
+// already-DECLARED values — the manifest's `record.sha256` against the descriptor JSON's declared
+// `detail.sha256` — for internal consistency. It never recomputes a hash from the binary's actual file
+// bytes. The manifest-level `sha256(absolutePath) !== record.sha256` check (which runs BEFORE the
+// `mediaType` branch) is the ONLY read-path check that does. This test proves that gap in the negative
+// space: a binary's file bytes are tampered in place while its manifest record AND its descriptor's
+// declared checksum are left untouched (both still reflect the pre-tamper hash) — the same tamper shape
+// the hoist would have made undetectable. Under the current (non-hoisted) code this is still caught via
+// CHECKSUM_MISMATCH; this golden pins that so a future hoist attempt fails loudly instead of silently.
+// ---------------------------------------------------------------------------
+describe("inspectWorkspaceState — binary integrity is still caught (Task 26 / D14 hoist investigation)", () => {
+  it("detects a tampered evidence binary via the manifest checksum even though its descriptor binding was never touched", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
+    const result = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
+    const bundle = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "raw.png", contents: await solidPng(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
+      relationships: [result.id],
+      descriptor: (binaries) => rawScreenshotDescriptor(workspace, binaries),
+    });
+    const binary = bundle.binaries[0];
+    if (!binary) throw new Error("Expected raw evidence binary");
+
+    // Tamper ONLY the binary's actual file bytes. Neither the manifest record's `sha256` nor the
+    // descriptor's declared `binaryArtifacts[0].sha256` are touched, so any check that compares those
+    // two DECLARED values against each other (rather than recomputing from disk) would see them agree
+    // and find nothing wrong.
+    await writeFile(binary.absolutePath, await solidPng(121, 81));
+
+    const validation = await workspace.validate("execute");
+    expect(validation.valid).toBe(false);
+    // CHECKSUM_MISMATCH is the ONLY diagnostic that comes from actually recomputing the binary's hash.
+    // The two INVALID_REFERENCE diagnostics are a downstream CASCADE of that: once the binary is
+    // invalidated, it drops out of the descriptor rule's valid `binaryRecords` pool, so the descriptor
+    // can no longer find its binary at all. Without the manifest-level hash check (i.e. after the
+    // literal "hoist mediaType above sha256"), the binary would stay `valid: true`, stay in
+    // `binaryRecords`, and the descriptor rule's own comparison (`binary.record.sha256 !==
+    // detail.sha256`) would still pass — both are untouched DECLARED values that still agree with each
+    // other, just not with the actual file bytes. So NONE of these three diagnostics would fire and
+    // `validate()` would report `{ valid: true, diagnostics: [] }` on a genuinely tampered binary. That
+    // is precisely why the hoist is unsafe (see the comment above the `sha256` call in
+    // inspect-workspace-state.ts).
+    expect(sortDiagnostics(validation.diagnostics)).toEqual(sortDiagnostics([
+      { code: "CHECKSUM_MISMATCH", message: `Checksum mismatch for ${binary.relativePath}`, relativePath: binary.relativePath },
+      { code: "INVALID_REFERENCE", message: "Evidence descriptor does not match its registered binary", relativePath: bundle.descriptor.relativePath },
+      { code: "INVALID_REFERENCE", message: "Evidence descriptor does not match its designated primary binary", relativePath: bundle.descriptor.relativePath },
+    ]));
+
+    await workspace.close();
+  });
+});
