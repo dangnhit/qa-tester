@@ -93,6 +93,21 @@ describe("evaluateWorkspaceCoverage", () => {
     await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
   });
 
+  it("rejects a test-result with stripped provenance at the manifest validation gate", async () => {
+    // This test pins an invariant: undefined provenance is unreachable at the coverage-predicate layer
+    // because the artifact-manifest schema (additionalProperties: false, required: ["provenance"], minLength: 1)
+    // rejects it at the workspace read/validation gate before creditsCoverage is ever called.
+    // If future changes loosen the manifest schema, this test will fail and should be revisited.
+    const fixture = await setup({ resultProvenance: "runtime-observed" });
+    const manifestPath = join(fixture.workspacePath, "artifact-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; type: string; relativePath: string; sha256: string; provenance?: string }[] };
+    const record = manifest.artifacts.find((artifact) => artifact.type === "test-result");
+    if (record) delete record.provenance;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/Invalid artifact manifest/);
+  });
+
   it("does not accept caller-constructed IDs or verification context", async () => {
     const fixture = await setup({ requirementAuthority: "INFERRED" });
 
