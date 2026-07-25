@@ -29,11 +29,13 @@ export interface QAExecutionReport {
   criticalFindings: string[];
   remainingRisks: string[];
   excludedNotRun: string[];
+  protectedEnvironment?: boolean;
   releaseGate: {
     sourceArtifacts: {
       [k: string]: unknown | undefined;
     }[];
     recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
+    protectedEnvironment?: boolean;
     ruleInputs: {
       [k: string]: unknown | undefined;
     };

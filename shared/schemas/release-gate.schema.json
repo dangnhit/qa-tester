@@ -9,6 +9,7 @@
     "artifactType": { "const": "release-gate" }, "schemaVersion": { "const": "1.0.0" }, "producerVersion": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 },
     "sourceArtifacts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "sha256", "type"], "properties": { "id": { "type": "string", "minLength": 1 }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "type": { "type": "string", "minLength": 1 } } } },
     "recommendation": { "enum": ["READY", "READY_WITH_RISKS", "NOT_READY"] },
+    "protectedEnvironment": { "type": "boolean" },
     "ruleInputs": { "type": "object" },
     "verdicts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["rule", "passed", "reason"], "properties": { "rule": { "type": "string", "minLength": 1 }, "passed": { "type": "boolean" }, "reason": { "type": "string", "minLength": 1 } } } }
   }

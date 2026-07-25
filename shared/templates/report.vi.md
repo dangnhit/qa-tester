@@ -35,3 +35,6 @@
 
 ## {{release_label}}
 {{release}}
+
+## {{protected_label}}
+{{protected}}

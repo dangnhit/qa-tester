@@ -420,6 +420,9 @@ const releaseGateRule: SemanticRule = {
       || JSON.stringify(value.sourceArtifacts) !== JSON.stringify(derived.sourceArtifacts)
       || JSON.stringify(value.ruleInputs) !== JSON.stringify(derived.ruleInputs)
       || JSON.stringify(value.verdicts) !== JSON.stringify(derived.verdicts)
+      // The protected-environment LABEL (D12) is a deterministic pure function of the persisted
+      // profile, so the persisted label must equal the re-derived one — a tampered label cannot lie.
+      || value.protectedEnvironment !== derived.protectedEnvironment
       || value.recommendation !== derived.recommendation) {
       return {
         code: "ARTIFACT_BINDING",
@@ -443,14 +446,14 @@ const qaExecutionReportRule: SemanticRule = {
     const gates = ctx.relatedOfType("release-gate");
     if (ctx.stage === "write") {
       const gate = gates[0]?.value;
-      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
+      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, protectedEnvironment: gate.protectedEnvironment, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
       if (gates.length !== 1 || !isRecord(value.releaseGate) || value.releaseRecommendation !== value.releaseGate.recommendation
         || gate?.recommendation !== value.releaseRecommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
         return { code: "ARTIFACT_BINDING", message: "QA report must reference the single registered deterministic release gate" };
       }
     } else {
       const gate = gates.length === 1 ? gates[0]?.value : undefined;
-      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
+      const expectedGate = gate === undefined ? undefined : { sourceArtifacts: gate.sourceArtifacts, recommendation: gate.recommendation, protectedEnvironment: gate.protectedEnvironment, ruleInputs: gate.ruleInputs, verdicts: gate.verdicts };
       if (!gate || !isRecord(value.releaseGate) || value.releaseRecommendation !== gate.recommendation || canonicalJson(value.releaseGate) !== canonicalJson(expectedGate)) {
         return { code: "ARTIFACT_BINDING", message: "QA report must embed the complete registered release gate" };
       }

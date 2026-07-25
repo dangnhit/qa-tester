@@ -11,6 +11,7 @@ export interface ReleaseGate {
     type: string;
   }[];
   recommendation: "READY" | "READY_WITH_RISKS" | "NOT_READY";
+  protectedEnvironment?: boolean;
   ruleInputs: {
     [k: string]: unknown | undefined;
   };

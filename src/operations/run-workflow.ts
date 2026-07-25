@@ -16,6 +16,7 @@ import { normalizeGeometry } from "../evidence/geometry.js";
 import { redactText } from "../evidence/redaction.js";
 import { resolveLocator } from "../browser/locator.js";
 import { resolveEvidencePolicy, type EvidencePolicyLayers } from "../evidence/policy.js";
+import { profileDeclaresProtectedEnvironment, protectionDomSelectors, protectionRegions } from "../evidence/protection.js";
 import { prepareTestData } from "./prepare-test-data.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { registerChangeScope } from "../regression/change-scope.js";
@@ -403,31 +404,27 @@ function resolveRuntime<T>(items: Readonly<Record<string, T>> | undefined, id: s
   return items[id];
 }
 
-function stringArray(value: unknown): readonly string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : [];
-}
-
-function redactionRegions(value: unknown): readonly { x: number; y: number; width: number; height: number }[] {
-  return Array.isArray(value) && value.every((item) => isRecord(item) && [item.x, item.y, item.width, item.height].every((part) => typeof part === "number"))
-    ? value as { x: number; y: number; width: number; height: number }[] : [];
-}
-
 /**
  * Environment identity is canonical; host policy may only add protection/redaction.
  * Trace retention is authorized solely by the Environment Profile's `retainTrace` permission
  * (the host runtime layer can only strengthen protection, never grant retention), and declaring
  * ANY redaction target (dom selector or region) makes the environment protected — because no
  * archive channel can prove that target was masked (ADR-0009, CONTEXT.md redaction invariant).
+ *
+ * The profile-side protected decision is shared with the release gate via
+ * `profileDeclaresProtectedEnvironment`; here we additionally OR in the transient runtime host
+ * layer (`runtime.protectedEnvironment` and any host-declared redaction targets), which the
+ * persisted-artifact-only gate deliberately cannot see.
  */
 export function capturePolicyForEnvironment(environment: Record<string, unknown>, host: EvidencePolicyLayers) {
   const profile = isRecord(environment.evidenceProtection) ? environment.evidenceProtection : {};
   const runtime = host.protection ?? {};
   const redaction = {
-    domSelectors: [...new Set([...stringArray(profile.domSelectors), ...stringArray(runtime.domSelectors)])],
-    regions: [...redactionRegions(profile.regions), ...redactionRegions(runtime.regions)],
+    domSelectors: [...new Set([...protectionDomSelectors(profile.domSelectors), ...protectionDomSelectors(runtime.domSelectors)])],
+    regions: [...protectionRegions(profile.regions), ...protectionRegions(runtime.regions)],
   };
   return {
-    protectedEnvironment: environment.classification === "production" || profile.protected === true || runtime.protectedEnvironment === true || redaction.domSelectors.length > 0 || redaction.regions.length > 0,
+    protectedEnvironment: profileDeclaresProtectedEnvironment(environment) || runtime.protectedEnvironment === true || redaction.domSelectors.length > 0 || redaction.regions.length > 0,
     retainTrace: profile.retainTrace === true,
     telemetryScrubberId: runtime.telemetryScrubberId,
     redaction,

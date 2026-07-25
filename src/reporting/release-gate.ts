@@ -1,5 +1,6 @@
 import type { DefectSeverity } from "../defects/triage.js";
 import { isRecord } from "../core/values.js";
+import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
 import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
 
 export type GateBug = Readonly<{ bugId: string; triageStatus: "NEEDS_TRIAGE" | "TRIAGED"; severity?: DefectSeverity; open: boolean }>;
@@ -15,6 +16,13 @@ export type ReleaseGateResult = Readonly<{ recommendation: "READY" | "READY_WITH
 export type ReleaseRecommendation = ReleaseGateResult["recommendation"];
 export type GateSourceArtifact = Readonly<{ id: string; sha256: string; type: string }>;
 export type DerivedReleaseGate = ReleaseGateResult & Readonly<{ sourceArtifacts: readonly GateSourceArtifact[] }>;
+/**
+ * The workspace-derived gate additionally carries the deterministic protected-environment LABEL
+ * (D12). It is derived purely from the persisted environment-profile, is INFORMATIONAL, and never
+ * affects the recommendation. Only `deriveReleaseGateFromWorkspaceArtifacts` — which has the full
+ * artifact set including the profile — can compute it.
+ */
+export type WorkspaceDerivedReleaseGate = DerivedReleaseGate & Readonly<{ protectedEnvironment: boolean }>;
 export type GateWorkspaceArtifact = Readonly<{
   record: GateSourceArtifact & Readonly<{ provenance?: string }>;
   value: Readonly<Record<string, unknown>>;
@@ -71,7 +79,7 @@ export function deriveReleaseGateFromArtifacts(input: Readonly<{
  * deliberately shared by generation, registration, and workspace opening so
  * a caller cannot omit a troublesome fact from a hand-built rule snapshot.
  */
-export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly GateWorkspaceArtifact[], validationDiagnostics: readonly string[] = []): DerivedReleaseGate {
+export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly GateWorkspaceArtifact[], validationDiagnostics: readonly string[] = []): WorkspaceDerivedReleaseGate {
   // Workflow checkpoints are operational resumability metadata, not QA facts.
   // Including later revisions would retroactively invalidate an immutable gate.
   const source = artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report" && artifact.record.type !== "workflow-checkpoint");
@@ -136,12 +144,20 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     validationDiagnostics: canonical(validationDiagnostics, (item) => item),
   };
   const result = evaluateReleaseGate(ruleInputs);
+  // Deterministic protected-environment LABEL (D12): a pure function of the persisted
+  // environment-profile(s). ANY registered profile that declares protection marks the run
+  // protected (order-independent OR, so it stays deterministic). It is INFORMATIONAL — it is
+  // NOT part of ruleInputs and never feeds evaluateReleaseGate, so it cannot change the
+  // recommendation. Host-layer-only protection (never persisted in the profile) is deliberately
+  // not reflected here; see profileDeclaresProtectedEnvironment.
+  const protectedEnvironment = valuesOf("environment-profile").some((artifact) => profileDeclaresProtectedEnvironment(artifact.value));
   return {
     ...result,
     // Keep every workspace fact in the persisted snapshot, including facts
     // that are not presently policy-blocking, so later policy changes remain
     // auditable and omissions are detectable.
     ruleInputs,
+    protectedEnvironment,
     sourceArtifacts: source
       .map((artifact) => ({ id: artifact.record.id, sha256: artifact.record.sha256, type: artifact.record.type }))
       .sort((left, right) => left.id.localeCompare(right.id)),

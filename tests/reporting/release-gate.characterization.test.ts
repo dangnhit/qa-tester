@@ -203,6 +203,32 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — severity-optional path (fa
   });
 });
 
+describe("deriveReleaseGateFromWorkspaceArtifacts — protected-environment label (Task 22 / D12 additive field)", () => {
+  // CHARACTERIZATION UPDATE (Task 22): the workspace-derived gate now carries an additive,
+  // INFORMATIONAL `protectedEnvironment` label derived purely from the persisted environment-profile
+  // (classification production || evidenceProtection.protected || declared domSelectors/regions). It
+  // is NOT part of ruleInputs and never feeds evaluateReleaseGate, so every recommendation pinned in
+  // the suites above is UNCHANGED. Re-pinned here so the additive field is documented; the Phase-2
+  // semantic rule compares it on both the derived and persisted sides, so the round-trip stays green.
+  it("labels a run with no environment-profile as not protected, recommendation unchanged (READY)", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([]);
+    expect(result.protectedEnvironment).toBe(false);
+    expect(result.recommendation).toBe("READY");
+  });
+
+  it("labels a production-classified profile protected, recommendation unchanged (READY)", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([artifact("environment-profile", { classification: "production" }, "ENV-1")]);
+    expect(result.protectedEnvironment).toBe(true);
+    expect(result.recommendation).toBe("READY");
+  });
+
+  it("labels a profile declaring a redaction target protected even with protected unset and non-production classification", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([artifact("environment-profile", { classification: "test", evidenceProtection: { domSelectors: ["input#ssn"] } }, "ENV-2")]);
+    expect(result.protectedEnvironment).toBe(true);
+    expect(result.recommendation).toBe("READY");
+  });
+});
+
 describe("deriveReleaseGateFromArtifacts — ignored incident/evidence-gap/cleanup inputs (fail-OPEN)", () => {
   it("accepts but never reads incidents, evidenceGaps, or cleanupLeaks", () => {
     const result = deriveReleaseGateFromArtifacts({

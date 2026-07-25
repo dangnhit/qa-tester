@@ -17,6 +17,9 @@ export type QaReportModel = Readonly<{
   criticalFindings: readonly string[];
   remainingRisks: readonly string[];
   excludedNotRun: readonly string[];
+  /** Honest surface (D12): true when the run's evidence was redacted before persistence, sourced
+   *  from the release gate's deterministic profile-derived label. Informational only. */
+  protectedEnvironment: boolean;
   releaseGate: ReleaseGateResult;
 }>;
 

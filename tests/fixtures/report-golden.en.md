@@ -35,3 +35,6 @@ One product failure.
 
 ## Release recommendation
 READY_WITH_RISKS
+
+## Protected environment
+Not a protected environment

@@ -35,3 +35,6 @@ One product failure.
 
 ## Khuyến nghị phát hành
 READY_WITH_RISKS
+
+## Môi trường được bảo vệ
+Not a protected environment
