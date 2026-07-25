@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFile } from "../core/fs.js";
+import { QaSkillsError } from "../core/errors.js";
 import { sha256Text } from "../core/checksum.js";
 import { agentSkillsRelativeDir, type AgentName } from "./agents.js";
 import { validateRelativeFilePath, type ShimEntry } from "./manifest.js";
@@ -21,6 +22,32 @@ export const CURSOR_SHIM_PATH = ".cursor/rules/qa-skills.mdc";
 
 const CODEX_MARKER_START = "<!-- qa-skills:start (managed by qa-skill; do not edit inside) -->";
 const CODEX_MARKER_END = "<!-- qa-skills:end -->";
+
+const MALFORMED_MARKERS_MESSAGE =
+  `The qa-skills managed markers in ${CODEX_SHIM_PATH} are malformed: a "qa-skills:start" marker without a single matching "qa-skills:end" after it (dangling, nested, or duplicated start). ` +
+  `Refusing to modify ${CODEX_SHIM_PATH} so no user content is deleted — fix or remove the qa-skills markers by hand, then retry.`;
+
+/** The bounds of the one well-formed managed region, all offsets into the same content string. */
+type CodexBlockLocation = Readonly<{ start: number; innerStart: number; innerEnd: number; end: number }>;
+
+/**
+ * Locate the single well-formed managed region as a matched START→END pair: the FIRST `START`,
+ * the FIRST `END` after it, with NO other `START` in between (nor anywhere else). Returns
+ * `undefined` when no `START` is present — a stray `END` is a benign lone comment, treated as
+ * "no managed block". THROWS `INSTALLER_SAFETY` when the markers cannot be resolved to exactly
+ * one clean pair (a `START` with no following `END`, a nested/second `START`), so write callers
+ * refuse rather than guess which markers to overwrite or delete.
+ */
+function locateCodexBlock(content: string): CodexBlockLocation | undefined {
+  const start = content.indexOf(CODEX_MARKER_START);
+  if (start === -1) return undefined;
+  const innerStart = start + CODEX_MARKER_START.length;
+  // A second START anywhere (nested inside the region or a later duplicate block) is ambiguous.
+  if (content.indexOf(CODEX_MARKER_START, innerStart) !== -1) throw new QaSkillsError(MALFORMED_MARKERS_MESSAGE, "INSTALLER_SAFETY");
+  const innerEnd = content.indexOf(CODEX_MARKER_END, innerStart);
+  if (innerEnd === -1) throw new QaSkillsError(MALFORMED_MARKERS_MESSAGE, "INSTALLER_SAFETY");
+  return { start, innerStart, innerEnd, end: innerEnd + CODEX_MARKER_END.length };
+}
 
 /** A shim ready to record in the manifest (`entry`) and to write to disk. */
 export type ShimArtifact = Readonly<{
@@ -57,33 +84,44 @@ export function renderCursorMdc(agent: AgentName, skillNames: readonly string[])
   return `---\ndescription: QA Skills discovery — pointers to canonical SKILL.md files under ${agentSkillsRelativeDir(agent)}.\nalwaysApply: false\n---\n\n# QA Skills (managed by qa-skill)\n\nThese QA skills are installed for this project. Read each canonical \`SKILL.md\` for the actual instructions; this file is a pointer only and defines no skills itself.\n\n${pointerLines(agent, skillNames)}\n`;
 }
 
-/** Extract the inner (checksummed) text of a managed block, or undefined if the block is absent. */
+/**
+ * Extract the inner (checksummed) text of the well-formed managed block, or `undefined` if no
+ * block is present. Used by `verify`, which reads possibly-broken on-disk content: on malformed
+ * markers it derives no content (the shim is then reported missing) instead of pairing the wrong
+ * markers, so verify never silently checksums an ambiguous span.
+ */
 export function codexManagedInner(content: string): string | undefined {
-  const start = content.indexOf(CODEX_MARKER_START);
-  const end = content.indexOf(CODEX_MARKER_END);
-  if (start === -1 || end === -1 || end < start) return undefined;
-  return content.slice(start + CODEX_MARKER_START.length, end);
+  let location: CodexBlockLocation | undefined;
+  try {
+    location = locateCodexBlock(content);
+  } catch (error: unknown) {
+    if (error instanceof QaSkillsError && error.code === "INSTALLER_SAFETY") return undefined;
+    throw error;
+  }
+  return location ? content.slice(location.innerStart, location.innerEnd) : undefined;
 }
 
-/** Insert or replace the managed block, preserving all content outside the markers. Idempotent. */
+/**
+ * Insert or replace the managed block, preserving all content outside the markers. Idempotent.
+ * Throws `INSTALLER_SAFETY` (never mutating the file) when the existing markers are malformed.
+ */
 export function upsertCodexBlock(existing: string, block: string): string {
-  const start = existing.indexOf(CODEX_MARKER_START);
-  const end = existing.indexOf(CODEX_MARKER_END);
-  if (start !== -1 && end !== -1 && end > start) {
-    return `${existing.slice(0, start)}${block}${existing.slice(end + CODEX_MARKER_END.length)}`;
-  }
+  const location = locateCodexBlock(existing);
+  if (location) return `${existing.slice(0, location.start)}${block}${existing.slice(location.end)}`;
   if (existing.trim().length === 0) return `${block}\n`;
   const separator = existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   return `${existing}${separator}${block}\n`;
 }
 
-/** Remove the managed block, preserving surrounding user content. Returns "" when nothing else remains. */
+/**
+ * Remove the managed block, preserving surrounding user content. Returns "" when nothing else
+ * remains. Throws `INSTALLER_SAFETY` (deleting nothing) when the existing markers are malformed.
+ */
 export function removeCodexBlock(existing: string): string {
-  const start = existing.indexOf(CODEX_MARKER_START);
-  const end = existing.indexOf(CODEX_MARKER_END);
-  if (start === -1 || end === -1 || end < start) return existing;
-  const before = existing.slice(0, start).replace(/\s+$/, "");
-  const after = existing.slice(end + CODEX_MARKER_END.length).replace(/^\s+/, "");
+  const location = locateCodexBlock(existing);
+  if (!location) return existing;
+  const before = existing.slice(0, location.start).replace(/\s+$/, "");
+  const after = existing.slice(location.end).replace(/^\s+/, "");
   if (before.length === 0 && after.length === 0) return "";
   const joined = before.length > 0 && after.length > 0 ? `${before}\n\n${after}` : `${before}${after}`;
   return joined.endsWith("\n") ? joined : `${joined}\n`;

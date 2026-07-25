@@ -8,8 +8,13 @@ import { installSkills } from "../../src/installer/install.js";
 import { updateSkills } from "../../src/installer/update.js";
 import { verifySkills } from "../../src/installer/verify.js";
 import { uninstallSkills } from "../../src/installer/uninstall.js";
+import { codexManagedInner, removeCodexBlock, upsertCodexBlock } from "../../src/installer/shims.js";
 import { runCli } from "../../src/cli/program.js";
 import { manifestFilename } from "../../src/installer/manifest.js";
+import { QaSkillsError } from "../../src/core/errors.js";
+
+const CODEX_START = "<!-- qa-skills:start (managed by qa-skill; do not edit inside) -->";
+const CODEX_END = "<!-- qa-skills:end -->";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -167,5 +172,94 @@ describe("per-agent discovery shims (ADR-0011)", () => {
     const agentsPath = join(root, "AGENTS.md");
     await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("qa-tester", "nope"));
     expect((await runCli(["skills", "verify", "--agent", "codex"], { cwd: root })).exitCode).toBe(1);
+  });
+
+  it("never deletes user content around a dangling qa-skills:start marker (install/update/verify)", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    const before = `# My Project\n\nFirst user paragraph.\n\n${CODEX_START}\n\nSecond user paragraph after a dangling start (no end marker).\n`;
+    await writeFile(agentsPath, before);
+    // A malformed managed marker must make install refuse rather than mangle the file.
+    await expect(installSkills(options)).rejects.toThrow(QaSkillsError);
+    expect(await readFile(agentsPath, "utf8")).toBe(before);
+    // verify must not crash and must not mutate the file.
+    await verifySkills(options);
+    // update --force is the tool's own recommended remedy for drift; it must NEVER delete content.
+    await expect(updateSkills({ ...options, force: true })).rejects.toThrow(QaSkillsError);
+    const after = await readFile(agentsPath, "utf8");
+    expect(after).toContain("First user paragraph.");
+    expect(after).toContain("Second user paragraph after a dangling start (no end marker).");
+    expect(after).toBe(before);
+  });
+
+  it("refuses (throws) on malformed markers for the write and remove paths, deriving no inner content", () => {
+    const block = `${CODEX_START}\nBODY\n${CODEX_END}`;
+    const dangling = `before\n${CODEX_START}\nno end here\n`;
+    const nested = `${CODEX_START}\nouter\n${CODEX_START}\ninner\n${CODEX_END}\n`;
+    const doubleBlock = `x\n${CODEX_START}\nA\n${CODEX_END}\n${CODEX_START}\nB\n${CODEX_END}\n`;
+    for (const bad of [dangling, nested, doubleBlock]) {
+      expect(() => upsertCodexBlock(bad, block)).toThrow(QaSkillsError);
+      expect(() => removeCodexBlock(bad)).toThrow(QaSkillsError);
+      // The verify derivation returns nothing instead of pairing the wrong markers.
+      expect(codexManagedInner(bad)).toBeUndefined();
+    }
+  });
+
+  it("appends exactly one block when AGENTS.md holds only an orphan qa-skills:end, idempotent across update", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, `Intro user text.\n\n${CODEX_END}\n\nTrailing user text.\n`);
+    await installSkills(options);
+    let content = await readFile(agentsPath, "utf8");
+    expect(content.match(/qa-skills:start/g)).toHaveLength(1);
+    expect(content).toContain("Intro user text.");
+    expect(content).toContain("Trailing user text.");
+    expect((await verifySkills(options)).status).toBe("valid");
+    await updateSkills(options);
+    content = await readFile(agentsPath, "utf8");
+    expect(content.match(/qa-skills:start/g)).toHaveLength(1);
+  });
+
+  it("is verify-valid immediately after a fresh install into clean AGENTS.md", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await writeFile(join(options.projectRoot, "AGENTS.md"), "# Notes\n\nPlain user notes, no markers.\n");
+    await installSkills(options);
+    expect((await verifySkills(options)).status).toBe("valid");
+  });
+
+  it("update --force backs up the codex AGENTS.md shim before overwriting it", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await installSkills(options);
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("qa-tester", "drifted-name"));
+    await expect(updateSkills(options)).rejects.toThrow(/drift/i);
+    const updated = await updateSkills({ ...options, force: true });
+    const backupRoot = updated.backupRoot ?? "";
+    expect(backupRoot).not.toBe("");
+    const backedUp = await readFile(join(backupRoot, "shims", "AGENTS.md"), "utf8");
+    expect(backedUp).toContain("qa-skills:start");
+    expect(backedUp).toContain("drifted-name");
+  });
+
+  it("update --force backs up the cursor .mdc shim before overwriting it", async () => {
+    const options = { ...(await fixture()), agent: "cursor" as const, target: "project" as const };
+    await installSkills(options);
+    const mdc = join(options.projectRoot, ".cursor", "rules", "qa-skills.mdc");
+    await writeFile(mdc, `${await readFile(mdc, "utf8")}\n<!-- drift -->\n`);
+    const updated = await updateSkills({ ...options, force: true });
+    const backupRoot = updated.backupRoot ?? "";
+    expect(backupRoot).not.toBe("");
+    expect(await readFile(join(backupRoot, "shims", ".cursor", "rules", "qa-skills.mdc"), "utf8")).toContain("<!-- drift -->");
+  });
+
+  it("keeps verify valid after a user edit OUTSIDE the codex managed block", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, "# Title\n\nOriginal intro.\n");
+    await installSkills(options);
+    expect((await verifySkills(options)).status).toBe("valid");
+    const content = await readFile(agentsPath, "utf8");
+    await writeFile(agentsPath, `Prepended note.\n\n${content}\n\nAppended note after the block.\n`);
+    expect((await verifySkills(options)).status).toBe("valid");
   });
 });
