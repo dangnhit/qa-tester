@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -261,5 +261,42 @@ describe("per-agent discovery shims (ADR-0011)", () => {
     const content = await readFile(agentsPath, "utf8");
     await writeFile(agentsPath, `Prepended note.\n\n${content}\n\nAppended note after the block.\n`);
     expect((await verifySkills(options)).status).toBe("valid");
+  });
+
+  it("never destroys the installed bundle on update --force when AGENTS.md markers are malformed", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const skillPath = join(installed.root, "qa-tester", "SKILL.md");
+    const manifestPath = join(installed.root, manifestFilename);
+    expect(await readFile(skillPath, "utf8")).toContain("qa-tester");
+    // Corrupt the managed markers with a duplicate start — upsertCodexBlock must then refuse.
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, `${await readFile(agentsPath, "utf8")}\n${CODEX_START}\n`);
+    // update --force is the tool's own documented remedy for drift. Whether it fails fast on the
+    // marker fault or degrades to a safe half-install, the COMMITTED bundle must never be rolled back.
+    let updateError: unknown;
+    try { await updateSkills({ ...options, force: true }); } catch (error) { updateError = error; }
+    // The installed bundle SURVIVES in every case: SKILL.md + manifest + the root dir all intact.
+    expect(await readFile(skillPath, "utf8")).toContain("qa-tester");
+    expect(await readFile(manifestPath, "utf8")).toContain("qa-tester");
+    expect((await stat(installed.root)).isDirectory()).toBe(true);
+    // ...and the marker fault is surfaced: either it threw, or verify now flags the missing shim.
+    if (updateError === undefined) {
+      expect((await verifySkills(options)).status).not.toBe("valid");
+    } else {
+      expect(updateError).toBeInstanceOf(QaSkillsError);
+    }
+  });
+
+  it("aborts a fresh install cleanly when AGENTS.md markers are already malformed", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    const before = `# Notes\n\n${CODEX_START}\n\n${CODEX_START}\n`;
+    await writeFile(agentsPath, before);
+    await expect(installSkills(options)).rejects.toThrow(QaSkillsError);
+    // Nothing is half-written: no SKILL.md, no manifest under the skills root, and AGENTS.md is untouched.
+    await expect(readFile(join(options.projectRoot, ".codex", "skills", "qa-tester", "SKILL.md"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(options.projectRoot, ".codex", "skills", manifestFilename), "utf8")).rejects.toThrow();
+    expect(await readFile(agentsPath, "utf8")).toBe(before);
   });
 });

@@ -7,7 +7,7 @@ import { QaSkillsError } from "../core/errors.js";
 import { sha256Bytes } from "../core/checksum.js";
 import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot, resolveInstallRoot } from "./agents.js";
 import { createManifest, manifestFilename, runtimeVersion, serializeManifest, validateRelativeFilePath } from "./manifest.js";
-import { buildShims, deriveSkillNames, writeShims } from "./shims.js";
+import { assertShimWritable, buildShims, deriveSkillNames, writeShims } from "./shims.js";
 
 export type FailurePhase = "stage:first" | "write:middle" | "write:final" | "swap";
 export type InstallOptions = Readonly<{
@@ -86,8 +86,14 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
     if (await exists(join(root, manifestFilename))) throw new QaSkillsError(`QA skills are already installed at ${root}; use update instead`, "INSTALLER_SAFETY");
   }
   const parent = dirname(root); await mkdir(parent, { recursive: true }); await assertTargetComponents(root);
+  // Fail-fast: validate the install-root shims (which live OUTSIDE the atomically-swapped skills tree)
+  // BEFORE any destructive move. Malformed AGENTS.md markers throw here with nothing touched, so a
+  // marker fault can never leave a committed-then-rolled-back — and thus destroyed — bundle.
+  const installRoot = resolveInstallRoot(options.target, options);
+  await assertShimWritable(installRoot, shimArtifacts);
   const stamp = `${process.pid}-${crypto.randomUUID()}`; const stage = join(parent, `.${root.split(/[\\/]/).at(-1)}.qa-skill-stage-${stamp}`); const previous = join(parent, `.${root.split(/[\\/]/).at(-1)}.qa-skill-swap-${stamp}`);
   let originalMoved = false;
+  let committed = false;
   try {
     if (await exists(root)) await cp(root, stage, { recursive: true, dereference: false, errorOnExist: true }); else await mkdir(stage, { recursive: true });
     await assertNoSymlinksTree(stage);
@@ -107,12 +113,16 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
     if (await exists(root)) { await rename(root, previous); originalMoved = true; }
     try { await rename(stage, root); } catch (error) { if (await exists(previous)) await rename(previous, root); originalMoved = false; throw error; }
     if (await exists(previous)) await rm(previous, { recursive: true, force: true });
+    // The atomic swap has COMMITTED: `root` now holds the new bundle + manifest and the old bundle is
+    // gone. Any later failure must NOT roll back — restore() would delete the just-installed bundle.
+    // Clearing the rollback intent degrades a shim/marker write failure to the safe half-install path.
+    committed = true;
     // Shims live at the install root (outside the atomically-swapped skills tree); write them
     // last so a failure leaves the bundle installed and `verify` flags the missing shim.
-    await writeShims(resolveInstallRoot(options.target, options), shimArtifacts);
+    await writeShims(installRoot, shimArtifacts);
     return { root, files: paths.map((file) => join(root, file)), runtime: { command: runtimeBinding.command, version: runtimeBinding.version } };
   } catch (error) {
-    if (originalMoved) await restore(root, previous, stage); else if (await exists(stage)) await rm(stage, { recursive: true, force: true });
+    if (originalMoved && !committed) await restore(root, previous, stage); else if (await exists(stage)) await rm(stage, { recursive: true, force: true });
     throw error;
   }
 }

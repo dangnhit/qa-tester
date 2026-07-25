@@ -129,21 +129,25 @@ qa-skill workflow bootstrap --root <path> --environment-file <json> \
 distinct from `test-plan.testCases`, which are the plan's own declarative descriptions of the same
 scenarios — the standalone `test-case` artifact is the separate, execution-bound canonical revision.
 
-Runtime-derived fields: **`revisionId` and `instanceId`**. The schema only requires non-empty strings, so
-the runtime does not reject a hand-picked value today — but these two fields are meant to be the
-artifact's immutable identity anchor, and should equal a content fingerprint, not an arbitrary ID.
-Compute them with:
+Runtime-derived fields: none today. The schema only requires **`revisionId`** and **`instanceId`** to be
+non-empty strings, and the runtime does **not** currently re-derive or verify either for a `test-case`
+artifact — they are author-supplied identity anchors. Treat them as stable content-identity values
+rather than arbitrary IDs. A convenient way to produce a stable digest for `revisionId` is:
 
 ```sh
 qa-skill fingerprint --file <this-file>
 ```
 
-which runs `sha256Fingerprint` (`src/planning/testcase-revision.ts`) — the exact function
-`createTestCaseRevision` uses to derive `revisionId`. Set `revisionId` to that hex digest, and
-`instanceId` to `"<testCaseId>--<first 16 hex characters of the digest>"`.
+`qa-skill fingerprint` is a general helper that prints the sha256 of a file's canonical JSON. Note it is
+**not** an exact match for any internal derivation: it hashes the whole file as given, whereas
+`createTestCaseRevision` (`src/planning/testcase-revision.ts`) strips `revisionId`/`fingerprint` and
+hashes only the test-case shape. Likewise `instanceId` is conventionally
+`"<testCaseId>--<first 16 hex characters of a fingerprint>"`, but the runtime's own instance expansion
+(`src/planning/parameterization.ts`) derives that suffix from `{revisionId, parameters, browser}` — so
+the value you write is an identity anchor the runtime records, not one it recomputes from this file.
 
-Minimal valid example (`revisionId` / `instanceId` are placeholders — replace them per the above before
-registering):
+Minimal valid example (`revisionId` / `instanceId` are placeholders — replace them with your own stable
+identity values before registering):
 
 <!-- artifact-authoring:example test-case -->
 ```json
@@ -228,6 +232,6 @@ Minimal valid example:
   4 above) to stdout.
 - `qa-skill draft init --type <t>` — print one of the 4 minimal valid examples above to stdout, ready to
   edit. Any other type is runtime-owned and errors instead of printing a skeleton.
-- `qa-skill fingerprint --file <f>` — print the sha256 content fingerprint of a JSON file; use it to
-  compute a `test-case`'s `revisionId` (and derive `instanceId` from its first 16 hex characters) before
-  registering the draft.
+- `qa-skill fingerprint --file <f>` — print the canonical-JSON sha256 of a file; a handy way to pick a
+  stable `test-case` `revisionId`. It is a whole-file digest, not a value the runtime re-derives or
+  verifies, so treat it as an author-supplied identity anchor rather than a checked fingerprint.

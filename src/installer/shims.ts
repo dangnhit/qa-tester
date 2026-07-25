@@ -155,6 +155,21 @@ export async function readShimManagedContent(installRoot: string, shim: ShimEntr
   return shim.path === CODEX_SHIM_PATH ? codexManagedInner(onDisk) : onDisk;
 }
 
+/**
+ * Dry-run the managed-block shim writes against the current on-disk content WITHOUT mutating anything.
+ * Throws `INSTALLER_SAFETY` on malformed markers exactly as `writeShims` would — so a caller can abort
+ * BEFORE a destructive bundle swap and never leave a committed-then-rolled-back (destroyed) bundle.
+ */
+export async function assertShimWritable(installRoot: string, artifacts: readonly ShimArtifact[]): Promise<void> {
+  for (const artifact of artifacts) {
+    if (artifact.block === undefined) continue;
+    const target = join(installRoot, ...validateRelativeFilePath(artifact.entry.path).split("/"));
+    let existing = "";
+    try { existing = await readFile(target, "utf8"); } catch (error: unknown) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
+    upsertCodexBlock(existing, artifact.block); // Throws on malformed markers; the result is intentionally discarded.
+  }
+}
+
 /** Write the shim artifacts to disk under the install root. */
 export async function writeShims(installRoot: string, artifacts: readonly ShimArtifact[]): Promise<void> {
   for (const artifact of artifacts) {
