@@ -30,11 +30,20 @@ export function isInstallTarget(value: string): value is InstallTarget {
   return (installTargets as readonly string[]).includes(value);
 }
 
+/** The install root shims live in: the project root for project scope, the user home otherwise. */
+export function resolveInstallRoot(target: InstallTarget, options: AgentRootOptions): string {
+  return target === "project" ? options.projectRoot : (options.userHome ?? homedir());
+}
+
+/** The copied-skills directory for an agent, relative to the install root (e.g. `.codex/skills`). */
+export function agentSkillsRelativeDir(agent: AgentName): string {
+  return roots[agent].join("/");
+}
+
 /** Resolve a target without touching disk, including for pure Windows-path tests. */
 export function resolveAgentRoot(agent: AgentName, target: InstallTarget, options: AgentRootOptions): string {
   const pathApi = options.pathApi ?? path;
-  const base = target === "project" ? options.projectRoot : (options.userHome ?? homedir());
-  return pathApi.join(base, ...roots[agent]);
+  return pathApi.join(resolveInstallRoot(target, options), ...roots[agent]);
 }
 
 export type RuntimeCommand = Readonly<{ command: string; source: "project" | "path"; version: string }>;

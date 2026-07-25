@@ -1,0 +1,171 @@
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { installSkills } from "../../src/installer/install.js";
+import { updateSkills } from "../../src/installer/update.js";
+import { verifySkills } from "../../src/installer/verify.js";
+import { uninstallSkills } from "../../src/installer/uninstall.js";
+import { runCli } from "../../src/cli/program.js";
+import { manifestFilename } from "../../src/installer/manifest.js";
+
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+async function fixture(): Promise<{ sourceRoot: string; projectRoot: string }> {
+  const root = await mkdtemp(join(tmpdir(), "qa-skill-shims-")); roots.push(root);
+  const sourceRoot = join(root, "bundle");
+  for (const name of ["qa-tester", "bug-reporter"]) {
+    await mkdir(join(sourceRoot, name), { recursive: true });
+    await writeFile(join(sourceRoot, name, "SKILL.md"), `---\nname: ${name}\ndescription: Test\n---\n`);
+  }
+  // A non-skill shared references directory must not be treated as a skill.
+  await mkdir(join(sourceRoot, "shared", "references"), { recursive: true });
+  await writeFile(join(sourceRoot, "shared", "references", "safety.md"), "shared\n");
+  const projectRoot = join(root, "project");
+  await mkdir(join(projectRoot, "node_modules", ".bin"), { recursive: true });
+  const runtime = join(projectRoot, "node_modules", ".bin", "qa-skill");
+  await writeFile(runtime, "#!/bin/sh\necho 0.1.0\n"); await chmod(runtime, 0o755);
+  return { sourceRoot, projectRoot };
+}
+
+type ManifestShape = { shims: readonly { path: string; sha256: string }[] };
+async function readManifestShims(root: string): Promise<ManifestShape["shims"]> {
+  return (JSON.parse(await readFile(join(root, manifestFilename), "utf8")) as ManifestShape).shims;
+}
+
+describe("per-agent discovery shims (ADR-0011)", () => {
+  it("generates a codex AGENTS.md managed block pointing at canonical SKILL.md files", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const content = await readFile(join(options.projectRoot, "AGENTS.md"), "utf8");
+    expect(content).toContain("qa-skills:start");
+    expect(content).toContain("qa-skills:end");
+    expect(content).toContain(".codex/skills/qa-tester/SKILL.md");
+    expect(content).toContain(".codex/skills/bug-reporter/SKILL.md");
+    // No skill content is duplicated into the shim — pointers only.
+    expect(content).not.toContain("description: Test");
+    // The shared/references directory is not a skill.
+    expect(content).not.toContain("shared/references");
+    expect(await readManifestShims(installed.root)).toEqual([{ path: "AGENTS.md", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
+  });
+
+  it("generates a cursor .cursor/rules/qa-skills.mdc shim and records it", async () => {
+    const options = { ...(await fixture()), agent: "cursor" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const content = await readFile(join(options.projectRoot, ".cursor", "rules", "qa-skills.mdc"), "utf8");
+    expect(content).toMatch(/^---\n/);
+    expect(content).toContain("alwaysApply: false");
+    expect(content).toContain(".cursor/skills/qa-tester/SKILL.md");
+    expect(await readManifestShims(installed.root)).toEqual([{ path: ".cursor/rules/qa-skills.mdc", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
+  });
+
+  it("generates no shim for claude native discovery", async () => {
+    const options = { ...(await fixture()), agent: "claude" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    await expect(readFile(join(options.projectRoot, "AGENTS.md"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(options.projectRoot, ".cursor", "rules", "qa-skills.mdc"), "utf8")).rejects.toThrow();
+    expect(await readManifestShims(installed.root)).toEqual([]);
+  });
+
+  it("preserves pre-existing AGENTS.md user content and stays idempotent across update", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, "# My Project\n\nUser instructions stay here.\n");
+    await installSkills(options);
+    let content = await readFile(agentsPath, "utf8");
+    expect(content).toContain("# My Project");
+    expect(content).toContain("User instructions stay here.");
+    expect(content).toContain("qa-skills:start");
+    await updateSkills(options);
+    content = await readFile(agentsPath, "utf8");
+    expect(content).toContain("User instructions stay here.");
+    expect(content.match(/qa-skills:start/g)).toHaveLength(1);
+    expect(content.match(/qa-skills:end/g)).toHaveLength(1);
+  });
+
+  it("verify returns non-valid with a shim finding when the codex managed block is tampered", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await installSkills(options);
+    expect((await verifySkills(options)).status).toBe("valid");
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("qa-tester", "tampered-name"));
+    const verification = await verifySkills(options);
+    expect(verification.status).not.toBe("valid");
+    expect(verification.shims.some((shim) => shim.status === "modified")).toBe(true);
+  });
+
+  it("verify returns missing when the cursor shim is deleted", async () => {
+    const options = { ...(await fixture()), agent: "cursor" as const, target: "project" as const };
+    await installSkills(options);
+    expect((await verifySkills(options)).status).toBe("valid");
+    await rm(join(options.projectRoot, ".cursor", "rules", "qa-skills.mdc"));
+    const verification = await verifySkills(options);
+    expect(verification.status).toBe("missing");
+    expect(verification.shims.some((shim) => shim.status === "missing")).toBe(true);
+  });
+
+  it("verify returns missing when the codex managed block is removed but AGENTS.md remains", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await installSkills(options);
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, "# Only user content now.\n");
+    const verification = await verifySkills(options);
+    expect(verification.status).toBe("missing");
+    expect(verification.shims.some((shim) => shim.status === "missing")).toBe(true);
+  });
+
+  it("uninstall removes the codex managed block but preserves surrounding user content", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const agentsPath = join(options.projectRoot, "AGENTS.md");
+    await writeFile(agentsPath, "# My Project\n\nUser instructions stay here.\n");
+    await installSkills(options);
+    await uninstallSkills(options);
+    const content = await readFile(agentsPath, "utf8");
+    expect(content).toContain("User instructions stay here.");
+    expect(content).not.toContain("qa-skills:start");
+  });
+
+  it("uninstall removes an AGENTS.md that held only the managed block", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    await installSkills(options);
+    await uninstallSkills(options);
+    await expect(readFile(join(options.projectRoot, "AGENTS.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("uninstall removes the cursor .mdc shim", async () => {
+    const options = { ...(await fixture()), agent: "cursor" as const, target: "project" as const };
+    await installSkills(options);
+    const mdc = join(options.projectRoot, ".cursor", "rules", "qa-skills.mdc");
+    expect(await readFile(mdc, "utf8")).toContain("qa-tester");
+    await uninstallSkills(options);
+    await expect(readFile(mdc, "utf8")).rejects.toThrow();
+  });
+
+  it("verifies a pre-ADR-0011 manifest that has no shims field", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const manifestPath = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    delete manifest.shims;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    // Removing the AGENTS.md shim too proves the old manifest verifies without any shim check.
+    await rm(join(options.projectRoot, "AGENTS.md"));
+    const verification = await verifySkills(options);
+    expect(verification.status).toBe("valid");
+    expect(verification.shims).toEqual([]);
+  });
+
+  it("CLI verify exits UNMET_OBLIGATIONS when a codex shim goes stale", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-skill-shim-cli-")); roots.push(root);
+    await mkdir(join(root, "node_modules", ".bin"), { recursive: true });
+    const runtime = join(root, "node_modules", ".bin", "qa-skill"); await writeFile(runtime, "#!/bin/sh\necho 0.1.0\n"); await chmod(runtime, 0o755);
+    expect((await runCli(["skills", "install", "--agent", "codex"], { cwd: root })).exitCode).toBe(0);
+    expect((await runCli(["skills", "verify", "--agent", "codex"], { cwd: root })).exitCode).toBe(0);
+    const agentsPath = join(root, "AGENTS.md");
+    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("qa-tester", "nope"));
+    expect((await runCli(["skills", "verify", "--agent", "codex"], { cwd: root })).exitCode).toBe(1);
+  });
+});

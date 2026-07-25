@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import { atomicWriteFile } from "../core/fs.js";
 import { QaSkillsError } from "../core/errors.js";
 import { sha256Bytes } from "../core/checksum.js";
-import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
+import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot, resolveInstallRoot } from "./agents.js";
 import { createManifest, manifestFilename, runtimeVersion, serializeManifest, validateRelativeFilePath } from "./manifest.js";
+import { buildShims, deriveSkillNames, writeShims } from "./shims.js";
 
 export type FailurePhase = "stage:first" | "write:middle" | "write:final" | "swap";
 export type InstallOptions = Readonly<{
@@ -75,7 +76,9 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
   const sourceRoot = resolve(options.sourceRoot ?? defaultBundleRoot());
   await assertNoSymlinksTree(sourceRoot); await assertTargetComponents(root); await assertNoSymlinksTree(root);
   const runtimeBinding = await captureRuntimeBinding(runtime);
-  const manifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, runtime: runtimeBinding, sourceVersion: options.sourceVersion ?? runtimeVersion });
+  const baseManifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, runtime: runtimeBinding, sourceVersion: options.sourceVersion ?? runtimeVersion });
+  const shimArtifacts = buildShims(options.agent, deriveSkillNames(baseManifest.files.map((file) => file.path)));
+  const manifest = { ...baseManifest, shims: shimArtifacts.map((artifact) => artifact.entry) };
   const paths = manifest.files.map((file) => validateRelativeFilePath(file.path));
   const contents = await Promise.all(paths.map(async (file) => ({ file, contents: await readFile(join(sourceRoot, file)) })));
   if (!overwrite) {
@@ -104,6 +107,9 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
     if (await exists(root)) { await rename(root, previous); originalMoved = true; }
     try { await rename(stage, root); } catch (error) { if (await exists(previous)) await rename(previous, root); originalMoved = false; throw error; }
     if (await exists(previous)) await rm(previous, { recursive: true, force: true });
+    // Shims live at the install root (outside the atomically-swapped skills tree); write them
+    // last so a failure leaves the bundle installed and `verify` flags the missing shim.
+    await writeShims(resolveInstallRoot(options.target, options), shimArtifacts);
     return { root, files: paths.map((file) => join(root, file)), runtime: { command: runtimeBinding.command, version: runtimeBinding.version } };
   } catch (error) {
     if (originalMoved) await restore(root, previous, stage); else if (await exists(stage)) await rm(stage, { recursive: true, force: true });

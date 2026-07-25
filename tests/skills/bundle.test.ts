@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -25,6 +25,5 @@ describe("portable QA skill bundle", () => {
     const qaTester = await readFile(resolve(root, "qa-tester", "SKILL.md"), "utf8");
     const powerShell = qaTester.slice(qaTester.indexOf("PowerShell:"));
     expect(powerShell).toContain("& $QaSkill workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json");
-    expect(await readdir(resolve(root, "qa-tester"))).not.toContain("agents");
   });
 });

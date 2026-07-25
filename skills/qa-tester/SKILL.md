@@ -34,4 +34,4 @@ if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction S
 
 Expected full outputs include registered attempts, evidence or gaps, bug reports, a release gate, and a QA report. Example — standalone planning: use `requirement-analyzer` to draft and ingest only the analysis.
 
-This is one canonical standard `SKILL.md` per skill name for Codex, Claude, and Cursor. Deliberately omit generated `agents/` metadata because it is vendor-specific and would duplicate the portable definition.
+This is one canonical standard `SKILL.md` per skill name for Codex, Claude, and Cursor. Installation emits per-agent discovery shims (Codex `AGENTS.md`, Cursor `.cursor/rules/qa-skills.mdc`) that only point at these canonical `SKILL.md` files, so no skill is ever defined twice (ADR-0011).

@@ -8,6 +8,14 @@ export const runtimeVersion = "0.1.0";
 export const runtimeCompatibility = ">=0.1.0 <1.0.0";
 
 export type ManifestFile = Readonly<{ path: string; sha256: string }>;
+/**
+ * A per-agent discovery shim (ADR-0011). `path` is relative to the install root
+ * (the project root or user home, not the copied-skills directory). `sha256` is
+ * the checksum of the managed content: for a marker-delimited block it is the
+ * block's inner text (the user owns the rest of that file); for a dedicated
+ * file it is the whole file.
+ */
+export type ShimEntry = Readonly<{ path: string; sha256: string }>;
 export type RuntimeBinding = Readonly<{
   command: string;
   resolvedPath: string;
@@ -23,6 +31,12 @@ export type SkillManifest = Readonly<{
   target: "project" | "user";
   runtime: RuntimeBinding;
   files: readonly ManifestFile[];
+  /**
+   * Optional for backward compatibility: manifests written before ADR-0011 have
+   * no `shims` key and are read as an empty list, so they still verify. New
+   * installs always write this field (empty for Claude's native discovery).
+   */
+  shims?: readonly ShimEntry[];
 }>;
 
 export function validateRelativeFilePath(value: string): string {
@@ -96,12 +110,15 @@ function isManifest(value: unknown): value is SkillManifest {
     && isRuntimeCompatible(String((runtime as Record<string, unknown>).version), candidate.runtimeRange)
     && typeof (runtime as Record<string, unknown>).sha256 === "string"
     && /^[a-f0-9]{64}$/.test(String((runtime as Record<string, unknown>).sha256))
-    && Array.isArray(candidate.files) && candidate.files.every((file: unknown) => {
-      if (!file || typeof file !== "object") return false;
-      const record = file as Record<string, unknown>;
-      if (typeof record.path !== "string" || typeof record.sha256 !== "string") return false;
-      try { validateRelativeFilePath(record.path); return true; } catch { return false; }
-    });
+    && Array.isArray(candidate.files) && candidate.files.every(isManifestEntry)
+    && (candidate.shims === undefined || (Array.isArray(candidate.shims) && candidate.shims.every(isManifestEntry)));
+}
+
+function isManifestEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  if (typeof record.path !== "string" || typeof record.sha256 !== "string") return false;
+  try { validateRelativeFilePath(record.path); return true; } catch { return false; }
 }
 
 export async function isDirectory(path: string): Promise<boolean> {

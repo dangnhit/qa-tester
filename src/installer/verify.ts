@@ -2,14 +2,15 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { sha256Text } from "../core/checksum.js";
-import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot } from "./agents.js";
+import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot, resolveInstallRoot } from "./agents.js";
 import { manifestFilename, readManifest, type RuntimeBinding, type SkillManifest, validateRelativeFilePath } from "./manifest.js";
+import { readShimManagedContent } from "./shims.js";
 
 export type DriftStatus = "missing" | "modified" | "unexpected" | "runtime-missing" | "runtime-changed" | "runtime-incompatible" | "valid";
 export type VerificationEntry = Readonly<{ path: string; status: DriftStatus }>;
 export type VerifyOptions = Readonly<{ sourceRoot?: string; projectRoot: string; userHome?: string; agent: AgentName; target: InstallTarget }>;
 export type RuntimeVerification = Readonly<{ status: "valid" | "runtime-missing" | "runtime-changed" | "runtime-incompatible"; expected: RuntimeBinding; actual?: RuntimeBinding; reason?: string }>;
-export type Verification = Readonly<{ root: string; manifest?: SkillManifest; runtime?: RuntimeVerification; status: DriftStatus; entries: readonly VerificationEntry[] }>;
+export type Verification = Readonly<{ root: string; manifest?: SkillManifest; runtime?: RuntimeVerification; status: DriftStatus; entries: readonly VerificationEntry[]; shims: readonly VerificationEntry[] }>;
 
 async function filesBelow(root: string, current = root): Promise<string[]> {
   try {
@@ -58,7 +59,7 @@ async function verifyRuntimeBinding(manifest: SkillManifest, projectRoot: string
 export async function verifySkills(options: VerifyOptions): Promise<Verification> {
   const root = resolveAgentRoot(options.agent, options.target, options);
   const manifest = await readManifest(root);
-  if (!manifest) return { root, status: "missing", entries: [{ path: join(root, manifestFilename), status: "missing" }] };
+  if (!manifest) return { root, status: "missing", entries: [{ path: join(root, manifestFilename), status: "missing" }], shims: [] };
   const runtime = await verifyRuntimeBinding(manifest, options.projectRoot);
   const entries: VerificationEntry[] = [];
   const expected = new Set(manifest.files.map((file) => file.path));
@@ -81,5 +82,14 @@ export async function verifySkills(options: VerifyOptions): Promise<Verification
       if (!expected.has(relativePath)) entries.push({ path: absolute, status: "unexpected" });
     }
   }
-  return { root, manifest, runtime, status: runtime.status === "valid" ? overall(entries) : runtime.status, entries };
+  const installRoot = resolveInstallRoot(options.target, options);
+  const shims: VerificationEntry[] = [];
+  for (const shim of manifest.shims ?? []) {
+    const absolute = join(installRoot, ...validateRelativeFilePath(shim.path).split("/"));
+    const managed = await readShimManagedContent(installRoot, shim);
+    if (managed === undefined) shims.push({ path: absolute, status: "missing" });
+    else shims.push({ path: absolute, status: sha256Text(managed) === shim.sha256 ? "valid" : "modified" });
+  }
+  const status = runtime.status === "valid" ? overall([...entries, ...shims]) : runtime.status;
+  return { root, manifest, runtime, status, entries, shims };
 }
