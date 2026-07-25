@@ -38,6 +38,8 @@
       { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "console-policy" }, "level": { "enum": ["error", "warning"] }, "allow": { "type": "array", "items": { "type": "string" } }, "expectedResultId": { "type": "string", "minLength": 1 } } },
       { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "network-policy" }, "allow": { "type": "array", "items": { "type": "string" } }, "expectedResultId": { "type": "string", "minLength": 1 } } }
     ] },
-    "step": { "type": "object", "additionalProperties": false, "required": ["id", "action", "sideEffect"], "properties": { "id": { "type": "string", "minLength": 1 }, "action": { "$ref": "#/$defs/action" }, "assertions": { "type": "array", "items": { "$ref": "#/$defs/assertion" } }, "sideEffect": { "enum": ["none", "reversible", "external", "destructive"] }, "independent": { "type": "boolean" } } }
+    "step": { "type": "object", "additionalProperties": false, "required": ["id", "action", "sideEffect"], "properties": { "id": { "type": "string", "minLength": 1 }, "action": { "$ref": "#/$defs/action" }, "assertions": { "type": "array", "items": { "$ref": "#/$defs/assertion" } }, "sideEffect": { "enum": ["none", "reversible", "external", "destructive"] }, "independent": { "type": "boolean" } }, "allOf": [
+      { "if": { "required": ["action"], "properties": { "action": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "upload" } } } } }, "then": { "properties": { "sideEffect": { "enum": ["reversible", "external", "destructive"] } } } }
+    ] }
   }
 }

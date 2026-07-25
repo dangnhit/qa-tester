@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { QaSkillsError } from "../../core/errors.js";
+import { assertRealpathWithin } from "../../core/fs.js";
 import { assertNavigable, type LaneSafetyContext } from "../../safety/navigation.js";
 import { assertBrowserAssertion, resolveValue } from "../assertions.js";
 import { resolveLocator } from "../locator.js";
@@ -22,7 +23,16 @@ export async function executeAction(page: Page, action: BrowserAction, resolver?
     case "check": await resolveLocator(page, action.locator).check(); return;
     case "uncheck": await resolveLocator(page, action.locator).uncheck(); return;
     case "press": await resolveLocator(page, action.locator).press(action.key); return;
-    case "upload": await resolveLocator(page, action.locator).setInputFiles(action.files); return;
+    case "upload": {
+      // Fail closed: an upload must never reach Playwright without a lane-1 safety context.
+      if (safety === undefined) throw new QaSkillsError("Upload refused: no lane-1 safety context was supplied for the upload step", "UNSAFE_UPLOAD");
+      // Constrain every file to the runtime-owned upload root (path-traversal /
+      // absolute-outside / symlink-escape all rejected; the leaf must exist) and
+      // hand Playwright the canonical realpath'd paths, never the raw caller strings.
+      const files = await Promise.all(action.files.map((file) => assertRealpathWithin(safety.uploadRoot, file)));
+      await resolveLocator(page, action.locator).setInputFiles(files);
+      return;
+    }
     case "wait": {
       if (action.locator !== undefined) await resolveLocator(page, action.locator).waitFor();
       else await page.waitForTimeout(action.milliseconds ?? 0);

@@ -1,5 +1,20 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
+export type Step = {
+  [k: string]: unknown | undefined;
+} & {
+  id: string;
+  action: Action;
+  assertions?: Assertion[];
+  sideEffect: "none" | "reversible" | "external" | "destructive";
+  independent?: boolean;
+} & {
+  id: string;
+  action: Action;
+  assertions?: Assertion[];
+  sideEffect: "none" | "reversible" | "external" | "destructive";
+  independent?: boolean;
+};
 export type Action =
   | {
       kind: "open";
@@ -127,11 +142,4 @@ export interface BrowserTestDSL {
    * @minItems 1
    */
   steps: [Step, ...Step[]];
-}
-export interface Step {
-  id: string;
-  action: Action;
-  assertions?: Assertion[];
-  sideEffect: "none" | "reversible" | "external" | "destructive";
-  independent?: boolean;
 }

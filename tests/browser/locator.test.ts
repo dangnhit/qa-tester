@@ -43,4 +43,22 @@ describe("browser test DSL", () => {
     expect(validateBrowserTestDsl({ steps: [{ id: "two", action: { kind: "click", locator: { name: "Save" } }, sideEffect: "none" }] }).valid).toBe(false);
     expect(validateBrowserTestDsl({ steps: [{ id: "three", action: { kind: "click", locator: { role: "button", testId: "save" } }, sideEffect: "none" }] }).valid).toBe(false);
   });
+
+  function uploadStep(sideEffect: string) {
+    return { steps: [{ id: "upload", action: { kind: "upload", locator: { label: "Attachment" }, files: ["fixture.txt"] }, sideEffect }] };
+  }
+
+  it("forces an upload step to a non-`none` side effect so uploads route through authorization", () => {
+    // `none` bypasses `authorizeStep`, so it is rejected for uploads (a real, authorization-bearing side effect).
+    expect(validateBrowserTestDsl(uploadStep("none")).valid).toBe(false);
+    // Every real side-effect class is accepted at the schema level.
+    expect(validateBrowserTestDsl(uploadStep("reversible")).valid).toBe(true);
+    expect(validateBrowserTestDsl(uploadStep("external")).valid).toBe(true);
+    expect(validateBrowserTestDsl(uploadStep("destructive")).valid).toBe(true);
+  });
+
+  it("still permits a non-upload step to declare `sideEffect: none` (the conditional is upload-only)", () => {
+    expect(validateBrowserTestDsl({ steps: [{ id: "click", action: { kind: "click", locator: { testId: "save" } }, sideEffect: "none" }] }).valid).toBe(true);
+    expect(validateBrowserTestDsl({ steps: [{ id: "open", action: { kind: "open", url: "https://example.test" }, sideEffect: "none" }] }).valid).toBe(true);
+  });
 });

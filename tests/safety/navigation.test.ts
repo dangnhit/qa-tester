@@ -217,7 +217,7 @@ describe("DSL open path wiring", () => {
 
   it("refuses a disallowed navigation through executeAction and never calls page.goto (no network)", async () => {
     const { page, gotoCalls } = fakePage();
-    const error = await refusal(() => executeAction(page, { kind: "open", url: "https://evil.example.test/pivot" }, undefined, { navigation: { baseUrl: "https://app.example.test", classification: "test" } }));
+    const error = await refusal(() => executeAction(page, { kind: "open", url: "https://evil.example.test/pivot" }, undefined, { navigation: { baseUrl: "https://app.example.test", classification: "test" }, uploadRoot: "/unused-by-the-open-path" }));
     expect(error.message).toMatch(/host/i);
     expect(gotoCalls).toEqual([]);
   });

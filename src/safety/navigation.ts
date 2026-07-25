@@ -32,9 +32,11 @@ export type HostResolver = (hostname: string) => Promise<readonly string[]>;
 
 /**
  * The lane-1 safety context threaded from the runtime into the DSL executor.
- * Designed to grow: a later lane-1 task adds an `uploadRoot` field here.
+ * `uploadRoot` is the runtime-owned directory (`«workspace.path»/uploads/`) that
+ * every DSL `upload` file must resolve within — the executor guards each file
+ * against it (path-traversal / symlink-escape) before handing it to Playwright.
  */
-export type LaneSafetyContext = { navigation: NavigationPolicy };
+export type LaneSafetyContext = { navigation: NavigationPolicy; uploadRoot: string };
 
 /** Default resolver: Node DNS. A numeric IP short-circuits without network I/O. */
 export const defaultResolveHostIps: HostResolver = async (hostname) => {

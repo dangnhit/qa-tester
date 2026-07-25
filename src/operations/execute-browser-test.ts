@@ -1,3 +1,6 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
 import { aggregateStepResults } from "../browser/assertions.js";
 import { executeBrowserStep } from "../browser/playwright/executor.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
@@ -138,8 +141,11 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);
     // Lane-1 safety context: derive the navigation policy from the registered
-    // environment profile, failing closed if it is missing/malformed.
-    const safety: LaneSafetyContext = { navigation: navigationPolicyFromProfile(artifacts.find((artifact) => artifact.record.type === "environment-profile")?.value) };
+    // environment profile (failing closed if it is missing/malformed) and own the
+    // per-run upload root that every DSL `upload` file must resolve within.
+    const uploadRoot = join(input.workspace.path, "uploads");
+    await mkdir(uploadRoot, { recursive: true });
+    const safety: LaneSafetyContext = { navigation: navigationPolicyFromProfile(artifacts.find((artifact) => artifact.record.type === "environment-profile")?.value), uploadRoot };
     const attempt = await executeCanonical({ browser: input.browser, runId: input.workspace.runId, testCase, steps: testCase.browserDsl.steps, attemptId: input.attemptId, safety, ...(input.resolveSecret ? { resolveSecret: input.resolveSecret } : {}), ...(input.onSessionActive ? { onSessionActive: input.onSessionActive } : {}), ...(input.onBeforeSessionClose ? { onBeforeSessionClose: input.onBeforeSessionClose } : {}), ...(input.environment === undefined ? {} : { authorizeStep: async (step) => authorizeStep({ sideEffect: step.sideEffect, action: step.action.kind, channel: "browser", target: permitTarget(step) }, input.environment!, input.externalPermitRegistry ?? []) }), persistAttempt: async (attempt) => {
       await input.workspace.registerArtifactValue({
         type: "test-result",
