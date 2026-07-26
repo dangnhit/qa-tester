@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { getActiveBrowserSession } from "../browser/session-registry.js";
 import type { ActiveBrowserSession, TelemetryFinding } from "../browser/types.js";
 import type { RunWorkspace } from "../core/run-workspace.js";
+import { indexByAttemptId } from "../core/artifact-index.js";
 import { createEntityId } from "../core/ids.js";
 import { evidenceFilename, type EvidenceProvenance } from "./manifest.js";
 import { redactNetworkRecord, redactText, validateRedactionPlan, type CssBox, type EvidenceGap, type RedactionPlan } from "./redaction.js";
@@ -22,7 +23,13 @@ function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowse
 type AttemptBinding = Readonly<{ artifactId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }>;
 
 async function attemptBinding(workspace: RunWorkspace, attemptId: string): Promise<AttemptBinding | undefined> {
-  const matches = (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+  // The index maps to the FULL bucket, so `length === 1` still refuses an ambiguous attempt (an
+  // evidence gap, not a binding) rather than silently taking the first of several.
+  const registered = await workspace.readRegisteredArtifacts();
+  const matches = indexByAttemptId(
+    registered.filter((artifact) => artifact.record.type === "test-result"),
+    (artifact) => artifact.value.attemptId,
+  ).get(attemptId);
   const attempt = matches.length === 1 ? matches[0] : undefined;
   if (!attempt || typeof attempt.value.testCaseId !== "string" || typeof attempt.value.testCaseRevisionId !== "string" || typeof attempt.value.testCaseInstanceId !== "string") return undefined;
   return { artifactId: attempt.record.id, testCaseId: attempt.value.testCaseId, testCaseRevisionId: attempt.value.testCaseRevisionId, testCaseInstanceId: attempt.value.testCaseInstanceId };

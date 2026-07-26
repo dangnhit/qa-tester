@@ -100,6 +100,21 @@ async function buildExecuteWorkspace() {
   return { directory, workspace, testcase, first, second };
 }
 
+/** Rewrites a registered artifact's persisted payload and re-checksums its manifest record, so the
+ *  tampered value survives the integrity gate and reaches the read-path semantic checks. Several
+ *  states below are unreachable through the write path (which refuses them at registration), so
+ *  tamper-and-rechecksum is the only way to construct them. */
+async function tamper(workspace: RunWorkspace, artifact: { id: string; absolutePath: string }, value: unknown): Promise<void> {
+  const contents = JSON.stringify(value);
+  await writeFile(artifact.absolutePath, contents);
+  const manifestPath = join(workspace.path, "artifact-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; sha256: string }[] };
+  const record = manifest.artifacts.find((entry) => entry.id === artifact.id);
+  if (!record) throw new Error(`Expected artifact ${artifact.id} in the manifest`);
+  record.sha256 = sha256Text(contents);
+  await writeFile(manifestPath, JSON.stringify(manifest));
+}
+
 // ULID tokens (Crockford base32, 26 chars) are the only non-deterministic
 // substrings in the scanner's paths and messages; collapse them for stability.
 const ULID = /[0-9A-HJKMNP-TV-Z]{26}/g;
@@ -378,6 +393,112 @@ describe("inspectWorkspaceState — binary integrity is still caught (Task 26 / 
       { code: "CHECKSUM_MISMATCH", message: `Checksum mismatch for ${binary.relativePath}`, relativePath: binary.relativePath },
       { code: "INVALID_REFERENCE", message: "Evidence descriptor does not match its registered binary", relativePath: bundle.descriptor.relativePath },
       { code: "INVALID_REFERENCE", message: "Evidence descriptor does not match its designated primary binary", relativePath: bundle.descriptor.relativePath },
+    ]));
+
+    await workspace.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 30: the `.find()`/`.filter()`-per-attempt scans in the read path are now `Map` indices
+// (`src/core/artifact-index.ts`). Three properties of that conversion are not covered by the goldens
+// above and would each fail SILENTLY — with every other test still green — so they are pinned here.
+// ---------------------------------------------------------------------------
+
+// (1) MULTIPLICITY. The AMBIGUOUS_ATTEMPT check exists to catch two registered results claiming one
+// attempt. An index keyed to a single artifact per attempt (the obvious wrong shape) would collapse
+// the duplicate and emit nothing, so the workspace would validate clean. This asserts the full
+// bucket still survives the lookup: BOTH definitions are invalidated, one diagnostic each.
+describe("inspectWorkspaceState — AMBIGUOUS_ATTEMPT through the shared attempt index (Task 30)", () => {
+  it("invalidates every definition of a duplicated attempt id, not just the first", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
+    const first = await registerDocument(workspace, "test-result", "result-1.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
+    const second = await registerDocument(workspace, "test-result", "result-2.json", testResult(workspace, "TC-X", "ATTEMPT-2"), [testcase.id]);
+
+    // The write path refuses a duplicate attempt id outright ("Test result attempt ID is already
+    // registered and would be ambiguous"), so the collision is only constructible by tampering.
+    await tamper(workspace, second, testResult(workspace, "TC-X", "ATTEMPT-1"));
+
+    const validation = await workspace.validate("plan");
+    expect(validation.valid).toBe(false);
+    expect(sortDiagnostics(validation.diagnostics)).toEqual(sortDiagnostics([
+      { code: "AMBIGUOUS_ATTEMPT", message: "Attempt ATTEMPT-1 has multiple definitions", relativePath: first.relativePath },
+      { code: "AMBIGUOUS_ATTEMPT", message: "Attempt ATTEMPT-1 has multiple definitions", relativePath: second.relativePath },
+    ]));
+
+    await workspace.close();
+  });
+});
+
+// (2) THE FIXPOINT POOL. `inspectWorkspaceState` runs a `while (changed)` fixpoint in which the valid
+// pool SHRINKS between passes, and the in-fixpoint evidence block reads the attempt index built from
+// that pool. The index is therefore rebuilt on every pass. An index hoisted ABOVE the loop — the
+// natural "build it once" optimisation — would keep serving pass 1's larger pool, so evidence bound
+// to a test result invalidated in pass 1 would still resolve its attempt in pass 2 and pass the
+// in-fixpoint check. Verified against that exact regression: the pass-2 diagnostic below disappears
+// and the LATER, post-fixpoint `exactAttemptEvidenceBinding` check reports the artifact instead, with
+// its own different message ("Evidence must HAVE one exact test-result relationship ..."). So the
+// visible damage is twofold — the diagnostic set changes, and the fixpoint reaches its resting point
+// one pass early, which is what would let anything cascading off this evidence stay valid.
+describe("inspectWorkspaceState — the fixpoint attempt index must be rebuilt per pass (Task 30)", () => {
+  it("hides an attempt invalidated in pass N from the evidence attempt lookup in pass N+1", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
+    const result = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
+    const bundle = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "raw.png", contents: await solidPng(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
+      relationships: [result.id],
+      descriptor: (binaries) => rawScreenshotDescriptor(workspace, binaries),
+    });
+    const binary = bundle.binaries[0];
+    if (!binary) throw new Error("Expected raw evidence binary");
+
+    // Break ONLY the test result, and only in a way the SEMANTIC layer catches: its aggregate status
+    // no longer derives from its steps. It still parses, still matches its schema, and still passes
+    // the checksum gate, so it enters the fixpoint VALID and is invalidated during pass 1 — which is
+    // the precondition the pass-2 lookup depends on. The evidence is left completely untouched.
+    await tamper(workspace, result, { ...testResult(workspace, "TC-X", "ATTEMPT-1"), status: "FAILED", failureClassification: "PRODUCT_DEFECT" });
+
+    const validation = await workspace.validate("plan");
+    expect(validation.valid).toBe(false);
+    expect(sortDiagnostics(validation.diagnostics)).toEqual(sortDiagnostics([
+      // Pass 1: the test result loses its own binding.
+      { code: "INVALID_REFERENCE", message: "Test result must be derived from the exact ordered canonical steps and aggregate status", relativePath: result.relativePath },
+      // Pass 2: the shrunken pool no longer answers the evidence's attempt lookup. This is the line
+      // that disappears if the index is built once outside the fixpoint.
+      { code: "INVALID_REFERENCE", message: "Evidence must reference one exact registered attempt and matching testcase identity", relativePath: bundle.descriptor.relativePath },
+      // Post-fixpoint: the now-invalid descriptor no longer claims its binary.
+      { code: "INVALID_REFERENCE", message: "Evidence binary must be referenced exactly once by a canonical evidence descriptor", relativePath: binary.relativePath },
+    ]));
+
+    await workspace.close();
+  });
+});
+
+// (3) MULTIPLICITY, the identity-triple index. Same hazard as (1) for the other index: `testResultRule`
+// reads `matches.length === 1` on the test-case identity triple, so an index that kept one test case
+// per triple would report a clean single match for an AMBIGUOUS revision+instance and let the result
+// bind. The existing goldens only cover the ZERO-match direction (a dangling `TC-GHOST` reference), so
+// the duplicate direction is pinned here.
+describe("inspectWorkspaceState — ambiguous test-case identity through the shared triple index (Task 30)", () => {
+  it("rejects a result whose identity triple is claimed by two registered test cases", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
+    const result = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
+    // A second case carrying the SAME identity triple. Its title differs only because the workspace
+    // rejects a byte-identical duplicate outright ("Completed artifacts are immutable"), and it is
+    // registered AFTER the result because the write rule refuses a result whose triple already
+    // matches two cases — so the collision can only be reached in this order.
+    await registerDocument(workspace, "test-case", "case-duplicate.json", { ...testCase("TC-X"), title: "Test TC-X (rival revision)" });
+
+    const validation = await workspace.validate("plan");
+    expect(validation.valid).toBe(false);
+    expect(sortDiagnostics(validation.diagnostics)).toEqual(sortDiagnostics([
+      { code: "INVALID_REFERENCE", message: "Test result must reference exactly one registered test case revision and instance", relativePath: result.relativePath },
     ]));
 
     await workspace.close();

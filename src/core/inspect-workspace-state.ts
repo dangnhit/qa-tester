@@ -3,6 +3,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { ArtifactType } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
+import { indexByAttemptId, type ArtifactIndex } from "./artifact-index.js";
 import {
   evidenceSubject,
   matchesEvidencePrimary,
@@ -101,16 +102,20 @@ function claimedAttemptIdentity(artifact: LoadedArtifact): ClaimedAttemptIdentit
 }
 
 /** A final attempt-bound record is meaningful only when its one result relationship
- * proves the same immutable testcase revision and instance as its claimed identity. */
+ * proves the same immutable testcase revision and instance as its claimed identity.
+ * `validResultsByAttempt` indexes exactly the pool the removed `.filter()` scanned — the artifacts
+ * that are `valid` AND of type `test-result` — so `.get()` returns the same matches in the same order
+ * and the `results.length === 1` ambiguity decision below is unchanged. */
 function exactAttemptEvidenceBinding(
   identity: ClaimedAttemptIdentity | undefined,
   artifact: LoadedArtifact,
   artifacts: readonly LoadedArtifact[],
+  validResultsByAttempt: ArtifactIndex<LoadedArtifact>,
 ): boolean {
   const value = artifact.value;
   if (!value || identity === undefined) return false;
   const resultRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.valid && candidate.record.id === id && candidate.record.type === "test-result"));
-  const results = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "test-result" && candidate.value?.attemptId === identity.attemptId);
+  const results = validResultsByAttempt.get(identity.attemptId);
   const result = results.length === 1 ? results[0] : undefined;
   if (!result || resultRelationships.length !== 1 || resultRelationships[0] !== result.record.id || value.runId !== result.value?.runId) return false;
   return identity.testCaseId === result.value?.testCaseId
@@ -365,12 +370,16 @@ export async function inspectWorkspaceState(
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", violation.message) || changed;
       }
     }
-    const attempts = new Map<unknown, LoadedArtifact[]>();
-    for (const artifact of valuesOf("test-result")) {
-      const attemptId = artifact.value?.attemptId;
-      attempts.set(attemptId, [...(attempts.get(attemptId) ?? []), artifact]);
-    }
-    for (const duplicates of attempts.values()) {
+    // Built INSIDE the fixpoint, from THIS pass's `validArtifacts` snapshot: the valid pool shrinks
+    // between passes, so an index hoisted above `while (changed)` would serve a stale, too-large pool
+    // and let a rule keep binding to an artifact that was already invalidated. Within a pass it is
+    // stable — `valuesOf` filters `validArtifacts` by TYPE only and never rereads `.valid`, so an
+    // artifact invalidated earlier in this pass is still in the pool until the pass restarts. That is
+    // why this one build can serve both the AMBIGUOUS_ATTEMPT loop and the evidence block below,
+    // exactly as the repeated `valuesOf("test-result")` calls they replace did.
+    const validResults = valuesOf("test-result");
+    const attempts = indexByAttemptId(validResults, (artifact) => artifact.value?.attemptId);
+    for (const duplicates of attempts.groups()) {
       if (duplicates.length > 1) {
         for (const artifact of duplicates) {
           changed = invalidate(artifact, diagnostics, "AMBIGUOUS_ATTEMPT", `Attempt ${String(artifact.value?.attemptId)} has multiple definitions`) || changed;
@@ -389,11 +398,11 @@ export async function inspectWorkspaceState(
         if (subject?.kind === "observed-execution") {
           // Observed-execution evidence binds an execution, not an attempt, so block A's attempt check is
           // replaced (not skipped) by the positive assertion that it claims no test result at all.
-          if (artifact.record.relationships.some((id) => valuesOf("test-result").some((candidate) => candidate.record.id === id))) {
+          if (artifact.record.relationships.some((id) => validResults.some((candidate) => candidate.record.id === id))) {
             changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Observed-execution evidence must not reference a registered attempt") || changed;
           }
         } else {
-          const matches = subject === undefined ? [] : valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === subject.attemptId);
+          const matches = subject === undefined ? [] : attempts.get(subject.attemptId);
           const match = matches[0];
           if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
             || subject?.testCaseId !== match.value?.testCaseId || subject?.testCaseRevisionId !== match.value?.testCaseRevisionId || subject?.testCaseInstanceId !== match.value?.testCaseInstanceId) {
@@ -462,16 +471,25 @@ export async function inspectWorkspaceState(
     }
   }
 
+  // Hoisted out of the loop rather than rebuilt per iteration: unlike the fixpoint above, this loop
+  // cannot shrink the pool it indexes. Every `invalidate` below targets the loop's OWN artifact, which
+  // is an `evidence` or `evidence-gap` by construction, so the set of valid `test-result` artifacts is
+  // invariant for the whole loop — the same reason the `.filter()` this replaces returned identical
+  // results on every call.
+  const validResultsByAttempt = indexByAttemptId(
+    artifacts.filter((candidate) => candidate.valid && candidate.record.type === "test-result"),
+    (candidate) => candidate.value?.attemptId,
+  );
   for (const artifact of artifacts.filter((candidate) => candidate.valid && (candidate.record.type === "evidence" || candidate.record.type === "evidence-gap") && candidate.value !== undefined)) {
     const value = artifact.value as Record<string, unknown>;
     if (artifact.record.type === "evidence") {
       // Observed-execution evidence is exempt from the attempt binding because it claims none; the
       // in-fixpoint block above already asserts it references no test result.
-      if (evidenceSubject(value)?.kind !== "observed-execution" && !exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts)) {
+      if (evidenceSubject(value)?.kind !== "observed-execution" && !exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts, validResultsByAttempt)) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must have one exact test-result relationship and matching testcase identity") || changed;
       }
     } else if (value.scope === "attempt") {
-      if (!exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts)) {
+      if (!exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts, validResultsByAttempt)) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Attempt-scoped Evidence Gap must have one exact test-result relationship and matching testcase identity") || changed;
       }
     } else if (value.scope !== "operational" || value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined || artifact.record.relationships.some((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-result"))) {

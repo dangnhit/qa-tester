@@ -7,6 +7,7 @@ import { createBrowserAttemptSession } from "../browser/playwright/session.js";
 import { activeBrowserSessions } from "../browser/session-registry.js";
 import type { BrowserStepResult, BrowserTestStep, CanonicalBrowserTestCase, ExecuteTestInput, InternalExecuteTestInput, TestAttempt } from "../browser/types.js";
 import { validateBrowserTestDsl } from "../contracts/validator.js";
+import { indexByAttemptId } from "../core/artifact-index.js";
 import { QaSkillsError } from "../core/errors.js";
 import type { ExecutionProvenance } from "../core/provenance.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
@@ -137,7 +138,12 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
   reservedAttemptIds.add(input.attemptId);
   const operation = executionTail.then(async () => {
     const artifacts = await input.workspace.readRegisteredArtifacts();
-    if (artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === input.attemptId)) {
+    // A non-empty bucket is the `.some(...)` this replaces: any registered result on this attempt id
+    // makes the attempt a duplicate, whether there is one or several.
+    if (indexByAttemptId(
+      artifacts.filter((artifact) => artifact.record.type === "test-result"),
+      (artifact) => artifact.value.attemptId,
+    ).get(input.attemptId).length > 0) {
       throw new QaSkillsError("Attempt ID is already registered", "ARTIFACT_BINDING");
     }
     const testCase = loadCanonicalTestCase(artifacts, input.testCaseArtifactId);

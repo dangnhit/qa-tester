@@ -11,6 +11,7 @@ import { regressionCaseFromCanonical } from "../regression/change-scope.js";
 import { selectRegressionCases } from "../regression/selector.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId } from "../retest/verdict.js";
+import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type TestCaseIdentity } from "./artifact-index.js";
 import { evidenceAttemptId, evidenceSubject, terminalStatuses, type ArtifactRecord, type Manifest } from "./artifact-record.js";
 import type { ArtifactProfileName } from "./artifact-profiles.js";
 import { sha256, sha256Text } from "./checksum.js";
@@ -102,6 +103,14 @@ export type SemanticRule = Readonly<{
    *  One violation per evaluation matches write's throw-on-first and read's invalidate-on-first. */
   evaluate(ctx: SemanticContext): SemanticViolation | undefined | Promise<SemanticViolation | undefined>;
 }>;
+
+/** Index selectors shared by the attempt/test-case lookups below (Task 30). They exist so every rule
+ *  keys its index the same way the `===` predicate it replaced compared, and so the `test-case`
+ *  payload's own field names (`revisionId` / `instanceId`) are reconciled with the
+ *  `testCaseRevisionId` / `testCaseInstanceId` spelling every consumer uses in exactly one place. */
+const attemptIdOf = (candidate: RelatedArtifact): unknown => candidate.value?.attemptId;
+const testCaseIdentityOf = (candidate: RelatedArtifact): TestCaseIdentity =>
+  ({ testCaseId: candidate.value?.testCaseId, revisionId: candidate.value?.revisionId, instanceId: candidate.value?.instanceId });
 
 /** Moved VERBATIM from `run-workspace.ts` (retest reproduction-occurrence comparison). */
 function sameStringOccurrences(left: readonly string[], right: readonly string[]): boolean {
@@ -254,10 +263,10 @@ const testResultRule: SemanticRule = {
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
-    const matches = ctx.relatedOfType("test-case").filter((candidate) =>
-      candidate.value?.testCaseId === value.testCaseId
-      && candidate.value?.revisionId === value.testCaseRevisionId
-      && candidate.value?.instanceId === value.testCaseInstanceId);
+    // `.get` returns the FULL bucket in pool order, so this stays a `.filter()` — the `length === 1`
+    // ambiguity decision below is the reason the index maps to arrays rather than single artifacts.
+    const matches = indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf)
+      .get({ testCaseId: value.testCaseId, revisionId: value.testCaseRevisionId, instanceId: value.testCaseInstanceId });
     const testCase = matches.length === 1 ? matches[0] : undefined;
     if (ctx.stage === "write") {
       if (!testCase || ctx.relationships.filter((id) => id === testCase.record.id).length !== 1
@@ -290,7 +299,7 @@ const testResultRule: SemanticRule = {
       if ((value.status === "PASSED") !== (value.failureClassification === "NONE")) {
         return { code: "ARTIFACT_BINDING", message: "Test result failure classification is incoherent with aggregate status" };
       }
-      if (ctx.relatedOfType("test-result").some((candidate) => candidate.value?.attemptId === value.attemptId)) {
+      if (indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf).get(value.attemptId).length > 0) {
         return { code: "ARTIFACT_BINDING", message: "Test result attempt ID is already registered and would be ambiguous" };
       }
     } else {
@@ -336,13 +345,12 @@ const testResultBatchRule: SemanticRule = {
     // Hoisted out of the loop below: the related-artifact pool is fixed for the duration of one rule
     // invocation (read: the cascade-sensitive valid set for this fixpoint pass; write: the pre-read
     // manifest snapshot), so re-querying it per entry would repeat identical filter/map allocations
-    // for what is, by design, the one artifact type holding many entries.
-    const cases = ctx.relatedOfType("test-case");
+    // for what is, by design, the one artifact type holding many entries. Indexing that hoisted pool
+    // once (Task 30) is what turns the per-entry rescan into a lookup: this is the only call site in
+    // this file where the index changes complexity class (O(entries x cases) -> O(cases + entries)).
+    const cases = indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf);
     for (const entry of entries) {
-      const matches = cases.filter((candidate) =>
-        candidate.value?.testCaseId === entry.testCaseId
-        && candidate.value?.revisionId === entry.testCaseRevisionId
-        && candidate.value?.instanceId === entry.testCaseInstanceId);
+      const matches = cases.get({ testCaseId: entry.testCaseId, revisionId: entry.testCaseRevisionId, instanceId: entry.testCaseInstanceId });
       if (matches.length !== 1) {
         return { code: "ARTIFACT_BINDING", message: "Test result batch entry references an orphan or ambiguous test case revision and instance" };
       }
@@ -402,7 +410,7 @@ const testStepResultRule: SemanticRule = {
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
-    const matchingAttempts = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    const matchingAttempts = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf).get(value.attemptId);
     const result = matchingAttempts.length === 1 ? matchingAttempts[0]?.value : undefined;
     const matchingCases = result
       ? ctx.relatedOfType("test-case").filter((candidate) =>
@@ -438,12 +446,18 @@ const incidentRule: SemanticRule = {
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
-    const attempt = ctx.relatedOfType("test-result").find((candidate) => candidate.value?.attemptId === value.attemptId)?.value;
+    // `.find()` took the FIRST match, which is `[0]` of the bucket because the bucket preserves pool order.
+    const attempt = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf).get(value.attemptId)[0]?.value;
     const expectedKind = attempt?.failureClassification === "TEST_DEFECT" ? "TEST_INCIDENT"
       : attempt?.failureClassification === "ENVIRONMENT_DEFECT" ? "ENVIRONMENT_INCIDENT"
         : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
-    const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => ctx.relatedOfType("evidence").some((candidate) => candidate.value?.evidenceId === id && evidenceAttemptId(candidate.value) === value.attemptId && candidate.value?.runId === ctx.runId));
-    const validGap = Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0 && value.evidenceGapIds.every((id) => ctx.relatedOfType("evidence-gap").some((candidate) => candidate.value?.evidenceGapId === id && candidate.value?.attemptId === value.attemptId && candidate.value?.runId === ctx.runId));
+    // The attempt equality was one conjunct of each `.some(...)` below and is now carried by the bucket,
+    // so the residual predicate keeps only the id and run-scope conjuncts. Evidence claims its attempt
+    // inside its `subject` union (schema 2.0.0), hence `evidenceAttemptId` as that index's key.
+    const evidenceForAttempt = indexByAttemptId(ctx.relatedOfType("evidence"), (candidate) => evidenceAttemptId(candidate.value)).get(value.attemptId);
+    const gapsForAttempt = indexByAttemptId(ctx.relatedOfType("evidence-gap"), attemptIdOf).get(value.attemptId);
+    const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => evidenceForAttempt.some((candidate) => candidate.value?.evidenceId === id && candidate.value?.runId === ctx.runId));
+    const validGap = Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0 && value.evidenceGapIds.every((id) => gapsForAttempt.some((candidate) => candidate.value?.evidenceGapId === id && candidate.value?.runId === ctx.runId));
     if (ctx.stage === "write") {
       if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind) {
         return { code: "ARTIFACT_BINDING", message: "Incident kind must derive from a registered non-product attempt" };
@@ -575,19 +589,24 @@ const bugReportRule: SemanticRule = {
       const registeredValues = (type: ArtifactType): Record<string, unknown>[] =>
         ctx.relatedOfType(type).map((candidate) => candidate.value as Record<string, unknown>);
       const testResults = registeredValues("test-result");
+      // One index serves all three attempt lookups in this branch. `registeredValues` maps the pool to
+      // its payloads, and on the WRITE path every related artifact HAS a payload (`readRegisteredValues`
+      // throws on any unreadable/invalid one and its length is asserted equal to the record count), so
+      // keying on `result.attemptId` cannot fault on an absent value.
+      const resultsByAttempt = indexByAttemptId(testResults, (result) => result.attemptId);
       const sourceAttemptIds = isRecord(value.provenance) && Array.isArray(value.provenance.sourceAttemptIds) ? value.provenance.sourceAttemptIds : [];
       const reproductionAttemptIds = isRecord(value.reproduction) && Array.isArray(value.reproduction.attemptIds) ? value.reproduction.attemptIds : [];
       if (reproductionAttemptIds.length === 0 || sourceAttemptIds.length === 0 || value.attemptId !== sourceAttemptIds[0]
         || sourceAttemptIds.length !== reproductionAttemptIds.length
         || !sourceAttemptIds.every((id, index) => id === reproductionAttemptIds[index])
-        || !sourceAttemptIds.every((attemptId) => testResults.filter((result) => result.attemptId === attemptId).length === 1)) {
+        || !sourceAttemptIds.every((attemptId) => resultsByAttempt.get(attemptId).length === 1)) {
         return { code: "ARTIFACT_BINDING", message: "Bug report reproduction references unregistered or ambiguous attempts" };
       }
-      const original = testResults.find((result) => result.attemptId === value.attemptId);
+      const original = resultsByAttempt.get(value.attemptId)[0];
       if (original?.status !== "FAILED" || original.failureClassification !== "PRODUCT_DEFECT") {
         return { code: "ARTIFACT_BINDING", message: "Only FAILED PRODUCT_DEFECT attempts may create a bug report" };
       }
-      const sourceAttempts = sourceAttemptIds.map((attemptId) => testResults.find((result) => result.attemptId === attemptId));
+      const sourceAttempts = sourceAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]);
       if (sourceAttempts.some((attempt) => !attempt)) return { code: "ARTIFACT_BINDING", message: "Bug report reproduction is incomplete" };
       const unsafeRerunReason = isRecord(value.reproduction) && typeof value.reproduction.unsafeRerunReason === "string" ? value.reproduction.unsafeRerunReason : undefined;
       let derivedReproduction: ReturnType<typeof evaluateReproduction>;
@@ -605,7 +624,9 @@ const bugReportRule: SemanticRule = {
       const expectedBugId = prior?.bugId ?? createRunScopedBugId(String(original.testCaseId), ctx.runId, new Set(existingBugs.map((bug) => String(bug.bugId))).size + 1);
       const expectedRevision = prior ? (typeof prior.revision === "number" ? prior.revision : 1) + 1 : 1;
       const priorRecord = prior ? ctx.relatedOfType("bug-report").find((candidate) => candidate.value?.bugId === prior.bugId && candidate.value?.revision === prior.revision) : undefined;
-      if (value.bugId !== expectedBugId || existingBugs.some((bug) => bug.attemptId === value.attemptId)
+      // The attempt-uniqueness `.some(...)` — same shape as `testResultRule`'s, so it reads the same way:
+      // a non-empty bucket means this attempt already has a bug report.
+      if (value.bugId !== expectedBugId || indexByAttemptId(existingBugs, (bug) => bug.attemptId).get(value.attemptId).length > 0
         || (value.revision !== undefined && value.revision !== expectedRevision)
         || (prior && (!priorRecord || value.supersedesArtifactId !== priorRecord.record.id || !ctx.relationships.includes(priorRecord.record.id)))) {
         return { code: "ARTIFACT_BINDING", message: "Bug ID or original-attempt identity is not deterministic" };
@@ -614,10 +635,14 @@ const bugReportRule: SemanticRule = {
         || value.fingerprint !== createBugFingerprint({ feature: String(original.testCaseId), expected: value.expected, actual: value.actual, affectedAreas: value.affectedAreas.map(String) })) {
         return { code: "ARTIFACT_BINDING", message: "Bug fingerprint is not canonical" };
       }
-      const evidenceItems = registeredValues("evidence");
+      // Keyed on `evidenceId` (the per-id conjunct), leaving the `sourceAttemptIds.includes(...)`
+      // MEMBERSHIP conjunct as the residual filter — membership over a list is not an equality and so
+      // is not indexable without changing which artifacts the count covers. The count is unchanged
+      // because `evidenceId` equality partitions the pool.
+      const evidenceByEvidenceId = indexByKey(registeredValues("evidence"), (evidence) => evidence.evidenceId);
       const evidenceIds = value.evidenceIds;
-      if (!Array.isArray(evidenceIds) || !evidenceIds.every((evidenceId) => evidenceItems.filter(
-        (evidence) => evidence.evidenceId === evidenceId && sourceAttemptIds.includes(evidenceAttemptId(evidence)),
+      if (!Array.isArray(evidenceIds) || !evidenceIds.every((evidenceId) => evidenceByEvidenceId.get(evidenceId).filter(
+        (evidence) => sourceAttemptIds.includes(evidenceAttemptId(evidence)),
       ).length === 1)) {
         return { code: "ARTIFACT_BINDING", message: "Bug report references unregistered or ambiguous evidence for its reproduction set" };
       }
@@ -628,8 +653,8 @@ const bugReportRule: SemanticRule = {
       })) {
         return { code: "ARTIFACT_BINDING", message: "Bug report evidence provenance is not registered" };
       }
-      const testCases = registeredValues("test-case");
-      const testCase = testCases.find((candidate) => candidate.testCaseId === original.testCaseId && candidate.revisionId === original.testCaseRevisionId && candidate.instanceId === original.testCaseInstanceId);
+      const testCase = indexByTestCaseIdentity(registeredValues("test-case"), (candidate) => ({ testCaseId: candidate.testCaseId, revisionId: candidate.revisionId, instanceId: candidate.instanceId }))
+        .get({ testCaseId: original.testCaseId, revisionId: original.testCaseRevisionId, instanceId: original.testCaseInstanceId })[0];
       const plans = registeredValues("test-plan");
       const approvedPlanCase = plans.flatMap((plan) => plan.approvalDecision && isRecord(plan.approvalDecision) && plan.approvalDecision.approved === true && Array.isArray(plan.testCases)
         ? plan.testCases.filter(isRecord).filter((candidate) => candidate.testCaseId === original.testCaseId && (!isRecord(candidate.browserExecution) || candidate.browserExecution.revisionId === original.testCaseRevisionId)) : [])
@@ -668,23 +693,30 @@ const bugReportRule: SemanticRule = {
       }
       return undefined;
     }
-    const matchingAttempts = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    // On READ, `ctx.relatedOfType` re-filters and re-maps the whole cascade-sensitive valid pool on every
+    // call, so the two scans that called it from INSIDE a loop (the evidence `.every()` and the
+    // `sourceAttemptIds.map()`) rebuilt that pool once per id, per bug report, per fixpoint pass. Both now
+    // read one index. The pool is fixed for the duration of one rule evaluation, so hoisting is safe here;
+    // it is the FIXPOINT that must rebuild, and it does (see `inspectWorkspaceState`).
+    const resultsByAttempt = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf);
+    const matchingAttempts = resultsByAttempt.get(value.attemptId);
     const evidenceIds = value.evidenceIds;
     const sourceAttemptIds = isRecord(value.provenance) && Array.isArray(value.provenance.sourceAttemptIds) ? value.provenance.sourceAttemptIds : [];
+    const evidenceByEvidenceId = indexByKey(ctx.relatedOfType("evidence"), (candidate) => candidate.value?.evidenceId);
     const evidenceValid = Array.isArray(evidenceIds) && evidenceIds.every((evidenceId) =>
-      ctx.relatedOfType("evidence").filter((candidate) =>
-        candidate.value?.evidenceId === evidenceId
-        && sourceAttemptIds.includes(evidenceAttemptId(candidate.value))
+      evidenceByEvidenceId.get(evidenceId).filter((candidate) =>
+        sourceAttemptIds.includes(evidenceAttemptId(candidate.value))
       ).length === 1
     );
-    const sourceAttempts = sourceAttemptIds.map((attemptId) => ctx.relatedOfType("test-result").find((candidate) => candidate.value?.attemptId === attemptId)?.value);
+    const sourceAttempts = sourceAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]?.value);
     let reproductionValid = false;
     try {
       reproductionValid = sourceAttempts.every((attempt) => attempt !== undefined)
         && canonicalJson(value.reproduction) === canonicalJson(evaluateReproduction(sourceAttempts.filter((attempt): attempt is Record<string, unknown> => attempt !== undefined).map((attempt) => ({ attemptId: String(attempt.attemptId), status: String(attempt.status), failureClassification: String(attempt.failureClassification) })), isRecord(value.reproduction) && typeof value.reproduction.unsafeRerunReason === "string" ? { unsafeRerunReason: value.reproduction.unsafeRerunReason } : {}));
     } catch { reproductionValid = false; }
     const original = matchingAttempts[0]?.value;
-    const caseValue = original === undefined ? undefined : ctx.relatedOfType("test-case").find((candidate) => candidate.value?.testCaseId === original.testCaseId && candidate.value?.revisionId === original.testCaseRevisionId && candidate.value?.instanceId === original.testCaseInstanceId)?.value;
+    const caseValue = original === undefined ? undefined : indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf)
+      .get({ testCaseId: original.testCaseId, revisionId: original.testCaseRevisionId, instanceId: original.testCaseInstanceId })[0]?.value;
     const approvedPlanCase = original === undefined ? undefined : ctx.relatedOfType("test-plan").flatMap((candidate) => isRecord(candidate.value?.approvalDecision) && candidate.value.approvalDecision.approved === true && Array.isArray(candidate.value.testCases)
       ? candidate.value.testCases.filter(isRecord).filter((planCase) => planCase.testCaseId === original.testCaseId && (!isRecord(planCase.browserExecution) || planCase.browserExecution.revisionId === original.testCaseRevisionId)) : [])
       .find((planCase) => Array.isArray(planCase.expectedResults));
@@ -805,9 +837,11 @@ const retestResultRule: SemanticRule = {
       if (value.runId !== ctx.runId || value.sourceRunId !== ctx.linkedRunId || typeof value.sourceRunId !== "string" || value.sourceRunId === ctx.runId) {
         return { code: "ARTIFACT_BINDING", message: "Retest result must bind this linked immutable source run" };
       }
-      const related = ctx.relatedOfType("test-result");
-      const attempts = related.map((candidate) => candidate.value as Record<string, unknown>);
-      const resultRecords = related.map((candidate) => candidate.record);
+      // Replaces the parallel `attempts` / `resultRecords` arrays this branch used to walk with
+      // `.find()` / `.findIndex()`: both were positional views of the SAME pool, so one index over the
+      // pool serves the value lookups and the record-id lookups, and `[0]` is the element `.findIndex`
+      // would have located (both take the first match in pool order).
+      const resultsByAttempt = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf);
       const source = await ctx.openRun(value.sourceRunId);
       try {
         const sourceArtifacts = await source.readRegisteredArtifacts();
@@ -815,9 +849,10 @@ const retestResultRule: SemanticRule = {
         const bugValue = bug?.value;
         if (!bugValue || bugValue.bugId !== value.bugId || typeof bugValue.attemptId !== "string") return { code: "ARTIFACT_BINDING", message: "Retest result source bug is not registered" };
         const ids = Array.isArray(value.reproductionAttemptIds) ? value.reproductionAttemptIds : [];
-        const reproduced = ids.map((id) => attempts.find((attempt) => attempt.attemptId === id));
+        const reproduced = ids.map((id) => resultsByAttempt.get(id)[0]?.value);
         const sourceIds = isRecord(bugValue.provenance) && Array.isArray(bugValue.provenance.sourceAttemptIds) ? bugValue.provenance.sourceAttemptIds.filter((id): id is string => typeof id === "string") : [String(bugValue.attemptId)];
-        const sourceOccurrences = sourceIds.map((id) => sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value?.attemptId === id)).map((attempt) => {
+        const sourceResultsByAttempt = indexByAttemptId(sourceArtifacts.filter((candidate) => candidate.record.type === "test-result"), attemptIdOf);
+        const sourceOccurrences = sourceIds.map((id) => sourceResultsByAttempt.get(id)[0]).map((attempt) => {
           const testCase = attempt === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-case" && attempt.record.relationships.includes(candidate.record.id));
           return attempt === undefined || testCase === undefined || testCase.value?.testCaseId !== attempt.value?.testCaseId || testCase.value?.revisionId !== attempt.value?.testCaseRevisionId || testCase.value?.instanceId !== attempt.value?.testCaseInstanceId ? undefined : { attemptId: attempt.record.id, testCaseId: testCase.record.id, scenarioId: sourceScenarioId({ testCaseId: String(attempt.value?.testCaseId), revisionId: String(attempt.value?.testCaseRevisionId), instanceId: String(attempt.value?.testCaseInstanceId) }) };
         });
@@ -826,26 +861,22 @@ const retestResultRule: SemanticRule = {
           return { code: "ARTIFACT_BINDING", message: "Retest result must use exact registered reproduction attempts" };
         }
         const regressionIds = Array.isArray(value.regressionAttemptIds) ? value.regressionAttemptIds : [];
-        const regression = regressionIds.map((id) => attempts.find((attempt) => attempt?.attemptId === id));
+        const regression = regressionIds.map((id) => resultsByAttempt.get(id)[0]?.value);
         const scenarios = Array.isArray(value.reproductionScenarios) ? value.reproductionScenarios : [];
         const scenarioValid = scenarios.length === reproduced.length && scenarios.every((scenario, index) => isRecord(scenario) && scenario.attemptId === ids[index] && scenario.status === reproduced[index]?.status && scenario.sourceAttemptArtifactId === sourceOccurrences[index]?.attemptId && scenario.sourceTestCaseArtifactId === sourceOccurrences[index]?.testCaseId && scenario.scenarioId === sourceOccurrences[index]?.scenarioId) && sameStringOccurrences(scenarios.filter(isRecord).map((scenario) => String(scenario.scenarioId)), sourceScenarios);
         const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => String(attempt?.status)));
         const derived = deriveRetestVerdict({ originalBugId: String(bugValue.bugId), reproductionStatuses: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.status : "")), scenarioIds: scenarios.map((scenario) => String(isRecord(scenario) ? scenario.scenarioId : "")), regressionOutcome });
-        const expectedRelationships = ids.map((id) => {
-          const index = attempts.findIndex((attempt) => attempt?.attemptId === id);
-          return index < 0 ? undefined : resultRecords[index]?.id;
-        }).filter((id): id is string => id !== undefined).sort();
-        const regressionRelationships = regressionIds.map((id) => {
-          const index = attempts.findIndex((attempt) => attempt?.attemptId === id);
-          return index < 0 ? undefined : resultRecords[index]?.id;
-        }).filter((id): id is string => id !== undefined).sort();
+        const expectedRelationships = ids.map((id) => resultsByAttempt.get(id)[0]?.record.id).filter((id): id is string => id !== undefined).sort();
+        const regressionRelationships = regressionIds.map((id) => resultsByAttempt.get(id)[0]?.record.id).filter((id): id is string => id !== undefined).sort();
         if (!scenarioValid || regression.some((attempt) => !attempt) || value.regressionOutcome !== regressionOutcome || value.verdict !== derived.verdict || JSON.stringify([...ctx.relationships].sort()) !== JSON.stringify([...expectedRelationships, ...regressionRelationships].sort())) return { code: "ARTIFACT_BINDING", message: "Retest verdict and relationships must derive from the exact reproduction independently of regression" };
         return undefined;
       } finally { await source.close(); }
     }
     const reproductionIds = array(value.reproductionAttemptIds);
-    const attempts = reproductionIds.map((id) => ctx.relatedOfType("test-result").find((attempt) => attempt.value?.attemptId === id));
-    const regressionAttempts = array(value.regressionAttemptIds).map((id) => ctx.relatedOfType("test-result").find((attempt) => attempt.value?.attemptId === id));
+    // Both maps called `ctx.relatedOfType` per id, rebuilding the whole read-path valid pool each time.
+    const resultsByAttempt = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf);
+    const attempts = reproductionIds.map((id) => resultsByAttempt.get(id)[0]);
+    const regressionAttempts = array(value.regressionAttemptIds).map((id) => resultsByAttempt.get(id)[0]);
     const relationships = [...attempts, ...regressionAttempts].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined).sort();
     const sourceMatchesLink = typeof value.sourceRunId === "string" && value.sourceRunId === ctx.linkedRunId && value.sourceRunId !== ctx.runId;
     const scenarios = array(value.reproductionScenarios);
@@ -863,7 +894,8 @@ const retestResultRule: SemanticRule = {
         const sourceBugValue = sourceBug?.value;
         sourceBugValid = sourceRecord.type === "bug-report" && sourceRecord.sha256 === value.sourceBugArtifactSha256 && sourceBugValue?.bugId === value.bugId;
         const ids = sourceBugValue !== undefined && isRecord(sourceBugValue.provenance) && Array.isArray(sourceBugValue.provenance.sourceAttemptIds) ? sourceBugValue.provenance.sourceAttemptIds.filter((id): id is string => typeof id === "string") : sourceBug === undefined ? [] : [String(sourceBugValue?.attemptId)];
-        const sourceOccurrences = ids.map((id) => sourceArtifacts.find((candidate) => candidate.record.type === "test-result" && candidate.value?.attemptId === id)).map((attempt) => {
+        const sourceResultsByAttempt = indexByAttemptId(sourceArtifacts.filter((candidate) => candidate.record.type === "test-result"), attemptIdOf);
+        const sourceOccurrences = ids.map((id) => sourceResultsByAttempt.get(id)[0]).map((attempt) => {
           const testCase = attempt === undefined ? undefined : sourceArtifacts.find((candidate) => candidate.record.type === "test-case" && attempt.record.relationships.includes(candidate.record.id));
           return attempt === undefined || testCase === undefined || testCase.value?.testCaseId !== attempt.value?.testCaseId || testCase.value?.revisionId !== attempt.value?.testCaseRevisionId || testCase.value?.instanceId !== attempt.value?.testCaseInstanceId ? undefined : { attemptId: attempt.record.id, testCaseId: testCase.record.id, scenarioId: sourceScenarioId({ testCaseId: String(attempt.value?.testCaseId), revisionId: String(attempt.value?.testCaseRevisionId), instanceId: String(attempt.value?.testCaseInstanceId) }) };
         });
@@ -911,7 +943,7 @@ const evidenceRule: SemanticRule = {
         return { code: "ARTIFACT_BINDING", message: "Observed-execution evidence must not claim a test result relationship" };
       }
     } else {
-      const matches = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === subject.attemptId);
+      const matches = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf).get(subject.attemptId);
       const match = matches[0];
       const identityFail = matches.length !== 1 || match === undefined
         || ctx.relationships.filter((id) => id === match.record.id).length !== 1
@@ -967,7 +999,7 @@ const evidenceGapRule: SemanticRule = {
       }
       return undefined;
     }
-    const results = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
+    const results = indexByAttemptId(ctx.relatedOfType("test-result"), attemptIdOf).get(value.attemptId);
     const result = results[0];
     if (value.scope !== "attempt" || results.length !== 1
       || ctx.relationships.filter((id) => id === result?.record.id).length !== 1

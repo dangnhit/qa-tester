@@ -2,6 +2,7 @@ import sharp from "sharp";
 
 import { validateAnnotation } from "../contracts/validator.js";
 import type { RunWorkspace } from "../core/run-workspace.js";
+import { indexByAttemptId } from "../core/artifact-index.js";
 import { evidenceSubject } from "../core/artifact-record.js";
 import { sha256 } from "../core/checksum.js";
 import { createEntityId } from "../core/ids.js";
@@ -29,9 +30,13 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
   // `observed-execution` subject binds no test result and is rejected here rather than silently skipped.
   const subject = evidenceSubject(sourceValue);
   if (!Array.isArray(sourceValue.binaryArtifactIds) || sourceValue.binaryArtifactIds[0] !== input.rawBinaryArtifactId || sourceValue.kind !== "screenshot" || typeof sourceValue.runId !== "string" || sourceValue.runId !== input.workspace.runId || subject?.kind !== "attempt" || typeof sourceValue.provenance !== "object" || sourceValue.provenance === null) throw new Error("Raw evidence descriptor is not an authoritative workspace screenshot source");
-  const attempt = artifacts.find((artifact) => artifact.record.type === "test-result"
-    && source.record.relationships.includes(artifact.record.id)
-    && artifact.value.attemptId === subject.attemptId
+  // Attempt equality was one conjunct of the original single `.find()`; it now selects the bucket and
+  // the rest stays a `.find()` over it. The bucket is in `artifacts` order, so the artifact found is
+  // still the FIRST registered test result satisfying the whole conjunction.
+  const attempt = indexByAttemptId(
+    artifacts.filter((artifact) => artifact.record.type === "test-result"),
+    (artifact) => artifact.value.attemptId,
+  ).get(subject.attemptId).find((artifact) => source.record.relationships.includes(artifact.record.id)
     && artifact.value.testCaseId === subject.testCaseId
     && artifact.value.testCaseRevisionId === subject.testCaseRevisionId
     && artifact.value.testCaseInstanceId === subject.testCaseInstanceId);
