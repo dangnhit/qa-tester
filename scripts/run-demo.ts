@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import YAML from "yaml";
 
 import { serveDemoFixture } from "../fixtures/demo/server.js";
+import { evidenceAttemptId, evidenceSubject } from "../src/core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact } from "../src/core/run-workspace.js";
 import { isRecord } from "../src/core/values.js";
 import { executeCleanupRun } from "../src/operations/cleanup-run.js";
@@ -177,9 +178,10 @@ async function telemetryFrom(workspace: RunWorkspace, records: readonly Artifact
 
 function evidenceSummaries(artifacts: readonly RegisteredWorkspaceArtifact[], attempts: DemoResult["attempts"]): DemoEvidenceSummary[] {
   return attempts.map((attempt) => {
-    const attemptArtifacts = artifacts.filter((artifact) => artifact.record.type === "evidence" && artifact.value.attemptId === attempt.id);
+    const attemptArtifacts = artifacts.filter((artifact) => artifact.record.type === "evidence" && evidenceAttemptId(artifact.value) === attempt.id);
     const annotated = attemptArtifacts.find((artifact) => artifact.value.kind === "screenshot" && typeof artifact.value.relativePath === "string" && artifact.value.relativePath.includes("annotated"));
     const testResult = artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attempt.id);
+    const annotatedSubject = evidenceSubject(annotated?.value);
     const provenance = isRecord(annotated?.value.provenance) ? annotated.value.provenance : {};
     const labels = Array.isArray(provenance.annotationLabels) ? provenance.annotationLabels.filter((label): label is string => typeof label === "string") : [];
     return {
@@ -190,8 +192,8 @@ function evidenceSummaries(artifacts: readonly RegisteredWorkspaceArtifact[], at
       console: attemptArtifacts.filter((artifact) => artifact.value.kind === "console").length,
       network: attemptArtifacts.filter((artifact) => artifact.value.kind === "network").length,
       annotation: {
-        testCaseRevisionId: typeof annotated?.value.testCaseRevisionId === "string" ? annotated.value.testCaseRevisionId : "",
-        testCaseInstanceId: typeof annotated?.value.testCaseInstanceId === "string" ? annotated.value.testCaseInstanceId : "",
+        testCaseRevisionId: annotatedSubject?.kind === "attempt" ? annotatedSubject.testCaseRevisionId : "",
+        testCaseInstanceId: annotatedSubject?.kind === "attempt" ? annotatedSubject.testCaseInstanceId : "",
         locator: typeof provenance.locator === "string" ? provenance.locator : "",
         label: labels[0] ?? "",
         testResultRelated: testResult !== undefined && annotated?.record.relationships.includes(testResult.record.id) === true,

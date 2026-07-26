@@ -11,7 +11,7 @@ import { regressionCaseFromCanonical } from "../regression/change-scope.js";
 import { selectRegressionCases } from "../regression/selector.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-gate.js";
 import { deriveRegressionOutcome, deriveRetestVerdict, sourceScenarioId } from "../retest/verdict.js";
-import { terminalStatuses, type ArtifactRecord, type Manifest } from "./artifact-record.js";
+import { evidenceAttemptId, evidenceSubject, terminalStatuses, type ArtifactRecord, type Manifest } from "./artifact-record.js";
 import type { ArtifactProfileName } from "./artifact-profiles.js";
 import { sha256, sha256Text } from "./checksum.js";
 import { assertRealpathWithin } from "./fs.js";
@@ -386,7 +386,7 @@ const incidentRule: SemanticRule = {
     const expectedKind = attempt?.failureClassification === "TEST_DEFECT" ? "TEST_INCIDENT"
       : attempt?.failureClassification === "ENVIRONMENT_DEFECT" ? "ENVIRONMENT_INCIDENT"
         : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
-    const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => ctx.relatedOfType("evidence").some((candidate) => candidate.value?.evidenceId === id && candidate.value?.attemptId === value.attemptId && candidate.value?.runId === ctx.runId));
+    const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => ctx.relatedOfType("evidence").some((candidate) => candidate.value?.evidenceId === id && evidenceAttemptId(candidate.value) === value.attemptId && candidate.value?.runId === ctx.runId));
     const validGap = Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0 && value.evidenceGapIds.every((id) => ctx.relatedOfType("evidence-gap").some((candidate) => candidate.value?.evidenceGapId === id && candidate.value?.attemptId === value.attemptId && candidate.value?.runId === ctx.runId));
     if (ctx.stage === "write") {
       if (!attempt || attempt.status === "PASSED" || value.kind !== expectedKind) {
@@ -561,7 +561,7 @@ const bugReportRule: SemanticRule = {
       const evidenceItems = registeredValues("evidence");
       const evidenceIds = value.evidenceIds;
       if (!Array.isArray(evidenceIds) || !evidenceIds.every((evidenceId) => evidenceItems.filter(
-        (evidence) => evidence.evidenceId === evidenceId && sourceAttemptIds.includes(evidence.attemptId as string),
+        (evidence) => evidence.evidenceId === evidenceId && sourceAttemptIds.includes(evidenceAttemptId(evidence)),
       ).length === 1)) {
         return { code: "ARTIFACT_BINDING", message: "Bug report references unregistered or ambiguous evidence for its reproduction set" };
       }
@@ -585,7 +585,7 @@ const bugReportRule: SemanticRule = {
       const steps = registeredValues("test-step-result");
       const observedStep = steps.find((step) => sourceAttemptIds.includes(String(step.attemptId)) && (typeof step.observedActual === "string" || typeof step.error === "string"));
       const evidence = registeredValues("evidence");
-      const observedTelemetry = evidence.flatMap((item) => sourceAttemptIds.includes(String(item.attemptId)) ? array(item.telemetryFindings) : []).find((item) => isRecord(item) && typeof item.message === "string");
+      const observedTelemetry = evidence.flatMap((item) => sourceAttemptIds.includes(evidenceAttemptId(item)) ? array(item.telemetryFindings) : []).find((item) => isRecord(item) && typeof item.message === "string");
       const derivedActual = typeof observedStep?.observedActual === "string" ? observedStep.observedActual
         : typeof observedStep?.error === "string" ? observedStep.error
           : isRecord(observedTelemetry) && typeof observedTelemetry.message === "string" ? observedTelemetry.message
@@ -618,7 +618,7 @@ const bugReportRule: SemanticRule = {
     const evidenceValid = Array.isArray(evidenceIds) && evidenceIds.every((evidenceId) =>
       ctx.relatedOfType("evidence").filter((candidate) =>
         candidate.value?.evidenceId === evidenceId
-        && sourceAttemptIds.includes(candidate.value?.attemptId)
+        && sourceAttemptIds.includes(evidenceAttemptId(candidate.value))
       ).length === 1
     );
     const sourceAttempts = sourceAttemptIds.map((attemptId) => ctx.relatedOfType("test-result").find((candidate) => candidate.value?.attemptId === attemptId)?.value);
@@ -635,7 +635,7 @@ const bugReportRule: SemanticRule = {
     const plannedExpected = approvedPlanCase && Array.isArray(approvedPlanCase.expectedResults) ? approvedPlanCase.expectedResults.filter(isRecord).filter((item) => typeof item.text === "string" && item.text.length > 0).map((item) => item.text).join(" ") : undefined;
     const expected = plannedExpected || (isRecord(caseValue?.coverage) && typeof caseValue.coverage.outcome === "string" ? caseValue.coverage.outcome : caseValue?.title);
     const observed = ctx.relatedOfType("test-step-result").map((candidate) => candidate.value).find((step) => sourceAttemptIds.includes(step?.attemptId) && (typeof step?.observedActual === "string" || typeof step?.error === "string"));
-    const telemetry = ctx.relatedOfType("evidence").flatMap((candidate) => sourceAttemptIds.includes(candidate.value?.attemptId) ? array(candidate.value?.telemetryFindings) : []).find((finding) => isRecord(finding) && typeof finding.message === "string");
+    const telemetry = ctx.relatedOfType("evidence").flatMap((candidate) => sourceAttemptIds.includes(evidenceAttemptId(candidate.value)) ? array(candidate.value?.telemetryFindings) : []).find((finding) => isRecord(finding) && typeof finding.message === "string");
     const actual = typeof observed?.observedActual === "string" ? observed.observedActual : typeof observed?.error === "string" ? observed.error : isRecord(telemetry) && typeof telemetry.message === "string" ? telemetry.message : "Unknown observed actual (no registered step, error, or telemetry observation).";
     const revision = typeof value.revision === "number" ? value.revision : 1;
     const siblings = ctx.relatedOfType("bug-report").filter((candidate) => candidate.value?.bugId === value.bugId);
@@ -843,15 +843,28 @@ const evidenceRule: SemanticRule = {
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
-    const matches = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
-    const match = matches[0];
-    const identityFail = matches.length !== 1 || match === undefined
-      || ctx.relationships.filter((id) => id === match.record.id).length !== 1
-      || value.testCaseId !== match.value?.testCaseId
-      || value.testCaseRevisionId !== match.value?.testCaseRevisionId
-      || value.testCaseInstanceId !== match.value?.testCaseInstanceId;
-    if (identityFail || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1) {
+    const subject = evidenceSubject(value);
+    if (subject === undefined) {
       return { code: "ARTIFACT_BINDING", message: "Evidence binding requires one exact registered test result relationship and matching testcase identity" };
+    }
+    if (subject.kind === "observed-execution") {
+      // An observed execution has no attempt to bind to, so the attempt-identity check below is not
+      // merely skipped — it is replaced by the positive assertion that the record claims no attempt.
+      // Its execution binding is the `test-result-batch` artifact's concern, not evidence's.
+      if (ctx.relationships.some((id) => ctx.registeredRecord(id, "test-result") !== undefined)) {
+        return { code: "ARTIFACT_BINDING", message: "Observed-execution evidence must not claim a test result relationship" };
+      }
+    } else {
+      const matches = ctx.relatedOfType("test-result").filter((candidate) => candidate.value?.attemptId === subject.attemptId);
+      const match = matches[0];
+      const identityFail = matches.length !== 1 || match === undefined
+        || ctx.relationships.filter((id) => id === match.record.id).length !== 1
+        || subject.testCaseId !== match.value?.testCaseId
+        || subject.testCaseRevisionId !== match.value?.testCaseRevisionId
+        || subject.testCaseInstanceId !== match.value?.testCaseInstanceId;
+      if (identityFail || ctx.relationships.filter((id) => ctx.registeredRecord(id, "test-result") !== undefined).length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Evidence binding requires one exact registered test result relationship and matching testcase identity" };
+      }
     }
     const derivation = isRecord(value.derivation) ? value.derivation : undefined;
     const sourceEvidenceId = derivation?.sourceEvidenceArtifactId;

@@ -2,6 +2,7 @@ import { deriveReleaseGateFromWorkspaceArtifacts } from "../reporting/release-ga
 import { toQaExecutionReport, type QaReportModel } from "../reporting/report-model.js";
 import { renderCanonicalJson } from "../reporting/render-json.js";
 import { renderMarkdown } from "../reporting/render-markdown.js";
+import { evidenceAttemptId } from "../core/artifact-record.js";
 import type { ArtifactRecord, RunWorkspace } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
 
@@ -29,7 +30,12 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const excludedNotRun = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "NOT_RUN").map((artifact) => str(artifact.value.testCaseId) ?? artifact.record.id);
   const criticalFindings = currentOpenBugs.filter((bug) => bug.severity === "Blocker" || bug.severity === "Critical").map((bug) => bug.bugId);
   const remainingRisks = [...gateResult.ruleInputs.coverage.optionalGaps, ...currentOpenBugs.filter((bug) => bug.severity !== "Blocker" && bug.severity !== "Critical").map((bug) => bug.bugId), ...evidenceGaps.map((gap) => str(gap.reason) ?? "Evidence gap")];
-  const telemetryFindings = evidence.flatMap((artifact) => array(artifact.value.telemetryFindings).filter(isRecord).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, attemptId: artifact.value.attemptId })));
+  // `attemptId` is present only for attempt-subject evidence; an observed-execution finding reports its
+  // evidence artifact without inventing an attempt it never had.
+  const telemetryFindings = evidence.flatMap((artifact) => {
+    const attemptId = evidenceAttemptId(artifact.value);
+    return array(artifact.value.telemetryFindings).filter(isRecord).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, ...(attemptId === undefined ? {} : { attemptId }) }));
+  });
   const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${artifacts.filter((artifact) => artifact.record.type === "test-result").length} registered attempts evaluated; ${currentOpenBugs.length} open product bug${currentOpenBugs.length === 1 ? "" : "s"}.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, protectedEnvironment: gateResult.protectedEnvironment, releaseGate: gateResult };
   const value = toQaExecutionReport(model);
   const report = await input.workspace.registerArtifactValue({ type: "qa-execution-report", value, relationships: [gate.id, ...artifacts.map((artifact) => artifact.record.id)], provenance: "runtime" });

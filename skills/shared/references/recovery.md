@@ -74,6 +74,20 @@ is expected whenever safe capture genuinely was not possible, and is not by itse
 does mean the claim it names is unproven, and reporting skills must treat it as such (an unsupported
 claim, not a verified pass).
 
+## Artifacts from a run written by an older version
+
+Every artifact declares a `schemaVersion`, and the runtime validates against exactly one version per
+artifact type. When a schema takes a breaking change its `schemaVersion` is bumped (for example
+`evidence` went `1.0.0` → `2.0.0`), and artifacts written by an older version of the package stop
+validating. Reopening such a run reports validation diagnostics rather than silently accepting a shape
+the current contract no longer describes.
+
+A run is self-contained, so the remedy is to **start a new run** — there is nothing to repair in place.
+No migration path is offered before v1.0: there is no converter, no compatibility mode, and no
+multi-version validator. Artifacts from a prior run are read-only history; do not hand-edit their
+`schemaVersion` to make them validate, because the rest of the payload will not match the new contract
+and the checksum will no longer match the manifest.
+
 ## Check the JSON body, not just the exit code
 
 `WorkflowResult` (returned by `qaTester()` / `createQaTester()`, and printed as JSON by

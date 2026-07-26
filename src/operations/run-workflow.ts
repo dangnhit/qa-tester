@@ -4,6 +4,7 @@ import { selectRegressionCases, type RegressionSelection } from "../regression/s
 import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } from "../regression/change-scope.js";
 import { sha256Text } from "../core/checksum.js";
 import { QaSkillsError } from "../core/errors.js";
+import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
@@ -182,7 +183,10 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   for (const result of output) {
     const attempt = artifacts.find((item) => item.record.id === result.id);
     const attemptId = attempt === undefined ? undefined : String(attempt.value.attemptId);
-    if (!attemptId || !artifacts.some((item) => (item.record.type === "evidence" || item.record.type === "evidence-gap") && String(item.value.attemptId) === attemptId)) throw new QaSkillsError("Execution result lacks registered evidence or evidence gap", "ARTIFACT_BINDING");
+    // Evidence carries its attempt inside the `subject` union; an Evidence Gap still carries it flat.
+    if (!attemptId || !artifacts.some((item) => item.record.type === "evidence"
+      ? evidenceAttemptId(item.value) === attemptId
+      : item.record.type === "evidence-gap" && String(item.value.attemptId) === attemptId)) throw new QaSkillsError("Execution result lacks registered evidence or evidence gap", "ARTIFACT_BINDING");
   }
 }
 
@@ -489,11 +493,9 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
             if (!resultArtifact) throw new QaSkillsError("Trace capture requires a registered attempt", "ARTIFACT_BINDING");
             const evidenceId = createEntityId();
             const capturedAt = new Date().toISOString();
+            // A trace spans the whole attempt, so no single scroll position or clip describes it and none
+            // is recorded. The viewport is the one geometry the session genuinely knows.
             const viewport = session.page.viewportSize() ?? { width: 1, height: 1 };
-            const scroll = await session.page.evaluate(() => {
-              const page = globalThis as unknown as { scrollX: number; scrollY: number };
-              return { x: Math.max(0, page.scrollX), y: Math.max(0, page.scrollY) };
-            });
             const safeUrl = redactText(session.page.url(), [...session.secrets]);
             await workspace.registerEvidenceBundle({
               binaries: [{ filename: `${evidenceId}-trace.zip`, contents: bytes, mediaType: "application/zip", captureType: "trace" }],
@@ -501,7 +503,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
               provenance: "runtime",
               descriptor: (binaries) => {
                 const binary = binaries[0]!;
-                const value = { artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId, runId: workspace.runId, attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId), kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", dimensions: viewport, dpr: 1, scroll, clip: { x: 0, y: 0, width: viewport.width, height: viewport.height }, url: safeUrl, viewport, browser: "playwright", build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+                const value = { artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: "playwright", build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
                 const validation = validateArtifact("evidence", value);
                 if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
                 return value;
@@ -966,7 +968,12 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
   if (name === "collect-evidence") {
     if (input.mode === "retest") {
       const reproduced = new Set(state.reproductionAttemptIds);
-      return (await artifacts()).filter((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && (reproduced.has(String(artifact.value.attemptId)) || state.regressionAttemptIds.includes(String(artifact.value.attemptId)))).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
+      // Evidence carries its attempt inside the `subject` union; an Evidence Gap still carries it flat.
+      return (await artifacts()).filter((artifact) => {
+        if (artifact.record.type !== "evidence" && artifact.record.type !== "evidence-gap") return false;
+        const attemptId = artifact.record.type === "evidence" ? evidenceAttemptId(artifact.value) : artifact.value.attemptId;
+        return typeof attemptId === "string" && (reproduced.has(attemptId) || state.regressionAttemptIds.includes(attemptId));
+      }).map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
     }
     // Browser execution captures evidence while its session is active; this
     // adapter exposes exactly those immutable records as the collection step.

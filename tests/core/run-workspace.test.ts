@@ -139,7 +139,7 @@ function failSecondEvidenceBinaryWrite() {
 function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1", kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, subject: { kind: "attempt", attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1" }, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
     provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
     ...overrides,
@@ -245,6 +245,9 @@ describe("RunWorkspace", () => {
     ["path", { relativePath: "evidence/forged.png" }],
     ["checksum", { sha256: "a".repeat(64) }],
     ["media type", { mediaType: "application/json" }],
+    // Evidence 2.0.0 made geometry screenshot-only. The descriptor↔binary dimensions cross-check must
+    // still bite for the one capture type that declares dimensions.
+    ["screenshot dimensions", { provenance: { captureType: "screenshot", dimensions: { width: 99, height: 99 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" } }],
   ])("rejects a forged primary descriptor %s before persistence", async (_name, override) => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
@@ -833,16 +836,14 @@ describe("RunWorkspace", () => {
     const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
     const attempt = await registerDocument(workspace, "test-result", "result.json", { ...testResult(workspace, "TC-1"), status: "FAILED", failureClassification: "PRODUCT_DEFECT", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }] }, [testcase.id]);
 
+    const attemptSubject = { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-TC-1", testCaseInstanceId: "TC-1--INSTANCE-1" };
     const evidence = {
       artifactType: "evidence",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: workspace.runId,
-      attemptId: "ATTEMPT-1",
-      testCaseId: "TC-1",
-      testCaseRevisionId: "REV-TC-1",
-      testCaseInstanceId: "TC-1--INSTANCE-1",
+      subject: attemptSubject,
       kind: "log",
       capturedAt: "2026-07-23T12:34:56.000Z",
       sha256: "a".repeat(64),
@@ -850,9 +851,9 @@ describe("RunWorkspace", () => {
       mediaType: "application/json",
       binaryArtifactIds: ["binary-1"],
       binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
-      provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
     };
-    await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
+    await expect(registerDocument(workspace, "evidence", "foreign-evidence.json", { ...evidence, subject: { ...attemptSubject, attemptId: "ATTEMPT-MISSING" } })).rejects.toThrow(/attempt|reference|binding/i);
     const evidenceRecord = await registerDocument(workspace, "evidence", "evidence.json", evidence, [attempt.id]);
 
     const bug = {
@@ -873,6 +874,35 @@ describe("RunWorkspace", () => {
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-attempt.json", { ...bug, attemptId: "ATTEMPT-MISSING" })).rejects.toThrow(/attempt|reference|binding/i);
     await expect(registerDocument(workspace, "bug-report", "foreign-bug-evidence.json", { ...bug, evidenceIds: ["01K0ABCDEFGHJKMNPQRSTVWXY0"] })).rejects.toThrow(/evidence|reference|binding/i);
     await expect(registerDocument(workspace, "bug-report", "bug.json", bug, [attempt.id, evidenceRecord.id])).resolves.toMatchObject({ type: "bug-report" });
+  });
+
+  // Lane 2 (Phase 7) observes an external Playwright suite whose unit of execution is an execution, not
+  // a runtime-driven attempt. Evidence about one must register without a test result to bind to, and
+  // must not be able to quietly claim one anyway.
+  it("registers observed-execution evidence with no test-result binding and rejects one that claims an attempt", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    const attempt = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-1"), [testcase.id]);
+
+    const observedBundle = (evidenceId: string, relationships: string[]) => workspace.registerEvidenceBundle({
+      binaries: [{ filename: `${evidenceId}.json`, contents: Buffer.from("observed\n"), mediaType: "application/json", captureType: "log" }],
+      relationships,
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId, runId: workspace.runId,
+        subject: { kind: "observed-execution", executionId: "EXEC-1" },
+        kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
+        binaryArtifactIds: binaries.map((binary) => binary.id),
+        binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+        provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      }),
+    });
+
+    await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXYZ", [])).resolves.toBeDefined();
+    await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXY1", [attempt.id])).rejects.toThrow(/observed-execution|attempt|binding/i);
+    // The read path must agree with the write path: no attempt binding is demanded on reopen either.
+    expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ")).toBe(true);
+    await workspace.close();
   });
 
   it("binds test-data resource ownership to the workspace run", async () => {

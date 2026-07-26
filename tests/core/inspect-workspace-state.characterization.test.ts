@@ -128,8 +128,8 @@ async function solidPng(width = 120, height = 80): Promise<Buffer> {
 function rawScreenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[]) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: workspace.runId,
-    attemptId: "ATTEMPT-1", testCaseId: "TC-X", testCaseRevisionId: "REV-TC-X", testCaseInstanceId: "TC-X--INSTANCE-1", kind: "screenshot",
+    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceId: "01HZX3Y6W4YB5FWG0RY9Q8Q2K7", runId: workspace.runId,
+    subject: { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-X", testCaseRevisionId: "REV-TC-X", testCaseInstanceId: "TC-X--INSTANCE-1" }, kind: "screenshot",
     capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id),
     binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
@@ -187,7 +187,7 @@ describe("inspectWorkspaceState — evidence read two-diagnostic lock (Task 15c 
     if (!record) throw new Error("Expected the derived evidence descriptor in the manifest");
     const descriptorPath = join(workspace.path, record.relativePath);
     const descriptor = JSON.parse(await readFile(descriptorPath, "utf8")) as Record<string, unknown>;
-    descriptor.attemptId = "GHOST-ATTEMPT";
+    (descriptor.subject as Record<string, unknown>).attemptId = "GHOST-ATTEMPT";
     (descriptor.derivation as Record<string, unknown>).sourceRawSha256 = "0".repeat(64);
     const tampered = JSON.stringify(descriptor);
     await writeFile(descriptorPath, tampered);

@@ -59,16 +59,33 @@ async function removeRegionMasks(session: ActiveBrowserSession, ids: readonly st
   await session.page.evaluate((maskIds) => { const browser = globalThis as unknown as PageRuntime; for (const id of maskIds) browser.document.getElementById(id)?.remove(); }, [...ids]);
 }
 
-function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemptId: string; binding: AttemptBinding; binary: { id: string; relativePath: string; sha256: string; mediaType?: string }; provenance: EvidenceProvenance; telemetryFindings?: readonly TelemetryFinding[] }) {
-  const dimensions = input.provenance.dimensions;
-  if (!dimensions || !input.binary.mediaType) throw new Error("Evidence dimensions and media type are required");
+/** Geometry is emitted only for a screenshot, which is the only capture that measures it. A
+ *  trace/console/network/log descriptor omits it entirely rather than defaulting it — the evidence
+ *  contract forbids the fields outright, so a reintroduced default would fail validation loudly. */
+function provenanceValue(provenance: EvidenceProvenance) {
+  const shared = { url: provenance.url, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) };
+  if (provenance.captureType !== "screenshot") {
+    return { captureType: provenance.captureType, ...(provenance.viewport === undefined ? {} : { viewport: provenance.viewport }), ...shared };
+  }
   return {
-    artifactType: "evidence", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId,
+    captureType: provenance.captureType, dimensions: provenance.dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip,
+    ...(provenance.cssBoxes === undefined ? {} : { cssBoxes: provenance.cssBoxes }),
+    ...(provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }),
+    viewport: provenance.viewport, ...shared,
+  };
+}
+
+function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemptId: string; binding: AttemptBinding; binary: { id: string; relativePath: string; sha256: string; mediaType?: string }; provenance: EvidenceProvenance; telemetryFindings?: readonly TelemetryFinding[] }) {
+  if (!input.binary.mediaType) throw new Error("Evidence media type is required");
+  if (input.provenance.captureType === "screenshot" && !input.provenance.dimensions) throw new Error("Screenshot evidence dimensions are required");
+  return {
+    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceId: input.evidenceId, runId: input.workspace.runId,
+    subject: { kind: "attempt", attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId },
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings
       .filter((finding) => finding.kind === "console" || finding.kind === "network")
       .map((finding) => ({ kind: finding.kind, level: finding.level ?? "error", message: finding.message })) }),
-    provenance: { captureType: input.provenance.captureType, dimensions, dpr: input.provenance.dpr, scroll: input.provenance.scroll, clip: input.provenance.clip, ...(input.provenance.cssBoxes === undefined ? {} : { cssBoxes: input.provenance.cssBoxes }), ...(input.provenance.normalizedPixelBoxes === undefined ? {} : { pixelBoxes: input.provenance.normalizedPixelBoxes.map(({ x, y, width, height }) => ({ x, y, width, height })) }), url: input.provenance.url, viewport: input.provenance.viewport, browser: input.provenance.browser, build: input.provenance.build, capturedAt: input.provenance.capturedAt, ...(input.provenance.testcaseId === undefined ? {} : { testcaseId: input.provenance.testcaseId }), ...(input.provenance.bugId === undefined ? {} : { bugId: input.provenance.bugId }) },
+    provenance: provenanceValue(input.provenance),
   };
 }
 
@@ -130,7 +147,10 @@ export async function attachEvidence(input: { workspace: RunWorkspace; attemptId
   const evidenceId = createEntityId();
   const bytes = Buffer.from(`${JSON.stringify(payload)}\n`);
   const now = new Date().toISOString();
-  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "playwright", build: "unknown", capturedAt: now, dimensions: { width: 1, height: 1 }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+  // Telemetry is captured from the session's recorded channels, not from a rendered page: this capture
+  // measures no dimensions, device pixel ratio, scroll position, or clip. Those fields are therefore
+  // absent rather than defaulted — the evidence contract forbids them on a non-screenshot capture.
+  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, url: "about:blank", browser: "playwright", build: "unknown", capturedAt: now, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
   const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance, telemetryFindings: scrubbedFindings }), relationships: [binding.artifactId], provenance: "runtime" });
   const binary = bundle.binaries[0];
   if (!binary) throw new Error("Evidence bundle did not register telemetry");

@@ -4,6 +4,7 @@ import { dirname, join, relative } from "node:path";
 import type { ArtifactType } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
 import {
+  evidenceSubject,
   matchesEvidencePrimary,
   type ArtifactRecord,
   type Manifest,
@@ -82,21 +83,39 @@ function selectedExecutionCaseRefs(
   return refs;
 }
 
-/** A final evidence record is meaningful only when its one result relationship
- * proves the same immutable testcase revision and instance as its payload. */
+/** The attempt identity an artifact claims. Evidence carries it inside its `subject` union (schema
+ *  2.0.0); an attempt-scoped Evidence Gap still carries it as flat sibling fields. `undefined` means the
+ *  artifact claims no attempt — either an `observed-execution` evidence subject, which binds a
+ *  `test-result-batch` execution rather than an attempt, or a malformed claim. */
+type ClaimedAttemptIdentity = { attemptId: string; testCaseId: unknown; testCaseRevisionId: unknown; testCaseInstanceId: unknown };
+
+function claimedAttemptIdentity(artifact: LoadedArtifact): ClaimedAttemptIdentity | undefined {
+  if (artifact.record.type === "evidence") {
+    const subject = evidenceSubject(artifact.value);
+    return subject?.kind === "attempt" ? subject : undefined;
+  }
+  const value = artifact.value;
+  return value && typeof value.attemptId === "string"
+    ? { attemptId: value.attemptId, testCaseId: value.testCaseId, testCaseRevisionId: value.testCaseRevisionId, testCaseInstanceId: value.testCaseInstanceId }
+    : undefined;
+}
+
+/** A final attempt-bound record is meaningful only when its one result relationship
+ * proves the same immutable testcase revision and instance as its claimed identity. */
 function exactAttemptEvidenceBinding(
+  identity: ClaimedAttemptIdentity | undefined,
   artifact: LoadedArtifact,
   artifacts: readonly LoadedArtifact[],
 ): boolean {
   const value = artifact.value;
-  if (!value || typeof value.attemptId !== "string") return false;
+  if (!value || identity === undefined) return false;
   const resultRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.valid && candidate.record.id === id && candidate.record.type === "test-result"));
-  const results = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "test-result" && candidate.value?.attemptId === value.attemptId);
+  const results = artifacts.filter((candidate) => candidate.valid && candidate.record.type === "test-result" && candidate.value?.attemptId === identity.attemptId);
   const result = results.length === 1 ? results[0] : undefined;
   if (!result || resultRelationships.length !== 1 || resultRelationships[0] !== result.record.id || value.runId !== result.value?.runId) return false;
-  return value.testCaseId === result.value?.testCaseId
-    && value.testCaseRevisionId === result.value?.testCaseRevisionId
-    && value.testCaseInstanceId === result.value?.testCaseInstanceId;
+  return identity.testCaseId === result.value?.testCaseId
+    && identity.testCaseRevisionId === result.value?.testCaseRevisionId
+    && identity.testCaseInstanceId === result.value?.testCaseInstanceId;
 }
 
 function errorCode(error: unknown): unknown {
@@ -366,11 +385,20 @@ export async function inspectWorkspaceState(
     for (const artifact of validArtifacts) {
       const value = artifact.value as Record<string, unknown>;
       if (artifact.record.type === "evidence") {
-        const matches = valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === value.attemptId);
-        const match = matches[0];
-        if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
-          || value.testCaseId !== match.value?.testCaseId || value.testCaseRevisionId !== match.value?.testCaseRevisionId || value.testCaseInstanceId !== match.value?.testCaseInstanceId) {
-          changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
+        const subject = evidenceSubject(value);
+        if (subject?.kind === "observed-execution") {
+          // Observed-execution evidence binds an execution, not an attempt, so block A's attempt check is
+          // replaced (not skipped) by the positive assertion that it claims no test result at all.
+          if (artifact.record.relationships.some((id) => valuesOf("test-result").some((candidate) => candidate.record.id === id))) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Observed-execution evidence must not reference a registered attempt") || changed;
+          }
+        } else {
+          const matches = subject === undefined ? [] : valuesOf("test-result").filter((candidate) => candidate.value?.attemptId === subject.attemptId);
+          const match = matches[0];
+          if (matches.length !== 1 || match === undefined || artifact.record.relationships.filter((id) => id === match.record.id).length !== 1
+            || subject?.testCaseId !== match.value?.testCaseId || subject?.testCaseRevisionId !== match.value?.testCaseRevisionId || subject?.testCaseInstanceId !== match.value?.testCaseInstanceId) {
+            changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must reference one exact registered attempt and matching testcase identity") || changed;
+          }
         }
         const evidenceRelationships = artifact.record.relationships.filter((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "evidence" && candidate.value));
         const derivation = isRecord(value.derivation) ? value.derivation : undefined;
@@ -437,11 +465,13 @@ export async function inspectWorkspaceState(
   for (const artifact of artifacts.filter((candidate) => candidate.valid && (candidate.record.type === "evidence" || candidate.record.type === "evidence-gap") && candidate.value !== undefined)) {
     const value = artifact.value as Record<string, unknown>;
     if (artifact.record.type === "evidence") {
-      if (!exactAttemptEvidenceBinding(artifact, artifacts)) {
+      // Observed-execution evidence is exempt from the attempt binding because it claims none; the
+      // in-fixpoint block above already asserts it references no test result.
+      if (evidenceSubject(value)?.kind !== "observed-execution" && !exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts)) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Evidence must have one exact test-result relationship and matching testcase identity") || changed;
       }
     } else if (value.scope === "attempt") {
-      if (!exactAttemptEvidenceBinding(artifact, artifacts)) {
+      if (!exactAttemptEvidenceBinding(claimedAttemptIdentity(artifact), artifact, artifacts)) {
         changed = invalidate(artifact, diagnostics, "INVALID_REFERENCE", "Attempt-scoped Evidence Gap must have one exact test-result relationship and matching testcase identity") || changed;
       }
     } else if (value.scope !== "operational" || value.attemptId !== undefined || value.testCaseId !== undefined || value.testCaseRevisionId !== undefined || value.testCaseInstanceId !== undefined || artifact.record.relationships.some((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-result"))) {

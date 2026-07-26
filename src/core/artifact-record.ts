@@ -52,6 +52,40 @@ export type WorkspaceDiagnostic = { code: string; message: string; relativePath?
  *  gating) and `semantic-rules.ts` (cleanup-run source-run immutability). */
 export const terminalStatuses = new Set<RunStatus>(["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"]);
 
+/** What an evidence record is *about* (evidence schema 2.0.0). `attempt` is lane 1 — a runtime-driven
+ *  browser attempt bound to one canonical `test-result`. `observed-execution` is lane 2 — an externally
+ *  observed Playwright execution, whose `executionId` is the identity field of the `test-result-batch`
+ *  artifact; it binds no attempt and therefore no `test-result`. */
+export type EvidenceSubject =
+  | { kind: "attempt"; attemptId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }
+  | { kind: "observed-execution"; executionId: string };
+
+/** Reads the `subject` of an evidence value. Returns `undefined` for anything that is not a well-formed
+ *  subject, so every caller must decide explicitly what an unreadable subject means rather than silently
+ *  comparing `undefined === undefined` against a foreign artifact. */
+export function evidenceSubject(value: unknown): EvidenceSubject | undefined {
+  if (!isRecord(value)) return undefined;
+  const subject = value.subject;
+  if (!isRecord(subject)) return undefined;
+  if (subject.kind === "attempt") {
+    const { attemptId, testCaseId, testCaseRevisionId, testCaseInstanceId } = subject;
+    if (typeof attemptId !== "string" || typeof testCaseId !== "string" || typeof testCaseRevisionId !== "string" || typeof testCaseInstanceId !== "string") return undefined;
+    return { kind: "attempt", attemptId, testCaseId, testCaseRevisionId, testCaseInstanceId };
+  }
+  if (subject.kind === "observed-execution" && typeof subject.executionId === "string") {
+    return { kind: "observed-execution", executionId: subject.executionId };
+  }
+  return undefined;
+}
+
+/** The attempt an evidence value binds to, or `undefined` when it binds none (an `observed-execution`
+ *  subject, or a malformed one). Callers that compare this against an attempt ID must reject `undefined`
+ *  rather than let it match an absent field. */
+export function evidenceAttemptId(value: unknown): string | undefined {
+  const subject = evidenceSubject(value);
+  return subject?.kind === "attempt" ? subject.attemptId : undefined;
+}
+
 function matchingDimensions(value: unknown, dimensions: { width: number; height: number }): boolean {
   return isRecord(value) && value.width === dimensions.width && value.height === dimensions.height;
 }

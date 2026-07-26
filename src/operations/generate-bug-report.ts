@@ -3,6 +3,7 @@ import { createRunScopedBugId, createBugFingerprint } from "../defects/fingerpri
 import { createIncidentFromAttempt } from "../defects/incidents.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
 import { createTriage, type TriageInput } from "../defects/triage.js";
+import { evidenceAttemptId } from "../core/artifact-record.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createEntityId } from "../core/ids.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
@@ -35,14 +36,17 @@ function expectedFrom(artifacts: readonly RegisteredWorkspaceArtifact[], attempt
     ? coverage.outcome : string(testCase.value.title, "testcase title");
 }
 function evidenceFor(artifacts: readonly RegisteredWorkspaceArtifact[], attemptIds: readonly string[]): readonly RegisteredWorkspaceArtifact[] {
-  return artifacts.filter((artifact) => artifact.record.type === "evidence" && typeof artifact.value.attemptId === "string" && attemptIds.includes(artifact.value.attemptId));
+  return artifacts.filter((artifact) => {
+    const attemptId = artifact.record.type === "evidence" ? evidenceAttemptId(artifact.value) : undefined;
+    return attemptId !== undefined && attemptIds.includes(attemptId);
+  });
 }
 function observedActualFrom(artifacts: readonly RegisteredWorkspaceArtifact[], attemptIds: readonly string[]): { actual: string; unknown: boolean } {
   const step = artifacts.find((artifact) => artifact.record.type === "test-step-result" && typeof artifact.value.attemptId === "string" && attemptIds.includes(artifact.value.attemptId) && (typeof artifact.value.observedActual === "string" || typeof artifact.value.error === "string"));
   if (step) return { actual: (typeof step.value.observedActual === "string" ? step.value.observedActual : step.value.error) as string, unknown: false };
   const findings: unknown[] = [];
-  for (const artifact of artifacts) {
-    if (artifact.record.type === "evidence" && typeof artifact.value.attemptId === "string" && attemptIds.includes(artifact.value.attemptId) && Array.isArray(artifact.value.telemetryFindings)) {
+  for (const artifact of evidenceFor(artifacts, attemptIds)) {
+    if (Array.isArray(artifact.value.telemetryFindings)) {
       for (const finding of artifact.value.telemetryFindings as unknown[]) findings.push(finding);
     }
   }

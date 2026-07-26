@@ -4,14 +4,20 @@
   "title": "Evidence Item",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "subject", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
   "properties": {
     "artifactType": { "const": "evidence" },
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "2.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "evidenceId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "runId": { "type": "string", "minLength": 1 },
-    "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 },
+    "subject": {
+      "type": "object",
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"], "properties": { "kind": { "const": "attempt" }, "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "executionId"], "properties": { "kind": { "const": "observed-execution" }, "executionId": { "type": "string", "minLength": 1 } } }
+      ]
+    },
     "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "evidence-gap"] },
     "capturedAt": { "type": "string", "format": "date-time" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
@@ -33,26 +39,46 @@
     },
     "provenance": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["captureType", "dimensions", "dpr", "scroll", "clip", "url", "viewport", "browser", "build", "capturedAt"],
-      "properties": {
-        "captureType": { "enum": ["screenshot", "trace", "console", "network", "log"] },
-        "dimensions": { "$ref": "#/$defs/viewport" },
-        "dpr": { "type": "number", "exclusiveMinimum": 0 },
-        "scroll": { "$ref": "#/$defs/point" },
-        "clip": { "$ref": "#/$defs/box" },
-        "cssBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
-        "pixelBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
-        "locator": { "type": "string" },
-        "annotationLabels": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "url": { "type": "string" },
-        "viewport": { "$ref": "#/$defs/viewport" },
-        "browser": { "type": "string", "minLength": 1 },
-        "build": { "type": "string", "minLength": 1 },
-        "capturedAt": { "type": "string", "format": "date-time" },
-        "testcaseId": { "type": "string" },
-        "bugId": { "type": "string" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["captureType", "dimensions", "dpr", "scroll", "clip", "url", "viewport", "browser", "build", "capturedAt"],
+          "properties": {
+            "captureType": { "const": "screenshot" },
+            "dimensions": { "$ref": "#/$defs/viewport" },
+            "dpr": { "type": "number", "exclusiveMinimum": 0 },
+            "scroll": { "$ref": "#/$defs/point" },
+            "clip": { "$ref": "#/$defs/box" },
+            "cssBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
+            "pixelBoxes": { "type": "array", "items": { "$ref": "#/$defs/box" } },
+            "locator": { "type": "string" },
+            "annotationLabels": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "url": { "type": "string" },
+            "viewport": { "$ref": "#/$defs/viewport" },
+            "browser": { "type": "string", "minLength": 1 },
+            "build": { "type": "string", "minLength": 1 },
+            "capturedAt": { "type": "string", "format": "date-time" },
+            "testcaseId": { "type": "string" },
+            "bugId": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["captureType", "url", "browser", "build", "capturedAt"],
+          "properties": {
+            "captureType": { "enum": ["trace", "console", "network", "log"] },
+            "url": { "type": "string" },
+            "viewport": { "$ref": "#/$defs/viewport" },
+            "browser": { "type": "string", "minLength": 1 },
+            "build": { "type": "string", "minLength": 1 },
+            "capturedAt": { "type": "string", "format": "date-time" },
+            "testcaseId": { "type": "string" },
+            "bugId": { "type": "string" }
+          }
+        }
+      ]
     }
   },
   "$defs": {

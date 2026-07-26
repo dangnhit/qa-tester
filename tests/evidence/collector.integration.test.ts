@@ -51,7 +51,7 @@ describe("live evidence collector", () => {
         const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === result.descriptorArtifactId);
         const attempt = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
         expect(descriptor?.record.relationships).toContain(attempt?.record.id);
-        expect(descriptor?.value).toMatchObject({ testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" });
+        expect(descriptor?.value).toMatchObject({ subject: { kind: "attempt", attemptId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } });
         const [beforePixels, capturedPixels] = await Promise.all([
           sharp(before).ensureAlpha().raw().toBuffer(),
           sharp(await readFile(result.rawPath)).ensureAlpha().raw().toBuffer(),
@@ -150,6 +150,27 @@ describe("live evidence collector", () => {
       await browser.close();
       await workspace.close();
     }
+  });
+
+  // Before evidence 2.0.0 this path wrote dpr:1, scroll 0,0, a 1x1 clip and 1x1 dimensions/viewport into
+  // a checksummed audit artifact. Telemetry measures none of those, so the honest record omits them.
+  it("persists no fabricated geometry on a telemetry capture", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-no-geometry-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-geometry", name: "Geometry", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
+    const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage();
+    const attemptId = "attempt-no-geometry";
+    await registerAttempt(workspace, attemptId);
+    activeBrowserSessions.set(attemptId, { context, page, secrets: new Set(), telemetry: { findings: [{ kind: "console", level: "error", message: "boom", timestamp: new Date().toISOString() }], responseStatuses: new Map(), networkRecords: [] } });
+    try {
+      const result = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry: "console" });
+      expect(result.kind).toBe("evidence");
+      if (result.kind !== "evidence") return;
+      const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === result.descriptorArtifactId);
+      expect(descriptor?.value.schemaVersion).toBe("2.0.0");
+      const provenance = descriptor?.value.provenance as Record<string, unknown>;
+      expect(provenance.captureType).toBe("console");
+      for (const field of ["dimensions", "dpr", "scroll", "clip", "viewport"]) expect(provenance).not.toHaveProperty(field);
+    } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
   });
 
   it("never persists arbitrary protected telemetry PII without a registered deterministic scrubber", async () => {

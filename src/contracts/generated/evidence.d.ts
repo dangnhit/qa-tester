@@ -2,14 +2,22 @@
 
 export interface EvidenceItem {
   artifactType: "evidence";
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   producerVersion: string;
   evidenceId: string;
   runId: string;
-  attemptId: string;
-  testCaseId: string;
-  testCaseRevisionId: string;
-  testCaseInstanceId: string;
+  subject:
+    | {
+        kind: "attempt";
+        attemptId: string;
+        testCaseId: string;
+        testCaseRevisionId: string;
+        testCaseInstanceId: string;
+      }
+    | {
+        kind: "observed-execution";
+        executionId: string;
+      };
   kind: "screenshot" | "trace" | "console" | "network" | "log" | "evidence-gap";
   capturedAt: string;
   sha256: string;
@@ -47,24 +55,35 @@ export interface EvidenceItem {
     sourceBinaryArtifactId: string;
     sourceRawSha256: string;
   };
-  provenance: {
-    captureType: "screenshot" | "trace" | "console" | "network" | "log";
-    dimensions: Viewport;
-    dpr: number;
-    scroll: Point;
-    clip: Box;
-    cssBoxes?: Box[];
-    pixelBoxes?: Box[];
-    locator?: string;
-    annotationLabels?: string[];
-    url: string;
-    viewport: Viewport;
-    browser: string;
-    build: string;
-    capturedAt: string;
-    testcaseId?: string;
-    bugId?: string;
-  };
+  provenance:
+    | {
+        captureType: "screenshot";
+        dimensions: Viewport;
+        dpr: number;
+        scroll: Point;
+        clip: Box;
+        cssBoxes?: Box[];
+        pixelBoxes?: Box[];
+        locator?: string;
+        annotationLabels?: string[];
+        url: string;
+        viewport: Viewport;
+        browser: string;
+        build: string;
+        capturedAt: string;
+        testcaseId?: string;
+        bugId?: string;
+      }
+    | {
+        captureType: "trace" | "console" | "network" | "log";
+        url: string;
+        viewport?: Viewport;
+        browser: string;
+        build: string;
+        capturedAt: string;
+        testcaseId?: string;
+        bugId?: string;
+      };
 }
 export interface Viewport {
   width: number;

@@ -95,14 +95,11 @@ const otherArtifactContracts = [
     requiredField: "sha256",
     valid: {
       artifactType: "evidence",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
-      attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
-      testCaseId: "TC-1",
-      testCaseRevisionId: "REV-1",
-      testCaseInstanceId: "INSTANCE-1",
+      subject: { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" },
       kind: "log",
       capturedAt: "2026-07-23T12:34:56.000Z",
       sha256: "a".repeat(64),
@@ -110,7 +107,7 @@ const otherArtifactContracts = [
       mediaType: "application/json",
       binaryArtifactIds: ["binary-1"],
       binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
-      provenance: { captureType: "log", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
     },
   },
   {
@@ -280,6 +277,75 @@ describe("validateArtifact", () => {
     it("forbids severity before a bug is triaged", () => {
       expect(validateArtifact("bug-report", { ...otherArtifactContracts[6].valid, severity: "Major" }).valid).toBe(false);
     });
+  });
+});
+
+/** Evidence 2.0.0 replaced four flat identity fields with a `subject` union and made `provenance`
+ *  a discriminated union on `captureType`. These pin the two shapes the bump exists to make honest:
+ *  a non-screenshot capture may not carry geometry it never measured, and evidence may be about an
+ *  externally observed execution rather than a runtime-driven attempt. */
+describe("evidence schema 2.0.0", () => {
+  const attemptSubject = { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" };
+  const logEvidence = {
+    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
+    subject: attemptSubject, kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
+    sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
+    binaryArtifactIds: ["binary-1"],
+    binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
+    provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+  };
+  const screenshotGeometry = { dimensions: { width: 120, height: 80 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 120, height: 80 }, viewport: { width: 120, height: 80 } };
+  const screenshotEvidence = {
+    ...logEvidence, kind: "screenshot", relativePath: "evidence/shot.png", mediaType: "image/png",
+    binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/shot.png", sha256: "a".repeat(64), mediaType: "image/png" }],
+    provenance: { captureType: "screenshot", ...screenshotGeometry, url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+  };
+
+  it("accepts a non-screenshot capture that declares no geometry at all", () => {
+    expect(validateArtifact("evidence", logEvidence).valid).toBe(true);
+  });
+
+  it("accepts a non-screenshot capture that keeps a genuinely known viewport", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, provenance: { ...logEvidence.provenance, viewport: { width: 1280, height: 720 } } }).valid).toBe(true);
+  });
+
+  it.each(["dimensions", "dpr", "scroll", "clip", "cssBoxes", "pixelBoxes", "locator", "annotationLabels"] as const)(
+    "forbids (not merely permits) %s on a non-screenshot capture",
+    (field) => {
+      const fabricated: Record<string, unknown> = { dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, cssBoxes: [], pixelBoxes: [], locator: "#root", annotationLabels: ["label"] };
+      expect(validateArtifact("evidence", { ...logEvidence, provenance: { ...logEvidence.provenance, [field]: fabricated[field] } }).valid).toBe(false);
+    },
+  );
+
+  it("accepts a screenshot carrying its full measured geometry", () => {
+    expect(validateArtifact("evidence", screenshotEvidence).valid).toBe(true);
+  });
+
+  it.each(["dimensions", "dpr", "scroll", "clip", "viewport"] as const)("rejects a screenshot missing %s", (field) => {
+    const provenance: Record<string, unknown> = { ...screenshotEvidence.provenance };
+    delete provenance[field];
+    expect(validateArtifact("evidence", { ...screenshotEvidence, provenance }).valid).toBe(false);
+  });
+
+  it("accepts an observed-execution subject naming only its executionId", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, subject: { kind: "observed-execution", executionId: "EXEC-1" } }).valid).toBe(true);
+  });
+
+  it("rejects an attempt subject smuggling an executionId", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, subject: { ...attemptSubject, executionId: "EXEC-1" } }).valid).toBe(false);
+  });
+
+  it("rejects an observed-execution subject smuggling an attemptId", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, subject: { kind: "observed-execution", executionId: "EXEC-1", attemptId: "ATTEMPT-1" } }).valid).toBe(false);
+  });
+
+  it("rejects the four flat identity fields the subject union replaced", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, attemptId: "ATTEMPT-1" }).valid).toBe(false);
+  });
+
+  it("rejects evidence still declaring schemaVersion 1.0.0", () => {
+    expect(validateArtifact("evidence", { ...logEvidence, schemaVersion: "1.0.0" }).valid).toBe(false);
   });
 });
 
