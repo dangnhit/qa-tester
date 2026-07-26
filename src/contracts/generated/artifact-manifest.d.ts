@@ -14,6 +14,7 @@ export interface RunArtifactManifest {
       | "test-case"
       | "test-step-result"
       | "test-result"
+      | "test-result-batch"
       | "evidence"
       | "evidence-gap"
       | "bug-report"

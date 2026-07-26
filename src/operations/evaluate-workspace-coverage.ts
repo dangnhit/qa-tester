@@ -1,7 +1,7 @@
 import { QaSkillsError } from "../core/errors.js";
 import { creditsCoverage } from "../core/provenance.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
-import { isRecord } from "../core/values.js";
+import { array, isRecord } from "../core/values.js";
 import {
   evaluateCoverage,
   type CoverageAttempt,
@@ -61,22 +61,36 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
     const artifacts = await workspace.readRegisteredArtifacts();
     const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
     const cases = artifacts.filter((artifact) => artifact.record.type === "test-case");
-    const attempts: CoverageAttempt[] = artifacts
-      .filter((artifact) => artifact.record.type === "test-result" && creditsCoverage(artifact.record.provenance))
-      .map((result) => {
-      const testCaseId = requireString(result.value.testCaseId, "test result test case ID");
-      const revisionId = requireString(result.value.testCaseRevisionId, "test result test case revision ID");
-      const instanceId = requireString(result.value.testCaseInstanceId, "test result test case instance ID");
+    /** `field` labels the malformed-field diagnostic, `subject` the orphan-binding one; both messages
+     *  are preserved verbatim per source, so the per-attempt path's diagnostics are unchanged. */
+    const resolveDimensions = (value: Readonly<Record<string, unknown>>, field: string, subject: string): CoverageDimensions => {
+      const testCaseId = requireString(value.testCaseId, `${field} test case ID`);
+      const revisionId = requireString(value.testCaseRevisionId, `${field} test case revision ID`);
+      const instanceId = requireString(value.testCaseInstanceId, `${field} test case instance ID`);
       const matches = cases.filter((candidate) => candidate.value.testCaseId === testCaseId
         && candidate.value.revisionId === revisionId && candidate.value.instanceId === instanceId);
-      if (matches.length !== 1) throw new QaSkillsError("Test result references an orphan or ambiguous test case revision and instance", "ARTIFACT_BINDING");
-      const coverage = dimensions(matches[0]?.value ?? {});
-      return {
+      if (matches.length !== 1) throw new QaSkillsError(`${subject} references an orphan or ambiguous test case revision and instance`, "ARTIFACT_BINDING");
+      return dimensions(matches[0]?.value ?? {});
+    };
+    const attempts: CoverageAttempt[] = artifacts
+      .filter((artifact) => artifact.record.type === "test-result" && creditsCoverage(artifact.record.provenance))
+      .map((result) => ({
         attemptId: requireString(result.value.attemptId, "test result attempt ID"), status: requireString(result.value.status, "test result status"),
-        ...coverage,
-      };
-      });
-    return evaluateCoverage(obligations, attempts);
+        ...resolveDimensions(result.value, "test result", "Test result"),
+      }));
+    // Lane 2 (ADR-0010): one `test-result-batch` per Runtime-Observed Execution flattens into one
+    // CoverageAttempt per entry, keyed by `entryId` (an entry has no attempt — no attempt was driven).
+    // Crediting is gated by the SAME provenance predicate, so an agent-draft batch credits nothing.
+    const batchAttempts: CoverageAttempt[] = artifacts
+      .filter((artifact) => artifact.record.type === "test-result-batch" && creditsCoverage(artifact.record.provenance))
+      .flatMap((batch) => array(batch.value.entries).map((entry) => {
+        if (!isRecord(entry)) throw new QaSkillsError("Registered test result batch entry is invalid", "ARTIFACT_BINDING");
+        return {
+          attemptId: requireString(entry.entryId, "test result batch entry ID"), status: requireString(entry.status, "test result batch entry status"),
+          ...resolveDimensions(entry, "test result batch entry", "Test result batch entry"),
+        };
+      }));
+    return evaluateCoverage(obligations, [...attempts, ...batchAttempts]);
   } finally {
     if (ownsWorkspace) await workspace.close();
   }

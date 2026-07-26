@@ -20,7 +20,11 @@ const dimensions = {
   viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
 } as const;
 
-async function setup(overrides: { requirementAuthority?: string; result?: Record<string, unknown>; resultProvenance?: string; testCase?: Record<string, unknown>; obligation?: Record<string, unknown> } = {}) {
+async function setup(overrides: {
+  requirementAuthority?: string; result?: Record<string, unknown>; resultProvenance?: string;
+  testCase?: Record<string, unknown>; obligation?: Record<string, unknown>;
+  omitResult?: boolean; batchEntries?: readonly Record<string, unknown>[]; batchProvenance?: string;
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-workspace-coverage-"));
   roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile });
@@ -39,9 +43,18 @@ async function setup(overrides: { requirementAuthority?: string; result?: Record
     artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
     steps: [{ id: "save", action: "click", sideEffect: "none" }], coverage: { ...dimensions, ...(coverageOverride ?? {}) }, ...testCaseOverrides,
   });
-  await workspace.registerArtifactValue({ type: "test-result", relationships: [testCase.id], provenance: overrides.resultProvenance ?? "runtime-execution", value: {
-    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
-  } });
+  if (overrides.omitResult !== true) {
+    await workspace.registerArtifactValue({ type: "test-result", relationships: [testCase.id], provenance: overrides.resultProvenance ?? "runtime-execution", value: {
+      artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
+    } });
+  }
+  if (overrides.batchEntries !== undefined) {
+    await workspace.registerArtifactValue({ type: "test-result-batch", relationships: [testCase.id], provenance: overrides.batchProvenance ?? "runtime-observed", value: {
+      artifactType: "test-result-batch", schemaVersion: "1.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
+      commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
+      startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", entries: overrides.batchEntries,
+    } });
+  }
   await workspace.close();
   return { root, runId: workspace.runId, workspacePath: workspace.path };
 }
@@ -150,5 +163,59 @@ describe("evaluateWorkspaceCoverage", () => {
     await rewriteRegisteredArtifact(fixture.workspacePath, "test-result", (result) => { result.testCaseInstanceId = "TC-SAVE--TAMPERED"; });
 
     await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/instance|reference|binding|workspace/i);
+  });
+
+  /** Byte-identity pin: with no batch registered, this reader must return exactly the evaluation it
+   *  returned before `test-result-batch` existed. Captured from the pre-change code. */
+  it("produces byte-identical coverage output for a workspace containing no batches", async () => {
+    const fixture = await setup();
+
+    expect(JSON.stringify(await evaluateWorkspaceCoverage(fixture)))
+      .toBe("{\"complete\":true,\"satisfied\":[\"COV-SAVE\"],\"missing\":[],\"qualifyingAttemptIds\":[\"ATTEMPT-SAVE\"]}");
+  });
+});
+
+/** Lane 2 (ADR-0010): a Runtime-Observed Execution registers one `test-result-batch` holding many
+ *  entries. Each entry flattens into a CoverageAttempt keyed by its `entryId`, credited under exactly
+ *  the same provenance predicate as a per-attempt `test-result`. */
+describe("evaluateWorkspaceCoverage — test-result-batch entries", () => {
+  const entry = {
+    entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
+    status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+  };
+
+  it("credits an authoritative obligation from a runtime-observed batch entry", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [entry] });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toEqual({ complete: true, satisfied: ["COV-SAVE"], missing: [], qualifyingAttemptIds: ["ENTRY-SAVE"] });
+  });
+
+  it("does not let an agent-draft batch satisfy authoritative release coverage", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [entry], batchProvenance: "agent-draft" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+  });
+
+  it("credits a batch and a per-attempt result together, leaving the per-attempt credit unchanged", async () => {
+    const fixture = await setup({ batchEntries: [entry] });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toEqual({
+      complete: true, satisfied: ["COV-SAVE"], missing: [], qualifyingAttemptIds: ["ATTEMPT-SAVE", "ENTRY-SAVE"],
+    });
+  });
+
+  it("does not credit a batch entry that did not pass", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [{ ...entry, status: "FAILED", failureClassification: "PRODUCT_DEFECT" }] });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+  });
+
+  it("rejects a checksum-rewritten batch entry that no longer binds one registered test case", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [entry] });
+    await rewriteRegisteredArtifact(fixture.workspacePath, "test-result-batch", (batch) => {
+      (batch.entries as Record<string, unknown>[])[0]!.testCaseRevisionId = "REV-GONE";
+    });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/orphan|reference|binding|workspace/i);
   });
 });

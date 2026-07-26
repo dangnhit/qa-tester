@@ -19,6 +19,7 @@ import runMetadataSchema from "../../shared/schemas/run-metadata.schema.json" wi
 import testCaseSchema from "../../shared/schemas/test-case.schema.json" with { type: "json" };
 import testDataManifestSchema from "../../shared/schemas/test-data-manifest.schema.json" with { type: "json" };
 import testResultSchema from "../../shared/schemas/test-result.schema.json" with { type: "json" };
+import testResultBatchSchema from "../../shared/schemas/test-result-batch.schema.json" with { type: "json" };
 import testPlanSchema from "../../shared/schemas/test-plan.schema.json" with { type: "json" };
 import approvalDecisionSchema from "../../shared/schemas/approval-decision.schema.json" with { type: "json" };
 import testStepResultSchema from "../../shared/schemas/test-step-result.schema.json" with { type: "json" };
@@ -41,6 +42,7 @@ export const schemas: Record<ArtifactType, object> = {
   "test-case": testCaseSchema,
   "test-step-result": testStepResultSchema,
   "test-result": testResultSchema,
+  "test-result-batch": testResultBatchSchema,
   evidence: evidenceSchema,
   "evidence-gap": evidenceGapSchema,
   "bug-report": bugReportSchema,

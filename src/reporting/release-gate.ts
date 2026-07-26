@@ -95,16 +95,24 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (!fields.every((field) => string(field) !== undefined)) return [];
     return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, role: value.role as string, behavior: value.behavior as string, browser: value.browser as string, viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
   });
-  const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance)).flatMap((artifact) => {
-    const value = artifact.value;
-    const testCase = cases.find((candidate) => candidate.value.testCaseId === value.testCaseId && candidate.value.revisionId === value.testCaseRevisionId && candidate.value.instanceId === value.testCaseInstanceId);
+  /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
+   *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
+   *  case. Unresolvable claims are dropped, exactly as the per-attempt path has always dropped them. */
+  const asAttempt = (attemptId: unknown, status: unknown, identity: Readonly<Record<string, unknown>>): CoverageAttempt[] => {
+    const testCase = cases.find((candidate) => candidate.value.testCaseId === identity.testCaseId && candidate.value.revisionId === identity.testCaseRevisionId && candidate.value.instanceId === identity.testCaseInstanceId);
     const dimensions = testCase?.value.coverage;
     if (!isRecord(dimensions) || !isRecord(dimensions.viewport) || typeof dimensions.viewport.width !== "number" || typeof dimensions.viewport.height !== "number") return [];
-    const fields = [value.attemptId, value.status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.browser, dimensions.risk, dimensions.outcome];
+    const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.browser, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    return [{ attemptId: value.attemptId as string, status: value.status as string, requirementId: dimensions.requirementId as string, role: dimensions.role as string, behavior: dimensions.behavior as string, browser: dimensions.browser as string, viewport: { width: dimensions.viewport.width, height: dimensions.viewport.height }, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
-  });
-  const evaluation = evaluateCoverage(obligations, attempts);
+    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, role: dimensions.role as string, behavior: dimensions.behavior as string, browser: dimensions.browser as string, viewport: { width: dimensions.viewport.width, height: dimensions.viewport.height }, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
+  };
+  const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
+    .flatMap((artifact) => asAttempt(artifact.value.attemptId, artifact.value.status, artifact.value));
+  // Lane 2 (ADR-0010): each `test-result-batch` entry is one observed case, keyed by `entryId` because
+  // no runtime-driven attempt exists. Same provenance gate, so an agent-draft batch credits nothing.
+  const batchAttempts: CoverageAttempt[] = valuesOf("test-result-batch").filter((artifact) => creditsCoverage(artifact.record.provenance))
+    .flatMap((artifact) => array(artifact.value.entries).filter(isRecord).flatMap((entry) => asAttempt(entry.entryId, entry.status, entry)));
+  const evaluation = evaluateCoverage(obligations, [...attempts, ...batchAttempts]);
   const passed = new Set(evaluation.satisfied);
   const highRisk = canonical(obligations.filter((obligation) => obligation.required && (obligation.risk === "high" || obligation.risk === "critical")).map((obligation) => ({ obligationId: obligation.obligationId, passed: passed.has(obligation.obligationId) })), (item) => item.obligationId);
   const optionalGaps = canonical(obligations.filter((obligation) => !obligation.required && !passed.has(obligation.obligationId)).map((obligation) => obligation.obligationId), (item) => item);

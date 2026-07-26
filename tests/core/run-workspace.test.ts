@@ -79,6 +79,36 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
   };
 }
 
+/** One entry of a `test-result-batch`, defaulting to a coherent PASSED entry for `testCase("TC-1")`. */
+function batchEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    entryId: "ENTRY-1",
+    testCaseId: "TC-1",
+    testCaseRevisionId: "REV-TC-1",
+    testCaseInstanceId: "TC-1--INSTANCE-1",
+    status: "PASSED",
+    failureClassification: "NONE",
+    steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
+    ...overrides,
+  };
+}
+
+function testResultBatch(workspace: RunWorkspace, entries: readonly Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
+  return {
+    artifactType: "test-result-batch",
+    schemaVersion: "1.0.0",
+    producerVersion: "1.0.0",
+    executionId: "EXEC-1",
+    runId: workspace.runId,
+    commitSha: "b".repeat(40),
+    specTreeSha256: "c".repeat(64),
+    startedAt: "2026-07-23T12:34:56.000Z",
+    finishedAt: "2026-07-23T12:35:56.000Z",
+    entries,
+    ...overrides,
+  };
+}
+
 async function registerEvidenceAttempt(workspace: RunWorkspace, attemptId = "ATTEMPT-EVIDENCE") {
   const testCaseRecord = await workspace.registerArtifactValue({ type: "test-case", relationships: [], value: testCase("TC-EVIDENCE") });
   return workspace.registerArtifactValue({ type: "test-result", relationships: [testCaseRecord.id], value: testResult(workspace, "TC-EVIDENCE", attemptId) });
@@ -902,6 +932,69 @@ describe("RunWorkspace", () => {
     await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXY1", [attempt.id])).rejects.toThrow(/must not claim a test result/i);
     // The read path must agree with the write path: no attempt binding is demanded on reopen either.
     expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ")).toBe(true);
+    await workspace.close();
+  });
+
+  // Lane 2's `test-result-batch` carries many entries for one Runtime-Observed Execution. Its rule
+  // enforces the same identity binding and status coherence a per-attempt `test-result` gets, plus the
+  // batch-only invariants: entry IDs are unique, and evidence is attached only to failing entries.
+  it("binds every test-result-batch entry to one registered test case and rejects incoherent entries", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    const register = (entries: readonly Record<string, unknown>[]) => workspace.registerArtifactValue({
+      type: "test-result-batch", relationships: [testcase.id], provenance: "runtime-observed",
+      value: testResultBatch(workspace, entries),
+    });
+
+    // Each assertion pins the rule's own message, so deleting one check cannot stay green on another's.
+    await expect(register([batchEntry({ entryId: "ENTRY-1" }), batchEntry({ entryId: "ENTRY-1" })]))
+      .rejects.toThrow("Test result batch entry IDs must be unique within the batch");
+    await expect(register([batchEntry({ testCaseRevisionId: "REV-GONE" })]))
+      .rejects.toThrow("Test result batch entry references an orphan or ambiguous test case revision and instance");
+    await expect(register([batchEntry({ failureClassification: "PRODUCT_DEFECT" })]))
+      .rejects.toThrow("Test result batch entry failure classification is incoherent with its status");
+    await expect(register([batchEntry({ status: "FAILED", failureClassification: "NONE" })]))
+      .rejects.toThrow("Test result batch entry failure classification is incoherent with its status");
+    await expect(register([batchEntry({ evidenceArtifactIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"] })]))
+      .rejects.toThrow("Passed test result batch entry must not declare evidence artifacts");
+    await expect(register([batchEntry({ status: "FAILED", failureClassification: "PRODUCT_DEFECT", evidenceArtifactIds: ["01K0ABCDEFGHJKMNPQRSTVWXYZ"] })]))
+      .rejects.toThrow("Test result batch entry references unregistered evidence");
+
+    await expect(register([batchEntry({ entryId: "ENTRY-1" }), batchEntry({ entryId: "ENTRY-2" })])).resolves.toMatchObject({ type: "test-result-batch" });
+    // The read path must agree with the write path: the registered batch survives reopen.
+    expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "test-result-batch")).toBe(true);
+    await workspace.close();
+  });
+
+  it("accepts a failing batch entry whose evidence is the observed execution's registered evidence", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
+    const evidence = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "observed.json", contents: Buffer.from("observed\n"), mediaType: "application/json", captureType: "log" }],
+      relationships: [],
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
+        // The same executionId the batch below carries — the linkage between lane-2 evidence and its batch.
+        subject: { kind: "observed-execution", executionId: "EXEC-1" },
+        kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
+        binaryArtifactIds: binaries.map((binary) => binary.id),
+        binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+        provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      }),
+    });
+
+    const registered = await workspace.registerArtifactValue({
+      type: "test-result-batch", relationships: [testcase.id, evidence.descriptor.id], provenance: "runtime-observed",
+      value: testResultBatch(workspace, [batchEntry({ status: "FAILED", failureClassification: "PRODUCT_DEFECT", evidenceArtifactIds: [evidence.descriptor.id] })]),
+    });
+
+    expect(registered.type).toBe("test-result-batch");
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const batch = artifacts.find((artifact) => artifact.record.type === "test-result-batch");
+    const observed = artifacts.find((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ");
+    expect((observed?.value.subject as { executionId?: string } | undefined)?.executionId).toBe(batch?.value.executionId);
     await workspace.close();
   });
 

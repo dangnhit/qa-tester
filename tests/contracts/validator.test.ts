@@ -166,6 +166,26 @@ const otherArtifactContracts = [
       affectedClaim: "The order was persisted successfully.",
     },
   },
+  {
+    type: "test-result-batch",
+    requiredField: "entries",
+    valid: {
+      artifactType: "test-result-batch",
+      schemaVersion: "1.0.0",
+      producerVersion: "1.0.0",
+      executionId: "EXEC-1",
+      runId: "20260723T123456Z-a1b2c3",
+      commitSha: "b".repeat(40),
+      specTreeSha256: "c".repeat(64),
+      startedAt: "2026-07-23T12:34:56.000Z",
+      finishedAt: "2026-07-23T12:35:56.000Z",
+      entries: [{
+        entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+        status: "PASSED", failureClassification: "NONE",
+        steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
+      }],
+    },
+  },
 ] as const satisfies readonly {
   type: Exclude<ArtifactType, "run-metadata">;
   requiredField: string;
@@ -346,6 +366,92 @@ describe("evidence schema 2.0.0", () => {
 
   it("rejects evidence still declaring schemaVersion 1.0.0", () => {
     expect(validateArtifact("evidence", { ...logEvidence, schemaVersion: "1.0.0" }).valid).toBe(false);
+  });
+});
+
+/** `test-result-batch` is the lane-2 artifact shape: one artifact per Runtime-Observed Execution,
+ *  carrying many entries. These pin the fields that make such a batch auditable — the git anchor
+ *  (`commitSha` + `specTreeSha256`, ADR-0010) that is the only reason an observed execution may credit
+ *  coverage, and the per-entry identity + status shape the coverage readers flatten. */
+describe("test-result-batch schema (Runtime-Observed Execution)", () => {
+  const entry = {
+    entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+    status: "PASSED", failureClassification: "NONE",
+    steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
+  };
+  const batch = {
+    artifactType: "test-result-batch", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+    executionId: "EXEC-1", runId: "20260723T123456Z-a1b2c3",
+    commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
+    startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
+    entries: [entry],
+  };
+
+  it("accepts a minimal valid batch", () => {
+    expect(validateArtifact("test-result-batch", batch).valid).toBe(true);
+  });
+
+  it.each(["commitSha", "specTreeSha256", "entries", "executionId", "runId"] as const)("rejects a batch missing %s", (field) => {
+    const invalid: Record<string, unknown> = { ...batch };
+    delete invalid[field];
+
+    expect(validateArtifact("test-result-batch", invalid).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+    );
+  });
+
+  it("rejects a batch carrying no entries", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "minItems" })]),
+    );
+  });
+
+  it.each([
+    ["commit SHA", { commitSha: "not-a-sha" }],
+    ["spec tree checksum", { specTreeSha256: "c".repeat(63) }],
+  ] as const)("rejects a non-hex git anchor: %s", (_label, override) => {
+    expect(validateArtifact("test-result-batch", { ...batch, ...override }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "pattern" })]),
+    );
+  });
+
+  it("rejects a batch declaring a provenance field (crediting is the manifest record's decision)", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, provenance: "runtime-observed" }).valid).toBe(false);
+  });
+
+  it("rejects a batch declaring any schemaVersion other than 1.0.0", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "2.0.0" }).valid).toBe(false);
+  });
+
+  it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "steps"] as const)("rejects an entry missing %s", (field) => {
+    const invalidEntry: Record<string, unknown> = { ...entry };
+    delete invalidEntry[field];
+
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [invalidEntry] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+    );
+  });
+
+  it.each([
+    ["entry execution status", { status: "SUCCESS" }],
+    ["entry failure classification", { failureClassification: "UNKNOWN" }],
+    ["entry step status", { steps: [{ stepId: "step-1", status: "SUCCESS", durationMs: 1 }] }],
+  ] as const)("rejects an invalid %s enum value", (_label, override) => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, ...override }] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "enum" })]),
+    );
+  });
+
+  it("rejects unknown properties on an entry", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, attemptId: "ATTEMPT-1" }] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "additionalProperties" })]),
+    );
+  });
+
+  it("accepts an entry declaring evidence artifact IDs and rejects an empty declaration", () => {
+    const failing = { ...entry, status: "FAILED", failureClassification: "PRODUCT_DEFECT" };
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...failing, evidenceArtifactIds: ["EVIDENCE-1"] }] }).valid).toBe(true);
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...failing, evidenceArtifactIds: [] }] }).valid).toBe(false);
   });
 });
 

@@ -305,6 +305,57 @@ const testResultRule: SemanticRule = {
   },
 };
 
+/** Rule: `test-result-batch` — the lane-2 (ADR-0010) counterpart of `testResultRule`: one artifact per
+ *  Runtime-Observed Execution carrying many entries. Unlike the migrated types above, this type is NEW,
+ *  so it has no pre-Phase-2a write/read chains to reproduce and therefore NO sanctioned drift: the rule
+ *  is deliberately stage-agnostic (no `ctx.stage` branch), and both paths surface the same message —
+ *  write throws it as ARTIFACT_BINDING, read soft-invalidates as INVALID_REFERENCE.
+ *
+ *  It enforces, in order: unique `entryId` within the batch; each entry binds to exactly one registered
+ *  `test-case` on the same identity triple `testResultRule` uses; the same PASSED <-> NONE coherence
+ *  check `testResultRule` applies to an attempt; evidence attached ONLY to failing entries (the plan's
+ *  "evidence attached only for failing cases", made checkable); and every declared
+ *  `evidenceArtifactIds` entry resolving to a registered `evidence` record.
+ *
+ *  Two checks `testResultRule` applies are deliberately ABSENT. The ordered-canonical-steps/aggregate
+ *  derivation is not applicable: an observed execution's steps come from an external suite, not from the
+ *  approved Test DSL, so there is no canonical step list to equal. And there is no relationship binding
+ *  requirement on the matched test cases — a batch covers many cases and Phase 7 owns what it declares.
+ *  Evidence resolution keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
+ *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check. */
+const testResultBatchRule: SemanticRule = {
+  type: "test-result-batch",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const entries = array(ctx.value.entries).filter(isRecord);
+    const entryIds = entries.map((entry) => entry.entryId);
+    if (new Set(entryIds).size !== entryIds.length) {
+      return { code: "ARTIFACT_BINDING", message: "Test result batch entry IDs must be unique within the batch" };
+    }
+    for (const entry of entries) {
+      const matches = ctx.relatedOfType("test-case").filter((candidate) =>
+        candidate.value?.testCaseId === entry.testCaseId
+        && candidate.value?.revisionId === entry.testCaseRevisionId
+        && candidate.value?.instanceId === entry.testCaseInstanceId);
+      if (matches.length !== 1) {
+        return { code: "ARTIFACT_BINDING", message: "Test result batch entry references an orphan or ambiguous test case revision and instance" };
+      }
+      if ((entry.status === "PASSED") !== (entry.failureClassification === "NONE")) {
+        return { code: "ARTIFACT_BINDING", message: "Test result batch entry failure classification is incoherent with its status" };
+      }
+      if (entry.evidenceArtifactIds === undefined) continue;
+      if (entry.status === "PASSED") {
+        return { code: "ARTIFACT_BINDING", message: "Passed test result batch entry must not declare evidence artifacts" };
+      }
+      if (!array(entry.evidenceArtifactIds).every((id) => typeof id === "string" && ctx.registeredRecord(id, "evidence") !== undefined)) {
+        return { code: "ARTIFACT_BINDING", message: "Test result batch entry references unregistered evidence" };
+      }
+    }
+    return undefined;
+  },
+};
+
 /** Rule: `approval-decision` — carries logic drift. WRITE additionally requires the bound plan to be a
  *  pending human-review plan (`approvalPolicy.mode === "human-review"` + `approvalDecision.approved ===
  *  false`) and additionally requires exactly one test-plan relationship; READ has neither extra check
@@ -946,7 +997,8 @@ const changeScopeRule: SemanticRule = {
  *  synchronous "both-path" types; Task 15b added the three async + regression heavy-derivation types;
  *  Task 15c adds `evidence` (write-only — read stays inline in-fixpoint to preserve its two independent
  *  diagnostics), `evidence-gap` (write-only — read stays inline post-fixpoint), and `change-scope`
- *  (read-only), finalizing the in-fixpoint migration. Types with no per-type semantic
+ *  (read-only), finalizing the in-fixpoint migration. Task 29 adds `test-result-batch`, the first type
+ *  authored directly onto this table (both paths, no drift). Types with no per-type semantic
  *  rule on either path (`test-case`, `exploratory-finding`, `run-metadata`, `artifact-manifest`),
  *  `environment-profile` (inline in `assertArtifactBinding`), and `workflow-checkpoint` (read-only,
  *  post-fixpoint inline) intentionally remain outside the table. */
@@ -955,6 +1007,7 @@ export const semanticRules: Partial<Record<ArtifactType, SemanticRule>> = {
   "coverage-obligation": coverageObligationRule,
   "test-plan": testPlanRule,
   "test-result": testResultRule,
+  "test-result-batch": testResultBatchRule,
   "approval-decision": approvalDecisionRule,
   "test-step-result": testStepResultRule,
   "incident": incidentRule,

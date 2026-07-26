@@ -281,6 +281,99 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — coverage credit by provena
   });
 });
 
+describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage credit (Task 29)", () => {
+  const dimensions = {
+    requirementId: "REQ-CREDIT", role: "member", behavior: "save profile", browser: "chromium",
+    viewport: { width: 1440, height: 900 }, risk: "high", outcome: "confirmation shown",
+  };
+
+  /** Planning artifacts plus one matching test case; the attempts are supplied per test. */
+  function planning(): GateWorkspaceArtifact[] {
+    return [
+      artifact("requirement-analysis", { statements: [{ requirementId: dimensions.requirementId, authority: "AUTHORITATIVE" }] }, "RA-CREDIT"),
+      artifact("coverage-obligation", { obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, ...dimensions }, "OBL-CREDIT"),
+      artifact("test-case", { testCaseId: "TC-CREDIT", revisionId: "REV-CREDIT", instanceId: "INST-CREDIT", coverage: dimensions }, "TC-ART-CREDIT"),
+    ];
+  }
+
+  function batch(provenance: string | undefined, entries: readonly Record<string, unknown>[]): GateWorkspaceArtifact {
+    return artifact("test-result-batch", {
+      executionId: "EXEC-CREDIT", commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64), entries,
+    }, "BATCH-CREDIT", provenance);
+  }
+
+  const passingEntry = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT" };
+
+  it("credits coverage from a runtime-observed (lane 2) batch entry", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [passingEntry])]);
+
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+    expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-CREDIT", passed: true }]);
+  });
+
+  it.each(["agent-draft", "runtime", undefined])("does not credit coverage from a %s batch", (provenance) => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch(provenance, [passingEntry])]);
+
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+  });
+
+  it("credits only the entries that passed, and only those bound to exactly one registered test case", () => {
+    const failed = { ...passingEntry, entryId: "ENTRY-FAILED", status: "FAILED" };
+    const orphan = { ...passingEntry, entryId: "ENTRY-ORPHAN", testCaseRevisionId: "REV-GONE" };
+    const withPassing = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [failed, orphan, passingEntry])]);
+    // Same batch minus the one passing, resolvable entry: neither of the other two may stand in for it.
+    const withoutPassing = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [failed, orphan])]);
+
+    expect(withPassing.ruleInputs.coverage.requiredMissing).toEqual([]);
+    expect(withoutPassing.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+    expect(withoutPassing.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-CREDIT", passed: false }]);
+  });
+
+  it("drops an orphan-only batch rather than crediting it", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [{ ...passingEntry, testCaseInstanceId: "INST-GONE" }])]);
+
+    expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-CREDIT"]);
+  });
+
+  it("keeps the per-attempt test-result path intact in a mixed workspace", () => {
+    const perAttempt = artifact("test-result", {
+      attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT",
+    }, "RES-CREDIT", "runtime-execution");
+    const mixed = deriveReleaseGateFromWorkspaceArtifacts([...planning(), perAttempt, batch("runtime-observed", [passingEntry])]);
+    const perAttemptOnly = deriveReleaseGateFromWorkspaceArtifacts([...planning(), perAttempt]);
+
+    expect(mixed.ruleInputs.coverage).toEqual(perAttemptOnly.ruleInputs.coverage);
+    expect(mixed.recommendation).toBe(perAttemptOnly.recommendation);
+    // The batch is still a workspace fact bound into the immutable gate snapshot.
+    expect(mixed.sourceArtifacts.map((source) => source.type)).toContain("test-result-batch");
+  });
+
+  /** Byte-identity pin: a workspace with NO batch must produce exactly the gate it produced before
+   *  `test-result-batch` existed. The literal below was captured from the pre-change code. */
+  it("produces byte-identical gate output for a workspace containing no batches", () => {
+    const noBatch = deriveReleaseGateFromWorkspaceArtifacts([
+      artifact("requirement-analysis", { statements: [{ requirementId: "REQ-SAVE", authority: "AUTHORITATIVE" }] }, "RA-1"),
+      artifact("coverage-obligation", {
+        obligationId: "COV-SAVE", requirementAnalysisArtifactId: "RA-1", required: true,
+        requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
+        viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+      }, "OBL-1"),
+      artifact("test-case", {
+        testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1",
+        coverage: {
+          requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
+          viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+        },
+      }, "TC-1"),
+      artifact("test-result", {
+        attemptId: "ATTEMPT-SAVE", status: "PASSED", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
+      }, "RES-1", "runtime-execution"),
+    ]);
+
+    expect(JSON.stringify(noBatch)).toBe("{\"recommendation\":\"READY\",\"ruleInputs\":{\"artifactsValid\":true,\"coverage\":{\"requiredMissing\":[],\"optionalGaps\":[],\"requiredHighRisk\":[{\"obligationId\":\"COV-SAVE\",\"passed\":true}]},\"bugs\":[],\"sharedBlockers\":[],\"incidents\":[],\"evidenceGaps\":[],\"cleanupLeaks\":[],\"unmappedChangeRisks\":[],\"validationDiagnostics\":[]},\"verdicts\":[{\"rule\":\"VALID_ARTIFACTS\",\"passed\":true,\"reason\":\"All registered artifacts are valid.\"},{\"rule\":\"NO_SHARED_BLOCKERS\",\"passed\":true,\"reason\":\"No shared blockers are present.\"},{\"rule\":\"NO_OPEN_BLOCKER_OR_CRITICAL\",\"passed\":true,\"reason\":\"No open Blocker or Critical product bug.\"},{\"rule\":\"NO_UNTRIAGED_PRODUCT_BUG\",\"passed\":true,\"reason\":\"No open untriaged product bug.\"},{\"rule\":\"REQUIRED_HIGH_RISK_PASSED\",\"passed\":true,\"reason\":\"All required high-risk obligations passed.\"},{\"rule\":\"REQUIRED_COVERAGE_COMPLETE\",\"passed\":true,\"reason\":\"All required coverage obligations are satisfied.\"},{\"rule\":\"NO_OPEN_PRODUCT_DEFECT_FOR_READY\",\"passed\":true,\"reason\":\"No open product defect remains.\"}],\"protectedEnvironment\":false,\"sourceArtifacts\":[{\"id\":\"OBL-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"coverage-obligation\"},{\"id\":\"RA-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"requirement-analysis\"},{\"id\":\"RES-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"test-result\"},{\"id\":\"TC-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"test-case\"}]}");
+  });
+});
+
 describe("deriveReleaseGateFromArtifacts — ignored incident/evidence-gap/cleanup inputs (fail-OPEN)", () => {
   it("accepts but never reads incidents, evidenceGaps, or cleanupLeaks", () => {
     const result = deriveReleaseGateFromArtifacts({
