@@ -3,7 +3,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { ArtifactType } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
-import { indexByAttemptId, type ArtifactIndex } from "./artifact-index.js";
+import { indexByAttemptId, indexByTestCaseIdentity, type ArtifactIndex } from "./artifact-index.js";
 import {
   evidenceSubject,
   matchesEvidencePrimary,
@@ -73,11 +73,19 @@ function selectedExecutionCaseRefs(
   artifacts: readonly LoadedArtifact[],
 ): readonly { artifactId: string; sha256: string }[] | undefined {
   if (!selection?.value || selection.record.type !== "regression-selection" || !Array.isArray(selection.value.selected)) return undefined;
+  // The removed per-decision scan tested a decision-INDEPENDENT prefix (valid + test-case + declared by
+  // this selection) and then the identity triple. The prefix is hoisted into the indexed pool — it is a
+  // membership test and stays a linear filter, run once — and only the triple is indexed. Nothing in the
+  // loop below mutates `artifact.valid` or `artifacts`, so the pool is invariant for the whole call, and
+  // building the index per call keeps it as fresh as the `.filter()` it replaces on every fixpoint pass.
+  const declaredCasesByIdentity = indexByTestCaseIdentity(
+    artifacts.filter((artifact) => artifact.valid && artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id)),
+    (artifact) => ({ testCaseId: artifact.value?.testCaseId, testCaseRevisionId: artifact.value?.revisionId, testCaseInstanceId: artifact.value?.instanceId }),
+  );
   const refs: { artifactId: string; sha256: string }[] = [];
   for (const decision of selection.value.selected) {
     if (!isRecord(decision) || typeof decision.testCaseId !== "string" || typeof decision.revisionId !== "string" || typeof decision.instanceId !== "string") return undefined;
-    const matches = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id)
-      && artifact.value?.testCaseId === decision.testCaseId && artifact.value?.revisionId === decision.revisionId && artifact.value?.instanceId === decision.instanceId);
+    const matches = declaredCasesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId });
     if (matches.length !== 1) return undefined;
     refs.push({ artifactId: matches[0]!.record.id, sha256: matches[0]!.record.sha256 });
   }

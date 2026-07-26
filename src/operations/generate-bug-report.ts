@@ -3,6 +3,7 @@ import { createRunScopedBugId, createBugFingerprint } from "../defects/fingerpri
 import { createIncidentFromAttempt } from "../defects/incidents.js";
 import { evaluateReproduction } from "../defects/reproduction.js";
 import { createTriage, type TriageInput } from "../defects/triage.js";
+import { indexByAttemptId } from "../core/artifact-index.js";
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createEntityId } from "../core/ids.js";
@@ -68,6 +69,11 @@ export async function generateBugReport(input: Readonly<{
   comparisonBugArtifacts?: readonly { runId: string; artifactId: string; sha256: string }[];
 }>): Promise<GeneratedDefect> {
   const artifacts = await input.workspace.readRegisteredArtifacts();
+  // One index over the registered attempts, consulted once per reproduction id and once per merged id.
+  // Invariance: `artifacts` is read here and this function registers into its own workspace only at the
+  // two terminal `registerArtifactValue` calls (the incident below and the bug report at the end), each
+  // of which immediately returns — the cross-run duplicate comparison in between only READS other runs.
+  const resultsByAttempt = indexByAttemptId(artifacts.filter((artifact) => artifact.record.type === "test-result"), (artifact) => artifact.value.attemptId);
   const attemptArtifact = artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === input.attemptId);
   if (!attemptArtifact) throw new QaSkillsError("Bug generation requires a registered attempt ID", "ARTIFACT_BINDING");
   const original = attemptFrom(attemptArtifact);
@@ -77,7 +83,7 @@ export async function generateBugReport(input: Readonly<{
   const scannedIds = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.testCaseId === original.testCaseId).map((artifact) => string(artifact.value.attemptId, "attempt ID"));
   const selectedIds = input.reproductionAttemptIds === undefined ? [original.attemptId, ...scannedIds.filter((id) => id !== original.attemptId)] : [...input.reproductionAttemptIds];
   if (selectedIds[0] !== original.attemptId || new Set(selectedIds).size !== selectedIds.length) throw new QaSkillsError("Reproduction must begin with the registered original attempt and contain distinct IDs", "ARTIFACT_BINDING");
-  const selectedArtifacts = selectedIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId));
+  const selectedArtifacts = selectedIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]);
   if (selectedArtifacts.some((artifact) => !artifact)) throw new QaSkillsError("Reproduction includes an unregistered attempt", "ARTIFACT_BINDING");
   const selected = selectedArtifacts.map((artifact) => attemptFrom(artifact as RegisteredWorkspaceArtifact));
   if (!selected.every((attempt) => attempt.testCaseId === original.testCaseId)) throw new QaSkillsError("Reproduction attempts must use the original testcase", "ARTIFACT_BINDING");
@@ -130,7 +136,7 @@ export async function generateBugReport(input: Readonly<{
   const mergedAttemptIds = [...new Set([...reproduction.attemptIds, ...(isRecord(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.sourceAttemptIds) ? superseded.value.provenance.sourceAttemptIds.filter((id): id is string => typeof id === "string") : [])])];
   const mergedEvidence = [...new Set([...(Array.isArray(superseded?.value.evidenceIds) ? superseded.value.evidenceIds.filter((id): id is string => typeof id === "string") : []), ...evidence.map((item) => string(item.value.evidenceId, "evidence ID"))])];
   const mergedEvidenceArtifacts = [...new Set([...(isRecord(superseded?.value.provenance) && Array.isArray(superseded.value.provenance.evidenceArtifactIds) ? superseded.value.provenance.evidenceArtifactIds.filter((id): id is string => typeof id === "string") : []), ...evidence.map((item) => item.record.id)])];
-  const mergedAttemptArtifacts = mergedAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId)).filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
+  const mergedAttemptArtifacts = mergedAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]).filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
   const mergedReproduction = evaluateReproduction(mergedAttemptArtifacts.map(attemptFrom), mergedAttemptIds.length === 1 && input.unsafeRerunReason !== undefined ? { unsafeRerunReason: input.unsafeRerunReason } : {});
   const value = {
     artifactType: "bug-report", schemaVersion: "1.0.0", producerVersion: "0.1.0",

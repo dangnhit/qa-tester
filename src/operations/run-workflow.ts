@@ -4,6 +4,7 @@ import { selectRegressionCases, type RegressionSelection } from "../regression/s
 import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } from "../regression/change-scope.js";
 import { sha256Text } from "../core/checksum.js";
 import { QaSkillsError } from "../core/errors.js";
+import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactIndex, type TestCaseIdentity } from "../core/artifact-index.js";
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
@@ -164,10 +165,33 @@ type ClosedOperationAdapter<Name extends WorkflowOperationName> = Readonly<{
   assertPostcondition: (workspace: RunWorkspace, output: WorkflowOperationOutputMap[Name]) => Promise<void>;
 }>;
 
+/** The registered-artifact identity every scan in this module resolves first. Keyed on `record.id`
+ *  alone; a call site that also compared `sha256` keeps that comparison against the returned bucket,
+ *  which holds exactly the artifacts carrying that id, in registration order. */
+function indexByArtifactId(artifacts: readonly RegisteredWorkspaceArtifact[]): ArtifactIndex<RegisteredWorkspaceArtifact> {
+  return indexByKey(artifacts, (artifact) => artifact.record.id);
+}
+
+/** The identity triple as a `test-case` payload spells it (`revisionId` / `instanceId`), reconciled
+ *  with the `testCaseRevisionId` / `testCaseInstanceId` names every probe site passes in. */
+function testCaseIdentityOf(artifact: RegisteredWorkspaceArtifact): TestCaseIdentity {
+  return { testCaseId: artifact.value.testCaseId, testCaseRevisionId: artifact.value.revisionId, testCaseInstanceId: artifact.value.instanceId };
+}
+
+function indexTestCasesByIdentity(artifacts: readonly RegisteredWorkspaceArtifact[]) {
+  return indexByTestCaseIdentity(artifacts.filter((artifact) => artifact.record.type === "test-case"), testCaseIdentityOf);
+}
+
+function indexResultsByAttempt(artifacts: readonly RegisteredWorkspaceArtifact[]): ArtifactIndex<RegisteredWorkspaceArtifact> {
+  return indexByAttemptId(artifacts.filter((artifact) => artifact.record.type === "test-result"), (artifact) => artifact.value.attemptId);
+}
+
 async function assertRegisteredArtifacts(workspace: RunWorkspace, output: WorkflowOutput | readonly ArtifactRecord[]): Promise<void> {
   const records = Array.isArray(output) ? output.filter(artifactRecord) : artifactRecord(output) ? [output] : [];
   const artifacts = await workspace.readRegisteredArtifacts();
-  if (records.some((item) => !artifacts.some((artifact) => artifact.record.id === item.id && artifact.record.sha256 === item.sha256))) throw new QaSkillsError("Workflow operation output is not a registered immutable artifact", "ARTIFACT_BINDING");
+  // Invariance: `artifacts` is read here and this postcondition registers nothing.
+  const byId = indexByArtifactId(artifacts);
+  if (records.some((item) => !byId.get(item.id).some((artifact) => artifact.record.sha256 === item.sha256))) throw new QaSkillsError("Workflow operation output is not a registered immutable artifact", "ARTIFACT_BINDING");
 }
 
 async function assertEvidencePostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
@@ -180,13 +204,19 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   await assertRegisteredArtifacts(workspace, output);
   if (output.length === 0 || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
   const artifacts = await workspace.readRegisteredArtifacts();
+  // Invariance: `artifacts` is read here and this postcondition registers nothing, so both indices serve
+  // every iteration of the loop below. Evidence carries its attempt inside the `subject` union while an
+  // Evidence Gap still carries it flat, so the two types are keyed by their own accessor into one index
+  // — the `.some()` this replaces admitted exactly those two types and nothing else.
+  const byId = indexByArtifactId(artifacts);
+  const attestationsByAttempt = indexByAttemptId(
+    artifacts.filter((item) => item.record.type === "evidence" || item.record.type === "evidence-gap"),
+    (item) => item.record.type === "evidence" ? evidenceAttemptId(item.value) : String(item.value.attemptId),
+  );
   for (const result of output) {
-    const attempt = artifacts.find((item) => item.record.id === result.id);
+    const attempt = byId.get(result.id)[0];
     const attemptId = attempt === undefined ? undefined : String(attempt.value.attemptId);
-    // Evidence carries its attempt inside the `subject` union; an Evidence Gap still carries it flat.
-    if (!attemptId || !artifacts.some((item) => item.record.type === "evidence"
-      ? evidenceAttemptId(item.value) === attemptId
-      : item.record.type === "evidence-gap" && String(item.value.attemptId) === attemptId)) throw new QaSkillsError("Execution result lacks registered evidence or evidence gap", "ARTIFACT_BINDING");
+    if (!attemptId || attestationsByAttempt.get(attemptId).length === 0) throw new QaSkillsError("Execution result lacks registered evidence or evidence gap", "ARTIFACT_BINDING");
   }
 }
 
@@ -194,7 +224,13 @@ async function assertFailureDispositionPostcondition(workspace: RunWorkspace, ou
   await assertRegisteredArtifacts(workspace, output);
   const artifacts = await workspace.readRegisteredArtifacts();
   const failed = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "FAILED");
-  const unresolved = failed.filter((attempt) => !artifacts.some((artifact) => (artifact.record.type === "bug-report" || artifact.record.type === "incident") && artifact.value.attemptId === attempt.value.attemptId));
+  // Invariance: `artifacts` is read here and this postcondition registers nothing. Keys stay RAW so the
+  // lookup admits exactly what `artifact.value.attemptId === attempt.value.attemptId` admitted.
+  const dispositionsByAttempt = indexByAttemptId(
+    artifacts.filter((artifact) => artifact.record.type === "bug-report" || artifact.record.type === "incident"),
+    (artifact) => artifact.value.attemptId,
+  );
+  const unresolved = failed.filter((attempt) => dispositionsByAttempt.get(attempt.value.attemptId).length === 0);
   if (unresolved.length > 0) throw new QaSkillsError("Every failed attempt must have an eligible bug or typed incident disposition", "ARTIFACT_BINDING");
 }
 
@@ -222,24 +258,29 @@ function emptyWorkflowState(): WorkflowStateSnapshot {
 
 function workflowStateChecksum(state: WorkflowStateSnapshot): string { return sha256Text(canonicalJson(state)); }
 
-function registeredRef(artifacts: readonly RegisteredWorkspaceArtifact[], id: string | undefined): RegisteredArtifactRef | undefined {
-  const artifact = id === undefined ? undefined : artifacts.find((item) => item.record.id === id);
+function registeredRef(byId: ArtifactIndex<RegisteredWorkspaceArtifact>, id: string | undefined): RegisteredArtifactRef | undefined {
+  const artifact = id === undefined ? undefined : byId.get(id)[0];
   return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
 }
 
 async function snapshotWorkflowState(state: WorkflowExecutionState): Promise<WorkflowStateSnapshot> {
   const artifacts = await state.workspace.readRegisteredArtifacts();
-  const refs = (ids: readonly string[]) => ids.map((id) => registeredRef(artifacts, id)).filter((item): item is RegisteredArtifactRef => item !== undefined);
+  // Invariance: `artifacts` is read here and this function only READS — the checkpoint that records this
+  // snapshot is registered by `advanceCheckpoint` after this call returns, so both indices describe the
+  // pool every scan below used to walk.
+  const byId = indexByArtifactId(artifacts);
+  const resultsByAttempt = indexResultsByAttempt(artifacts);
+  const refs = (ids: readonly string[]) => ids.map((id) => registeredRef(byId, id)).filter((item): item is RegisteredArtifactRef => item !== undefined);
   const selectedExecutionCases = state.selection === undefined ? state.executionCaseIds : selectedCaseArtifactIds(state.selection, artifacts);
   if (state.selection !== undefined && selectedExecutionCases.length !== state.selection.selected.length) throw new QaSkillsError("Regression selection does not resolve every selected canonical testcase", "ARTIFACT_BINDING");
   return {
     importedArtifacts: refs(state.importedArtifactIds), executionCases: refs(selectedExecutionCases),
-    reproductionAttempts: refs(state.reproductionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
-    regressionAttempts: refs(state.regressionAttemptIds.map((attemptId) => artifacts.find((item) => item.record.type === "test-result" && item.value.attemptId === attemptId)?.record.id).filter((id): id is string => id !== undefined)),
+    reproductionAttempts: refs(state.reproductionAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]?.record.id).filter((id): id is string => id !== undefined)),
+    regressionAttempts: refs(state.regressionAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]?.record.id).filter((id): id is string => id !== undefined)),
     exploratoryFindings: refs(state.exploratoryFindingIds),
-    ...(state.selection === undefined ? {} : { selection: registeredRef(artifacts, artifacts.find((item) => item.record.type === "regression-selection")?.record.id)! }),
+    ...(state.selection === undefined ? {} : { selection: registeredRef(byId, artifacts.find((item) => item.record.type === "regression-selection")?.record.id)! }),
     ...(state.retestSource === undefined ? {} : { retestSource: state.retestSource }),
-    ...(state.charterArtifactId === undefined ? {} : { charter: registeredRef(artifacts, state.charterArtifactId)! }),
+    ...(state.charterArtifactId === undefined ? {} : { charter: registeredRef(byId, state.charterArtifactId)! }),
   };
 }
 
@@ -319,20 +360,24 @@ async function buildCanonicalPlanImportBatch(workspace: RunWorkspace, bundle: Ca
     if (selected.some((item) => item.record.relationships.some((id) => sourcePlanningIds.has(id) && !selectedIds.has(id)))) {
       throw new QaSkillsError("Canonical plan bundle omits a planning dependency", "ARTIFACT_BINDING");
     }
-    const cases = selected.filter((item) => item.record.type === "test-case");
     const plans = selected.filter((item) => item.record.type === "test-plan");
+    // Invariance: `selected` is derived from the source run's single read above and this function
+    // registers nothing into either workspace, so both indices are valid for every plan entry and every
+    // requirement below. `.filter()` → the full bucket: the `length !== 1` ambiguity decision stays here.
+    const casesByIdentity = indexTestCasesByIdentity(selected);
     for (const plan of plans) {
       const entries = Array.isArray(plan.value.testCases) ? plan.value.testCases : [];
       for (const entry of entries) {
         if (!isRecord(entry) || !isRecord(entry.browserExecution)) continue;
         const execution = entry.browserExecution;
-        const matches = cases.filter((item) => item.value.testCaseId === entry.testCaseId && item.value.revisionId === execution.revisionId && item.value.instanceId === execution.instanceId);
+        // The plan entry owns the testcase id; its `browserExecution` owns the revision and instance.
+        const matches = casesByIdentity.get({ testCaseId: entry.testCaseId, testCaseRevisionId: execution.revisionId, testCaseInstanceId: execution.instanceId });
         if (matches.length !== 1) throw new QaSkillsError("Canonical plan bundle must contain every exact executable testcase revision and instance", "ARTIFACT_BINDING");
       }
     }
-    const obligations = selected.filter((item) => item.record.type === "coverage-obligation");
+    const obligationsByRequirement = indexByKey(selected.filter((item) => item.record.type === "coverage-obligation"), (item) => item.value.requirementId);
     const requiredRequirementIds = new Set(plans.flatMap((plan) => array(plan.value.testCases)).flatMap((entry) => isRecord(entry) ? array(entry.expectedResults) : []).flatMap((expected) => isRecord(expected) && typeof expected.requirementId === "string" ? [expected.requirementId] : []));
-    for (const requirementId of requiredRequirementIds) if (!obligations.some((item) => item.value.requirementId === requirementId)) throw new QaSkillsError("Canonical plan bundle omits a coverage obligation for a planned expected result", "ARTIFACT_BINDING");
+    for (const requirementId of requiredRequirementIds) if (obligationsByRequirement.get(requirementId).length === 0) throw new QaSkillsError("Canonical plan bundle omits a coverage obligation for a planned expected result", "ARTIFACT_BINDING");
     const environment = (await workspace.readRegisteredArtifacts()).find((item) => item.record.type === "environment-profile")?.value;
     if (typeof environment?.classification !== "string") throw new QaSkillsError("Import target has no valid environment", "ARTIFACT_BINDING");
     return [...selected].sort((left, right) => {
@@ -368,8 +413,12 @@ async function assertCanonicalPlanImportMapping(workspace: RunWorkspace, bundle:
   const batch = await buildCanonicalPlanImportBatch(workspace, bundle);
   if (imported.length !== batch.length) throw new QaSkillsError("Canonical import does not have an exact one-to-one source artifact mapping", "ARTIFACT_BINDING");
   const mapped = new Map<string, RegisteredWorkspaceArtifact>();
+  // Invariance: `imported` is a parameter this function never mutates and nothing registers here, so the
+  // index serves every batch item. `.filter()` → the full bucket, so the `length !== 1` duplicate-import
+  // decision below is unchanged.
+  const importedByProvenance = indexByKey(imported, (artifact) => artifact.record.provenance);
   for (const item of batch) {
-    const matches = imported.filter((artifact) => artifact.record.provenance === item.provenance);
+    const matches = importedByProvenance.get(item.provenance);
     if (matches.length !== 1 || matches[0]?.record.type !== item.type) throw new QaSkillsError("Canonical import provenance does not map to the exact source artifact type", "ARTIFACT_BINDING");
     mapped.set(item.key, matches[0]);
   }
@@ -588,11 +637,17 @@ async function sourceBugFromReference(workspace: RunWorkspace, reference: Regist
     const provenance = isRecord(bug.value.provenance) ? bug.value.provenance : {};
     const sourceAttemptIds = Array.isArray(provenance.sourceAttemptIds) && provenance.sourceAttemptIds.every((id) => typeof id === "string") ? provenance.sourceAttemptIds : [asString(bug.value.attemptId, "source bug attempt ID")];
     if (sourceAttemptIds.length === 0 || new Set(sourceAttemptIds).size !== sourceAttemptIds.length) throw new QaSkillsError("Selected bug revision has invalid exact reproduction references", "ARTIFACT_BINDING");
+    // Invariance: `artifacts` is the single read of the SOURCE run above, which this function only reads
+    // and closes in its `finally` — nothing is registered into it, so both indices serve every scenario.
+    // The relationship walk itself stays a linear `.find()`: it decides WHICH declared id wins, and only
+    // the existence probe inside it is indexed.
+    const resultsByAttempt = indexResultsByAttempt(artifacts);
+    const testCasesById = indexByArtifactId(artifacts.filter((candidate) => candidate.record.type === "test-case"));
     const scenarios = sourceAttemptIds.map((attemptId) => {
-      const attempt = artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+      const attempt = resultsByAttempt.get(attemptId)[0];
       if (!attempt || attempt.value.failureClassification !== "PRODUCT_DEFECT") throw new QaSkillsError("Selected bug revision references an invalid product reproduction", "ARTIFACT_BINDING");
-      const caseId = attempt.record.relationships.find((id) => artifacts.some((candidate) => candidate.record.id === id && candidate.record.type === "test-case"));
-      const testCase = caseId === undefined ? undefined : artifacts.find((candidate) => candidate.record.id === caseId && candidate.record.type === "test-case");
+      const caseId = attempt.record.relationships.find((id) => testCasesById.get(id).length > 0);
+      const testCase = caseId === undefined ? undefined : testCasesById.get(caseId)[0];
       if (!testCase || testCase.value.testCaseId !== attempt.value.testCaseId || testCase.value.revisionId !== attempt.value.testCaseRevisionId || testCase.value.instanceId !== attempt.value.testCaseInstanceId) throw new QaSkillsError("Source attempt is not bound to its exact canonical testcase instance", "ARTIFACT_BINDING");
       return { sourceAttemptArtifactId: attempt.record.id, sourceTestCaseArtifactId: testCase.record.id, testCaseId: asString(attempt.value.testCaseId, "source testcase ID"), revisionId: asString(attempt.value.testCaseRevisionId, "source testcase revision ID"), instanceId: asString(attempt.value.testCaseInstanceId, "source testcase instance ID"), parameters: isRecord(testCase.value.parameters) ? testCase.value.parameters : {} };
     });
@@ -602,11 +657,14 @@ async function sourceBugFromReference(workspace: RunWorkspace, reference: Regist
 
 async function registerRuntimeRetestResult(workspace: RunWorkspace, reference: RegisteredArtifactRef, source: RetestSource, reproductionAttemptIds: readonly string[], regressionAttemptIds: readonly string[]): Promise<ArtifactRecord> {
   const artifacts = await workspace.readRegisteredArtifacts();
-  const reproduction = reproductionAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId));
+  // Invariance: `artifacts` is read here; the only registration in this function is the `retest-result`
+  // returned at the end, after every lookup below has run.
+  const resultsByAttempt = indexResultsByAttempt(artifacts);
+  const reproduction = reproductionAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]);
   const expectedOccurrences = source.scenarios.map(sourceScenarioId).sort();
   const actualOccurrences = reproduction.map((attempt) => attempt === undefined ? "" : scenarioIdForRegisteredAttempt(artifacts, attempt)).sort();
   if (reproduction.length === 0 || reproduction.some((attempt) => !attempt) || JSON.stringify(actualOccurrences) !== JSON.stringify(expectedOccurrences)) throw new QaSkillsError("Retest reproduction did not execute every exact immutable source scenario occurrence", "ARTIFACT_BINDING");
-  const regression = regressionAttemptIds.map((attemptId) => artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId)).filter((attempt): attempt is NonNullable<typeof attempt> => attempt !== undefined);
+  const regression = regressionAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]).filter((attempt): attempt is NonNullable<typeof attempt> => attempt !== undefined);
   const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => asString(attempt.value.status, "regression execution status")));
   const reproductionScenarios = reproduction.map((attempt, index) => ({ scenarioId: attempt === undefined ? "" : scenarioIdForRegisteredAttempt(artifacts, attempt), sourceAttemptArtifactId: source.scenarios[index]!.sourceAttemptArtifactId, sourceTestCaseArtifactId: source.scenarios[index]!.sourceTestCaseArtifactId, attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
   const verdict = deriveRetestVerdict({ originalBugId: source.bugId, reproductionStatuses: reproductionScenarios.map((scenario) => scenario.status), scenarioIds: reproductionScenarios.map((scenario) => scenario.scenarioId), regressionOutcome });
@@ -616,7 +674,9 @@ async function registerRuntimeRetestResult(workspace: RunWorkspace, reference: R
 async function assertApprovedCanonicalRevisions(workspace: RunWorkspace, ids: readonly string[] | undefined): Promise<void> {
   const artifacts = await workspace.readRegisteredArtifacts();
   const testCases = artifacts.filter((artifact) => artifact.record.type === "test-case");
-  const requested = ids === undefined ? testCases : ids.map((id) => artifacts.find((artifact) => artifact.record.id === id)).filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
+  // Invariance: `artifacts` is read here and this assertion registers nothing.
+  const byId = indexByArtifactId(artifacts);
+  const requested = ids === undefined ? testCases : ids.map((id) => byId.get(id)[0]).filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== undefined);
   if (ids !== undefined && requested.length !== ids.length) throw new QaSkillsError("Execution requires caller-identified registered canonical revisions", "ARTIFACT_BINDING");
   if (requested.length === 0) throw new QaSkillsError("Execution requires at least one approved canonical test case revision", "ARTIFACT_BINDING");
   for (const testCase of requested) {
@@ -651,8 +711,11 @@ async function registerCharter(workspace: RunWorkspace, charter: ExplorationChar
 
 async function registerSelection(workspace: RunWorkspace, selection: RegressionSelection, changeScope: ArtifactRecord): Promise<ArtifactRecord> {
   const artifacts = await workspace.readRegisteredArtifacts();
+  // Invariance: `artifacts` is read here; the only registration in this function is the
+  // `regression-selection` returned at the end, after every decision has been resolved.
+  const casesByIdentity = indexTestCasesByIdentity(artifacts);
   const decisions = [...selection.selected, ...selection.excluded];
-  const relationships = decisions.map((decision) => artifacts.filter((artifact) => artifact.record.type === "test-case" && artifact.value.testCaseId === decision.testCaseId && artifact.value.revisionId === decision.revisionId && artifact.value.instanceId === decision.instanceId)).flat();
+  const relationships = decisions.flatMap((decision) => casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }));
   if (relationships.length !== decisions.length) throw new QaSkillsError("Regression selection requires every decision to bind one registered canonical test case revision", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "regression-selection", value: {
     artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: "0.1.0", selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
@@ -660,8 +723,11 @@ async function registerSelection(workspace: RunWorkspace, selection: RegressionS
   }, relationships: [changeScope.id, ...relationships.map((artifact) => artifact.record.id)], provenance: "runtime" });
 }
 
+/** Indexes the pool it is HANDED, per call: each caller passes a different read, and one of them
+ *  (`select-regression`) passes a read taken after the run has registered further artifacts. */
 function selectedCaseArtifactIds(selection: RegressionSelection, artifacts: readonly RegisteredWorkspaceArtifact[]): string[] {
-  return selection.selected.flatMap((decision) => artifacts.filter((artifact) => artifact.record.type === "test-case" && artifact.value.testCaseId === decision.testCaseId && artifact.value.revisionId === decision.revisionId && artifact.value.instanceId === decision.instanceId).map((artifact) => artifact.record.id));
+  const casesByIdentity = indexTestCasesByIdentity(artifacts);
+  return selection.selected.flatMap((decision) => casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }).map((artifact) => artifact.record.id));
 }
 
 /** Copies immutable testcase revision snapshots from a terminal source run into a fresh regression workspace. */
@@ -682,7 +748,9 @@ async function exactRetestReproduction(workspace: RunWorkspace, input: NonNullab
   const source = await sourceBug(workspace, metadataSourceRunId, input.sourceBugArtifactId);
   if (input.reproductionAttemptIds.length === 0 || new Set(input.reproductionAttemptIds).size !== input.reproductionAttemptIds.length) throw new QaSkillsError("Retest requires distinct exact reproduction attempts", "ARTIFACT_BINDING");
   const registered = await workspace.readRegisteredArtifacts();
-  const reproduction = input.reproductionAttemptIds.map((attemptId) => registered.find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId));
+  // Invariance: `registered` is read here and this function registers nothing.
+  const resultsByAttempt = indexResultsByAttempt(registered);
+  const reproduction = input.reproductionAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]);
   if (reproduction.some((attempt) => !attempt) || reproduction.some((attempt) => attempt?.value.testCaseId !== source.testCaseId || attempt?.value.testCaseRevisionId !== source.revisionId || attempt?.value.testCaseInstanceId !== source.instanceId)) {
     throw new QaSkillsError("Retest must reproduce the original bug with its exact canonical testcase revision before regression", "ARTIFACT_BINDING");
   }
@@ -768,7 +836,10 @@ function outputFromRecords<Name extends WorkflowOperationName>(operation: Name, 
 
 async function validateCheckpointRefs(workspace: RunWorkspace, refs: readonly RegisteredArtifactRef[]): Promise<readonly RegisteredWorkspaceArtifact[]> {
   const artifacts = await workspace.readRegisteredArtifacts();
-  const resolved = refs.map((reference) => artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256));
+  // Invariance: `artifacts` is read here and this function registers nothing. The checksum comparison
+  // stays at the call site, over the bucket holding exactly the artifacts registered under that id.
+  const byId = indexByArtifactId(artifacts);
+  const resolved = refs.map((reference) => byId.get(reference.artifactId).find((artifact) => artifact.record.sha256 === reference.sha256));
   if (resolved.some((artifact) => artifact === undefined)) throw new QaSkillsError("Workflow checkpoint state is not immutable", "ARTIFACT_BINDING");
   return resolved.filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
 }
@@ -796,7 +867,12 @@ async function hydrateCheckpointState(state: WorkflowExecutionState): Promise<vo
     }
     const all = await state.workspace.readRegisteredArtifacts();
     const selected = selectedCaseArtifactIds(state.selection, all);
-    const selectedRelationships = state.selection.selected.map((decision) => all.filter((artifact) => artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id) && artifact.value.testCaseId === decision.testCaseId && artifact.value.revisionId === decision.revisionId && artifact.value.instanceId === decision.instanceId));
+    // Invariance: `all` is read here and hydration registers nothing. The decision-INDEPENDENT half of
+    // the removed predicate (test-case declared by this selection) is hoisted into the indexed pool and
+    // stays a linear membership filter; only the identity triple is indexed, and the `length !== 1`
+    // ambiguity decision stays below.
+    const declaredCasesByIdentity = indexByTestCaseIdentity(all.filter((artifact) => artifact.record.type === "test-case" && selection.record.relationships.includes(artifact.record.id)), testCaseIdentityOf);
+    const selectedRelationships = state.selection.selected.map((decision) => declaredCasesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }));
     if (selected.length !== state.selection.selected.length || selectedRelationships.some((matches) => matches.length !== 1)) throw new QaSkillsError("Workflow checkpoint regression selection has ambiguous selected testcase bindings", "ARTIFACT_BINDING");
     state.executionCaseIds = selected;
   } else {
@@ -829,13 +905,17 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
   const importPrefix = `runtime-import:${state.input.bundle.sourceRunId}:`;
   const expected = new Set(state.input.bundle.artifacts.map((artifact) => canonicalImportProvenance(state.input.bundle!.sourceRunId, artifact)));
   const provenanceImports = all.filter((artifact) => artifact.record.provenance.startsWith(importPrefix));
+  // Indexes exactly the array the removed `.filter()` scanned, so it is precisely as fresh as that array
+  // was. The only registration in this function — `importCanonicalPlanBundle` — is in the sibling branch
+  // below, which is mutually exclusive with the `else if` that consults this index.
+  const provenanceImportsByProvenance = indexByKey(provenanceImports, (artifact) => artifact.record.provenance);
   if (state.importedArtifactIds.length === 0) {
     if (provenanceImports.length === 0) {
       const imported = await importCanonicalPlanBundle(state.workspace, state.input.bundle);
       state.importedArtifactIds = [...imported.values()].map((artifact) => artifact.id);
     } else if (provenanceImports.length === expected.size
       && provenanceImports.every((artifact) => expected.has(artifact.record.provenance))
-      && [...expected].every((provenance) => provenanceImports.filter((artifact) => artifact.record.provenance === provenance).length === 1)) {
+      && [...expected].every((provenance) => provenanceImportsByProvenance.get(provenance).length === 1)) {
       // The batch commit may win the crash race against its checkpoint. Rebuild
       // every exact source-to-target mapping before adopting those target IDs.
       state.importedArtifactIds = [...await assertCanonicalPlanImportMapping(state.workspace, state.input.bundle, provenanceImports)];
@@ -844,6 +924,9 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
     }
   } else {
     const imported = all.filter((artifact) => state.importedArtifactIds.includes(artifact.record.id));
+    // Nothing has been registered on this branch — the import above belongs to the sibling branch — so
+    // the index describes the same pool as the `.some()` it replaces.
+    const importedByProvenance = indexByKey(imported, (artifact) => artifact.record.provenance);
     const checkpointImportIds = new Set(state.importedArtifactIds);
     const workspaceImportIds = new Set(provenanceImports.map((artifact) => artifact.record.id));
     if (checkpointImportIds.size !== state.importedArtifactIds.length || workspaceImportIds.size !== provenanceImports.length
@@ -853,7 +936,7 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
       throw new QaSkillsError("Workflow checkpoint imported artifact IDs do not exactly match the complete workspace provenance import mapping", "ARTIFACT_BINDING");
     }
     if (imported.length !== expected.size || imported.some((artifact) => !expected.has(artifact.record.provenance))
-      || [...expected].some((provenance) => !imported.some((artifact) => artifact.record.provenance === provenance))) {
+      || [...expected].some((provenance) => importedByProvenance.get(provenance).length === 0)) {
       throw new QaSkillsError("Workflow checkpoint canonical bundle mapping is incomplete or does not match the exact source artifacts", "ARTIFACT_BINDING");
     }
     await assertCanonicalPlanImportMapping(state.workspace, state.input.bundle, imported);
@@ -927,7 +1010,11 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     const source = await sourceBugFromReference(workspace, input.retest.sourceBug);
     state.retestSource = source;
     const available = await cases();
-    const exact = source.scenarios.map((scenario) => available.find((artifact) => artifact.value.testCaseId === scenario.testCaseId && artifact.value.revisionId === scenario.revisionId && artifact.value.instanceId === scenario.instanceId));
+    // Invariance: `available` comes from the read on the line above and is consulted only on the next
+    // line — BEFORE `executeWithRuntime` registers this run's reproduction results. Every scan after
+    // that call re-reads the workspace and is deliberately left unindexed.
+    const availableByIdentity = indexTestCasesByIdentity(available);
+    const exact = source.scenarios.map((scenario) => availableByIdentity.get({ testCaseId: scenario.testCaseId, testCaseRevisionId: scenario.revisionId, testCaseInstanceId: scenario.instanceId })[0]);
     if (exact.some((artifact) => artifact === undefined)) throw new QaSkillsError("Retest bundle must import every exact original testcase revision and instance", "ARTIFACT_BINDING");
     // Keep duplicate source occurrences: each one is a real reproduction
     // attempt, while sourceScenarioId remains the canonical scenario identity.
@@ -949,8 +1036,11 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     if (input.mode === "retest" && state.retestSource) {
       const sourceIds = new Set(state.retestSource.scenarios.map((scenario) => `${scenario.testCaseId}:${scenario.revisionId}:${scenario.instanceId}`));
       const all = await artifacts();
+      // Invariance: `all` is read here and consulted only in the filter below; the selection artifact is
+      // registered afterwards, by the `registerSelection` this branch falls through to.
+      const byId = indexByArtifactId(all);
       state.executionCaseIds = state.executionCaseIds.filter((id) => {
-        const value = all.find((artifact) => artifact.record.id === id)?.value;
+        const value = byId.get(id)[0]?.value;
         return value === undefined || !sourceIds.has(`${asString(value.testCaseId, "selected testcase ID")}:${asString(value.revisionId, "selected testcase revision ID")}:${asString(value.instanceId, "selected testcase instance ID")}`);
       });
     }

@@ -787,13 +787,20 @@ const regressionSelectionRule: SemanticRule = {
       if (value.runId !== ctx.runId) return { code: "ARTIFACT_BINDING", message: "Regression selection run ID does not match this workspace" };
       const related = ctx.relatedOfType("test-case");
       const cases = related.map((candidate) => candidate.value as Record<string, unknown>);
-      const caseRecords = related.map((candidate) => candidate.record);
       const decisions = [...array(value.selected), ...array(value.excluded)];
-      const expectedRelationships = decisions.map((decision) => isRecord(decision) ? caseRecords.find((candidate) => {
-        const index = caseRecords.findIndex((record) => record.id === candidate.id);
-        const testCase = cases[index];
-        return testCase?.testCaseId === decision.testCaseId && testCase?.revisionId === decision.revisionId && testCase?.instanceId === decision.instanceId;
-      })?.id : undefined);
+      // The removed scan resolved each candidate record through `caseRecords.findIndex(record.id)` and
+      // then read the value at that POSITION, so it matched on the value of the FIRST related artifact
+      // carrying that record id — not necessarily the candidate's own. Keying the identity index by that
+      // same resolution reproduces the outer `.find()` exactly (both take the first match in pool order)
+      // without assuming record ids are unique, and collapses a scan that was quadratic in the pool.
+      const relatedByRecordId = indexByKey(related, (candidate) => candidate.record.id);
+      const casesByResolvedIdentity = indexByTestCaseIdentity(related, (candidate) => {
+        const testCase = relatedByRecordId.get(candidate.record.id)[0]?.value;
+        return { testCaseId: testCase?.testCaseId, testCaseRevisionId: testCase?.revisionId, testCaseInstanceId: testCase?.instanceId };
+      });
+      const expectedRelationships = decisions.map((decision) => isRecord(decision)
+        ? casesByResolvedIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId })[0]?.record.id
+        : undefined);
       const scopeRelated = ctx.relatedOfType("change-scope").find((candidate) => candidate.record.id === value.changeScopeArtifactId);
       const scope = scopeRelated?.record;
       const scopeValue = scopeRelated?.value;
@@ -809,7 +816,10 @@ const regressionSelectionRule: SemanticRule = {
     }
     const decisions = [...array(value.selected), ...array(value.excluded)];
     const testCases = ctx.relatedOfType("test-case");
-    const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? testCases.filter((testCase) => testCase.value?.testCaseId === decision.testCaseId && testCase.value?.revisionId === decision.revisionId && testCase.value?.instanceId === decision.instanceId) : []);
+    // `.filter()` → the full bucket: the `decisionCases.length !== decisions.length` ambiguity decision
+    // stays at its call site below, so a decision matching two cases still counts twice.
+    const casesByIdentity = indexByTestCaseIdentity(testCases, testCaseIdentityOf);
+    const decisionCases = decisions.flatMap((decision) => isRecord(decision) ? casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }) : []);
     const relationshipIds = [...ctx.relationships].sort();
     const expectedIds = decisionCases.map((testCase) => testCase.record.id).sort();
     const scope = ctx.relatedOfType("change-scope").find((candidate) => candidate.record.id === value.changeScopeArtifactId);

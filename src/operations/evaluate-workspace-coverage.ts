@@ -1,3 +1,4 @@
+import { indexByTestCaseIdentity } from "../core/artifact-index.js";
 import { QaSkillsError } from "../core/errors.js";
 import { creditsCoverage } from "../core/provenance.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
@@ -60,15 +61,18 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
   try {
     const artifacts = await workspace.readRegisteredArtifacts();
     const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
-    const cases = artifacts.filter((artifact) => artifact.record.type === "test-case");
+    // `resolveDimensions` runs once per registered attempt and once per batch entry, so the test-case
+    // scan it used to run is indexed once here. This function only reads (`artifacts` comes from the
+    // single read above and nothing is registered before the try block ends), so the pool is invariant
+    // for every consultation below.
+    const casesByIdentity = indexByTestCaseIdentity(artifacts.filter((artifact) => artifact.record.type === "test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
     /** `field` labels the malformed-field diagnostic, `subject` the orphan-binding one; both messages
      *  are preserved verbatim per source, so the per-attempt path's diagnostics are unchanged. */
     const resolveDimensions = (value: Readonly<Record<string, unknown>>, field: string, subject: string): CoverageDimensions => {
       const testCaseId = requireString(value.testCaseId, `${field} test case ID`);
       const revisionId = requireString(value.testCaseRevisionId, `${field} test case revision ID`);
       const instanceId = requireString(value.testCaseInstanceId, `${field} test case instance ID`);
-      const matches = cases.filter((candidate) => candidate.value.testCaseId === testCaseId
-        && candidate.value.revisionId === revisionId && candidate.value.instanceId === instanceId);
+      const matches = casesByIdentity.get({ testCaseId, testCaseRevisionId: revisionId, testCaseInstanceId: instanceId });
       if (matches.length !== 1) throw new QaSkillsError(`${subject} references an orphan or ambiguous test case revision and instance`, "ARTIFACT_BINDING");
       return dimensions(matches[0]?.value ?? {});
     };

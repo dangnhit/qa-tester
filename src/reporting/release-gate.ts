@@ -1,4 +1,5 @@
 import type { DefectSeverity } from "../defects/triage.js";
+import { indexByTestCaseIdentity } from "../core/artifact-index.js";
 import { creditsCoverage } from "../core/provenance.js";
 import { isRecord } from "../core/values.js";
 import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
@@ -85,7 +86,10 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   // Including later revisions would retroactively invalidate an immutable gate.
   const source = artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report" && artifact.record.type !== "workflow-checkpoint");
   const valuesOf = (type: string) => source.filter((artifact) => artifact.record.type === type);
-  const cases = valuesOf("test-case");
+  // One index over the registered test cases, consulted once per claim below. `artifacts` is a
+  // parameter and this function registers nothing, so the pool is invariant for the whole call: the
+  // index built here serves exactly the array `valuesOf("test-case")` returned, in that order.
+  const casesByIdentity = indexByTestCaseIdentity(valuesOf("test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
   const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {
     const value = artifact.value; const viewport = value.viewport;
     const analysis = source.find((candidate) => candidate.record.id === value.requirementAnalysisArtifactId && candidate.record.type === "requirement-analysis");
@@ -99,7 +103,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
    *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
    *  case. Unresolvable claims are dropped, exactly as the per-attempt path has always dropped them. */
   const asAttempt = (attemptId: unknown, status: unknown, identity: Readonly<Record<string, unknown>>): CoverageAttempt[] => {
-    const testCase = cases.find((candidate) => candidate.value.testCaseId === identity.testCaseId && candidate.value.revisionId === identity.testCaseRevisionId && candidate.value.instanceId === identity.testCaseInstanceId);
+    const testCase = casesByIdentity.get({ testCaseId: identity.testCaseId, testCaseRevisionId: identity.testCaseRevisionId, testCaseInstanceId: identity.testCaseInstanceId })[0];
     const dimensions = testCase?.value.coverage;
     if (!isRecord(dimensions) || !isRecord(dimensions.viewport) || typeof dimensions.viewport.width !== "number" || typeof dimensions.viewport.height !== "number") return [];
     const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.browser, dimensions.risk, dimensions.outcome];
