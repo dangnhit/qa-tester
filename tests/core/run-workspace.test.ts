@@ -899,7 +899,7 @@ describe("RunWorkspace", () => {
     });
 
     await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXYZ", [])).resolves.toBeDefined();
-    await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXY1", [attempt.id])).rejects.toThrow(/observed-execution|attempt|binding/i);
+    await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXY1", [attempt.id])).rejects.toThrow(/must not claim a test result/i);
     // The read path must agree with the write path: no attempt binding is demanded on reopen either.
     expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ")).toBe(true);
     await workspace.close();

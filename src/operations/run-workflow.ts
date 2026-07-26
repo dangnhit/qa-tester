@@ -463,7 +463,10 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
     if (alreadyRegistered[occurrence]) {
       const registered = alreadyRegistered[occurrence];
       const attemptId = asString(registered.value.attemptId, "registered retry attempt ID");
-      if (!artifacts.some((artifact) => (artifact.record.type === "evidence" || artifact.record.type === "evidence-gap") && artifact.value.attemptId === attemptId)) {
+      // Evidence carries its attempt inside the `subject` union; an Evidence Gap still carries it flat.
+      if (!artifacts.some((artifact) => artifact.record.type === "evidence"
+        ? evidenceAttemptId(artifact.value) === attemptId
+        : artifact.record.type === "evidence-gap" && artifact.value.attemptId === attemptId)) {
         await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry: "log", protectedEnvironment: false, testcaseId: asString(testCase.value.testCaseId, "test case ID") });
       }
       results.push(registered.record); continue;

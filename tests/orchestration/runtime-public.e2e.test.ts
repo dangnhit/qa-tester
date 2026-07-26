@@ -13,6 +13,7 @@ import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { TestDataHookRegistry } from "../../src/test-data/hooks.js";
 import { serveBrowserFixture } from "../../fixtures/browser/server.js";
 import { sha256Text } from "../../src/core/checksum.js";
+import { createEntityId } from "../../src/core/ids.js";
 
 const roots: string[] = [];
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "ENV-RUNTIME", name: "Runtime fixture", classification: "test", baseUrl: "http://127.0.0.1", productionReadOnly: false } as const;
@@ -289,6 +290,58 @@ describe("public runtime QA Tester", () => {
       "generate-bug-report:adapter", "generate-bug-report:postcondition",
       "generate-qa-report:adapter", "generate-qa-report:postcondition",
     ]);
+  });
+
+  it("does not register a spurious evidence gap when resuming execute-browser-test for an already-registered attempt that already has evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-runtime-resume-existing-evidence-")); roots.push(root);
+    const bundle = await sourceBundle(root);
+    // Simulate a crash after the attempt and its evidence were durably registered, but before the
+    // execute-browser-test operation (and therefore its checkpoint) completed: import the canonical
+    // bundle, then hand-register the exact test-result + evidence pair a real run would have produced,
+    // while the workflow checkpoint still shows no completed operations.
+    const targetRunId = await crashAfterCanonicalImport(root, bundle);
+    const workspace = await RunWorkspace.open(root, targetRunId);
+    const testCase = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-case" && artifact.record.provenance.startsWith(`runtime-import:${bundle.sourceRunId}:`));
+    if (!testCase) throw new Error("Expected imported test case");
+    const attemptId = "ATT-PRE-REGISTERED";
+    const registeredResult = await workspace.registerArtifactValue({
+      type: "test-result",
+      relationships: [testCase.record.id],
+      value: {
+        artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId, runId: workspace.runId,
+        testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME",
+        status: "PASSED", failureClassification: "NONE",
+        steps: [{ stepId: "open", status: "PASSED", durationMs: 1 }, { stepId: "fill", status: "PASSED", durationMs: 1 }, { stepId: "save", status: "PASSED", durationMs: 1 }],
+        startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z",
+      },
+    });
+    await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "pre-registered.txt", contents: Buffer.from("pre-registered console evidence"), mediaType: "text/plain", captureType: "log" }],
+      relationships: [registeredResult.id],
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(), runId: workspace.runId,
+        subject: { kind: "attempt", attemptId, testCaseId: "TC-RUNTIME", testCaseRevisionId: "REV-RUNTIME", testCaseInstanceId: "INSTANCE-RUNTIME" },
+        kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain",
+        binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+        provenance: { captureType: "log", url: baseUrl, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: "TC-RUNTIME" },
+      }),
+    });
+    await workspace.close();
+
+    const tester = createQaTester({
+      browserManagers: { chromium: { browser } },
+      testDataRegistries: { trusted: new TestDataHookRegistry([], {}) },
+      evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+    });
+    const resumed = await tester({ root, mode: "full", resumeRunId: targetRunId, environmentProfile: environment, bundle, runtime: { browserManagerId: "chromium", testDataRegistryId: "trusted", evidencePolicyId: "required" } });
+    expect(resumed.outcome).toBe("COMPLETED");
+
+    const resumedWorkspace = await RunWorkspace.open(root, targetRunId);
+    const artifacts = await resumedWorkspace.readRegisteredArtifacts();
+    // The attempt already had registered evidence: no live browser session existed on resume for it,
+    // so a broken guard that cannot see schema-2.0.0 evidence would report a false gap here instead.
+    expect(artifacts.filter((artifact) => artifact.record.type === "evidence-gap" && artifact.value.attemptId === attemptId)).toHaveLength(0);
+    await resumedWorkspace.close();
   });
 
   it("rejects an extra workspace import provenance outside the checkpoint mapping before any adapter resumes", async () => {
