@@ -333,8 +333,13 @@ const testResultBatchRule: SemanticRule = {
     if (new Set(entryIds).size !== entryIds.length) {
       return { code: "ARTIFACT_BINDING", message: "Test result batch entry IDs must be unique within the batch" };
     }
+    // Hoisted out of the loop below: the related-artifact pool is fixed for the duration of one rule
+    // invocation (read: the cascade-sensitive valid set for this fixpoint pass; write: the pre-read
+    // manifest snapshot), so re-querying it per entry would repeat identical filter/map allocations
+    // for what is, by design, the one artifact type holding many entries.
+    const cases = ctx.relatedOfType("test-case");
     for (const entry of entries) {
-      const matches = ctx.relatedOfType("test-case").filter((candidate) =>
+      const matches = cases.filter((candidate) =>
         candidate.value?.testCaseId === entry.testCaseId
         && candidate.value?.revisionId === entry.testCaseRevisionId
         && candidate.value?.instanceId === entry.testCaseInstanceId);
