@@ -110,7 +110,7 @@ export type SemanticRule = Readonly<{
  *  `testCaseRevisionId` / `testCaseInstanceId` spelling every consumer uses in exactly one place. */
 const attemptIdOf = (candidate: RelatedArtifact): unknown => candidate.value?.attemptId;
 const testCaseIdentityOf = (candidate: RelatedArtifact): TestCaseIdentity =>
-  ({ testCaseId: candidate.value?.testCaseId, revisionId: candidate.value?.revisionId, instanceId: candidate.value?.instanceId });
+  ({ testCaseId: candidate.value?.testCaseId, testCaseRevisionId: candidate.value?.revisionId, testCaseInstanceId: candidate.value?.instanceId });
 
 /** Moved VERBATIM from `run-workspace.ts` (retest reproduction-occurrence comparison). */
 function sameStringOccurrences(left: readonly string[], right: readonly string[]): boolean {
@@ -266,7 +266,7 @@ const testResultRule: SemanticRule = {
     // `.get` returns the FULL bucket in pool order, so this stays a `.filter()` — the `length === 1`
     // ambiguity decision below is the reason the index maps to arrays rather than single artifacts.
     const matches = indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf)
-      .get({ testCaseId: value.testCaseId, revisionId: value.testCaseRevisionId, instanceId: value.testCaseInstanceId });
+      .get({ testCaseId: value.testCaseId, testCaseRevisionId: value.testCaseRevisionId, testCaseInstanceId: value.testCaseInstanceId });
     const testCase = matches.length === 1 ? matches[0] : undefined;
     if (ctx.stage === "write") {
       if (!testCase || ctx.relationships.filter((id) => id === testCase.record.id).length !== 1
@@ -350,7 +350,7 @@ const testResultBatchRule: SemanticRule = {
     // this file where the index changes complexity class (O(entries x cases) -> O(cases + entries)).
     const cases = indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf);
     for (const entry of entries) {
-      const matches = cases.get({ testCaseId: entry.testCaseId, revisionId: entry.testCaseRevisionId, instanceId: entry.testCaseInstanceId });
+      const matches = cases.get({ testCaseId: entry.testCaseId, testCaseRevisionId: entry.testCaseRevisionId, testCaseInstanceId: entry.testCaseInstanceId });
       if (matches.length !== 1) {
         return { code: "ARTIFACT_BINDING", message: "Test result batch entry references an orphan or ambiguous test case revision and instance" };
       }
@@ -653,8 +653,8 @@ const bugReportRule: SemanticRule = {
       })) {
         return { code: "ARTIFACT_BINDING", message: "Bug report evidence provenance is not registered" };
       }
-      const testCase = indexByTestCaseIdentity(registeredValues("test-case"), (candidate) => ({ testCaseId: candidate.testCaseId, revisionId: candidate.revisionId, instanceId: candidate.instanceId }))
-        .get({ testCaseId: original.testCaseId, revisionId: original.testCaseRevisionId, instanceId: original.testCaseInstanceId })[0];
+      const testCase = indexByTestCaseIdentity(registeredValues("test-case"), (candidate) => ({ testCaseId: candidate.testCaseId, testCaseRevisionId: candidate.revisionId, testCaseInstanceId: candidate.instanceId }))
+        .get({ testCaseId: original.testCaseId, testCaseRevisionId: original.testCaseRevisionId, testCaseInstanceId: original.testCaseInstanceId })[0];
       const plans = registeredValues("test-plan");
       const approvedPlanCase = plans.flatMap((plan) => plan.approvalDecision && isRecord(plan.approvalDecision) && plan.approvalDecision.approved === true && Array.isArray(plan.testCases)
         ? plan.testCases.filter(isRecord).filter((candidate) => candidate.testCaseId === original.testCaseId && (!isRecord(candidate.browserExecution) || candidate.browserExecution.revisionId === original.testCaseRevisionId)) : [])
@@ -716,7 +716,7 @@ const bugReportRule: SemanticRule = {
     } catch { reproductionValid = false; }
     const original = matchingAttempts[0]?.value;
     const caseValue = original === undefined ? undefined : indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf)
-      .get({ testCaseId: original.testCaseId, revisionId: original.testCaseRevisionId, instanceId: original.testCaseInstanceId })[0]?.value;
+      .get({ testCaseId: original.testCaseId, testCaseRevisionId: original.testCaseRevisionId, testCaseInstanceId: original.testCaseInstanceId })[0]?.value;
     const approvedPlanCase = original === undefined ? undefined : ctx.relatedOfType("test-plan").flatMap((candidate) => isRecord(candidate.value?.approvalDecision) && candidate.value.approvalDecision.approved === true && Array.isArray(candidate.value.testCases)
       ? candidate.value.testCases.filter(isRecord).filter((planCase) => planCase.testCaseId === original.testCaseId && (!isRecord(planCase.browserExecution) || planCase.browserExecution.revisionId === original.testCaseRevisionId)) : [])
       .find((planCase) => Array.isArray(planCase.expectedResults));

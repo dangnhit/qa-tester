@@ -152,11 +152,12 @@ function invalidate(
 
 /** Builds the READ-path `SemanticContext` for one persisted artifact. The related-artifact pool is
  *  the cascade-sensitive valid set (`validArtifacts`, recomputed each fixpoint pass), so an artifact
- *  invalidated earlier this pass drops out of any later rule's view — preserving the read-path
- *  cascade. `registeredRecord` is backed by the full manifest and is therefore stable regardless of
- *  validity. Cross-run access reopens via `dirname(dirname(path))`, matching the current read-path
- *  `RunWorkspace.open` call sites — supplied here by the injected `openRun` so this module never
- *  imports the `RunWorkspace` class. */
+ *  invalidated earlier in this pass stays visible to this pass's later rules and drops out of view
+ *  only on the NEXT pass — the pool shrinks between passes, not within one — still preserving the
+ *  read-path cascade once the fixpoint converges. `registeredRecord` is backed by the full manifest
+ *  and is therefore stable regardless of validity. Cross-run access reopens via
+ *  `dirname(dirname(path))`, matching the current read-path `RunWorkspace.open` call sites — supplied
+ *  here by the injected `openRun` so this module never imports the `RunWorkspace` class. */
 function buildReadContext(
   artifact: LoadedArtifact,
   value: Record<string, unknown>,

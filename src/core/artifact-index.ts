@@ -18,6 +18,10 @@
  *    assumption is made about ids — `test-case`/`test-result` only constrain their identity fields to
  *    `{ "type": "string", "minLength": 1 }`, so a `` `${a}|${b}|${c}` `` join would be free to collide.
  *    The identity triple is a NESTED map for the same reason.
+ * 4. **`get` returns the live bucket, not a copy.** `readonly T[]` blocks mutation at the type level,
+ *    and every current consumer only reads a bucket — via `.length`, `[0]`, `.filter`, `.some`, or
+ *    `.find`, all of which allocate — so no consumer may assume it owns the returned array or cast
+ *    past `readonly` to mutate it in place.
  *
  * An index is a SNAPSHOT of the array it was built from. `inspectWorkspaceState` runs a
  * `while (changed)` fixpoint whose valid pool SHRINKS between passes, so an index over that pool must
@@ -34,10 +38,13 @@ export type ArtifactIndex<T> = Readonly<{
   groups(): Iterable<readonly T[]>;
 }>;
 
-/** The test-case identity triple. Field names are the `test-case` payload's own; `test-result` and
- *  `evidence` spell the same three values `testCaseId` / `testCaseRevisionId` / `testCaseInstanceId`,
- *  so the selector each call site supplies is what reconciles the naming drift. */
-export type TestCaseIdentity = Readonly<{ testCaseId: unknown; revisionId: unknown; instanceId: unknown }>;
+/** The test-case identity triple, spelled `testCaseId` / `testCaseRevisionId` / `testCaseInstanceId` —
+ *  the names `test-result` and `evidence` use, which is what nearly every `.get()` call site is already
+ *  holding. The `test-case` payload itself spells the trailing two fields `revisionId` / `instanceId`;
+ *  reconciling that naming drift is confined to the one `identityOf` selector each call site supplies
+ *  when building the index, so a `.get()` probe site reads back the same words it passes in, and a
+ *  transposed pair of components there is a visible naming mismatch, not a silent same-shaped swap. */
+export type TestCaseIdentity = Readonly<{ testCaseId: unknown; testCaseRevisionId: unknown; testCaseInstanceId: unknown }>;
 
 export type TestCaseIdentityIndex<T> = Readonly<{ get(identity: TestCaseIdentity): readonly T[] }>;
 
@@ -74,23 +81,23 @@ export function indexByTestCaseIdentity<T>(
 ): TestCaseIdentityIndex<T> {
   const buckets = new Map<unknown, Map<unknown, Map<unknown, T[]>>>();
   for (const item of items) {
-    const { testCaseId, revisionId, instanceId } = identityOf(item);
+    const { testCaseId, testCaseRevisionId, testCaseInstanceId } = identityOf(item);
     let byRevision = buckets.get(testCaseId);
     if (byRevision === undefined) {
       byRevision = new Map<unknown, Map<unknown, T[]>>();
       buckets.set(testCaseId, byRevision);
     }
-    let byInstance = byRevision.get(revisionId);
+    let byInstance = byRevision.get(testCaseRevisionId);
     if (byInstance === undefined) {
       byInstance = new Map<unknown, T[]>();
-      byRevision.set(revisionId, byInstance);
+      byRevision.set(testCaseRevisionId, byInstance);
     }
-    const bucket = byInstance.get(instanceId);
-    if (bucket === undefined) byInstance.set(instanceId, [item]);
+    const bucket = byInstance.get(testCaseInstanceId);
+    if (bucket === undefined) byInstance.set(testCaseInstanceId, [item]);
     else bucket.push(item);
   }
   return {
-    get: ({ testCaseId, revisionId, instanceId }) =>
-      buckets.get(testCaseId)?.get(revisionId)?.get(instanceId) ?? noMatches,
+    get: ({ testCaseId, testCaseRevisionId, testCaseInstanceId }) =>
+      buckets.get(testCaseId)?.get(testCaseRevisionId)?.get(testCaseInstanceId) ?? noMatches,
   };
 }
