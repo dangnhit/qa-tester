@@ -976,7 +976,10 @@ describe("RunWorkspace", () => {
       relationships: [],
       descriptor: (binaries) => ({
         artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
-        // The same executionId the batch below carries — the linkage between lane-2 evidence and its batch.
+        // This fixture happens to reuse "EXEC-1", `testResultBatch`'s default `executionId` (see above), so
+        // it matches the batch registered below — but nothing on write or read requires or checks that
+        // match; see the ARTIFACT_BINDING check's comment in semantic-rules.ts for why the linkage is
+        // unenforced in both directions.
         subject: { kind: "observed-execution", executionId: "EXEC-1" },
         kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
         binaryArtifactIds: binaries.map((binary) => binary.id),

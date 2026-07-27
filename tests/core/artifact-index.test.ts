@@ -33,7 +33,7 @@ describe("indexByKey", () => {
 });
 
 describe("a miss on either index shape", () => {
-  it("returns the module's one shared empty bucket, not a fresh allocation per miss", () => {
+  it("returns the same empty bucket for repeated misses within one index instance, not a fresh allocation per miss", () => {
     const keyIndex = indexByKey<Tagged>([{ id: "present", key: "known" }], (item) => item.key);
     const identityIndex = indexByTestCaseIdentity<Tagged & TestCaseIdentity>(
       [{ id: "present", key: "known", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1" }],
@@ -45,11 +45,14 @@ describe("a miss on either index shape", () => {
     const missFromIdentityIndex = identityIndex.get({ testCaseId: "TC-none", testCaseRevisionId: "REV-none", testCaseInstanceId: "INST-none" });
 
     expect(missFromKeyIndexA).toEqual([]);
-    // "Shared" is the load-bearing word in the module's own comment: every miss, from every index shape
-    // this module builds, is the SAME array instance — not merely three separately-allocated empty arrays
-    // that happen to be equal.
+    // Within a single `indexByKey` instance, every miss is the SAME array instance — not merely two
+    // separately-allocated empty arrays that happen to be equal. That is the module's own no-copy
+    // guarantee (property 4 in the file header): `get` never allocates a fresh array per call.
     expect(missFromKeyIndexA).toBe(missFromKeyIndexB);
-    expect(missFromKeyIndexA).toBe(missFromIdentityIndex);
+    // A miss from a *different* index instance (here, a separately-built `indexByTestCaseIdentity`) is
+    // only guaranteed to be content-equal, never reference-equal — the module documents no cross-instance
+    // identity guarantee, and no consumer among the ~67 call sites compares a miss by reference.
+    expect(missFromIdentityIndex).toEqual([]);
   });
 });
 

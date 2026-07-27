@@ -102,11 +102,15 @@ reads — not only on the specific artifact a caller wanted — so if that other
 acting on the *other* run, not the one you asked to open. Since any run that has actually executed and
 captured evidence writes `evidence` artifacts, this means a source run from before the bump is
 permanently unusable as a retest target, a regression baseline, or a duplicate-comparison source. The
-error you will see is `ARTIFACT_BINDING: Workspace artifact binding is invalid: Payload does not match
-declared artifact type evidence` — recognize it as "the *linked* run's evidence no longer validates," not
-as a problem with the run you just opened. "Start a new run" does not recover this: the new run reads
-fine, but the bug it would retest, or the baseline it would import, stays locked behind the old-schema
-source. The only remedy is to **re-execute the linked source run under the current package version** so
+error you will see on the CLI is exactly `Workspace artifact binding is invalid: Payload does not match
+declared artifact type evidence` — `src/cli/program.ts`'s top-level handler prints only `error.message` to
+stderr, with no code prefix. The thrown `QaSkillsError`'s separate `code` property is `ARTIFACT_BINDING`
+(readable by a caller that catches the error object directly rather than reading CLI stderr), but that
+code is never concatenated into the printed text. Recognize the message as "the *linked* run's evidence
+no longer validates," not as a problem with the run you just opened. "Start a new run" does not recover
+this: the new run reads fine, but the bug it would retest, or the baseline it would import, stays locked
+behind the old-schema source. The only remedy is to **re-execute the linked source run under the current
+package version** so
 it writes fresh `evidence` at `2.0.0`, then retest, regress, or compare against that new run instead.
 
 The common case is unaffected: a source run created by `qa-skill workflow bootstrap` (a `plan`-mode run)
