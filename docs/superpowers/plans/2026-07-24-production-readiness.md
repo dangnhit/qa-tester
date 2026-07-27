@@ -82,7 +82,11 @@ Goal: the documented happy path works end-to-end, the foundation is clean, and i
 ### v1.0 — "the gate tells the truth, and enters CI" (~8 weeks)
 
 **Phase 5 — Schema evolution (2 weeks). One change per place, thanks to Phase 2.**
-- Add `runtime-observed` to the provenance enum; permit it at the 2 coverage-credit filter sites (`release-gate.ts:87`, `evaluate-workspace-coverage.ts:67`).
+- Add `runtime-observed` to the provenance enum; permit it at the coverage-credit filter sites. Note for
+  whoever implements this after the batch shape lands (Task 29): that is **4** sites, not 2 — the batch
+  is a second shape flattened alongside per-attempt results, so each reader gates it separately
+  (`release-gate.ts:113`, `release-gate.ts:117`, `evaluate-workspace-coverage.ts:80`,
+  `evaluate-workspace-coverage.ts:89`).
 - `test-result` → **batch shape**: one artifact per **Runtime-Observed Execution** holding many entries; evidence attached only for failing cases. Rework the `.find()`-per-attempt scans into `Map` indices.
 - `evidence.schema.json` → `subject` union (`attempt` | `observed-execution`); `provenance` → discriminated union by `kind` (geometry required only for `screenshot`/`annotation`). Fixes the pre-existing "log evidence must declare dpr/scroll" wart. Bump `schemaVersion`.
 

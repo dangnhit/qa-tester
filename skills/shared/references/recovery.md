@@ -88,6 +88,35 @@ multi-version validator. Artifacts from a prior run are read-only history; do no
 `schemaVersion` to make them validate, because the rest of the payload will not match the new contract
 and the checksum will no longer match the manifest.
 
+That is the whole story only when the artifact you are re-reading belongs to the run you opened. It is
+not the whole story for `retest` and `regression`, both of which open a second, **linked source run** and
+read its artifacts too: `retest` mode's `sourceBugFromReference` and `regression` mode's
+`importRegressionCases` (`src/operations/run-workflow.ts`) each call `readRegisteredArtifacts()` on the
+linked/source run, not just the run being opened. Cross-run duplicate-bug detection does the same thing
+a third and fourth way — the read-path check in `src/core/semantic-rules.ts` and the write-path check in
+`src/operations/generate-bug-report.ts` both open every run named in a bug report's
+`possibleDuplicateSources` and read its registered artifacts to verify the reference.
+`readRegisteredArtifacts()` (`src/core/run-workspace.ts`) throws on **any** diagnostic in the run it
+reads — not only on the specific artifact a caller wanted — so if that other run contains even one
+`evidence` artifact written before the `2.0.0` bump, all four of these flows fail, and they fail while
+acting on the *other* run, not the one you asked to open. Since any run that has actually executed and
+captured evidence writes `evidence` artifacts, this means a source run from before the bump is
+permanently unusable as a retest target, a regression baseline, or a duplicate-comparison source. The
+error you will see is `ARTIFACT_BINDING: Workspace artifact binding is invalid: Payload does not match
+declared artifact type evidence` — recognize it as "the *linked* run's evidence no longer validates," not
+as a problem with the run you just opened. "Start a new run" does not recover this: the new run reads
+fine, but the bug it would retest, or the baseline it would import, stays locked behind the old-schema
+source. The only remedy is to **re-execute the linked source run under the current package version** so
+it writes fresh `evidence` at `2.0.0`, then retest, regress, or compare against that new run instead.
+
+The common case is unaffected: a source run created by `qa-skill workflow bootstrap` (a `plan`-mode run)
+never registers `evidence` at all — it holds only `requirement-analysis`, `test-plan`, `test-case`, and
+`coverage-obligation` — so linking a new `full`-mode run to a bootstrap bundle (the
+`--source-root`/`--source-run-id` pattern in
+[agent-browser-adapters](./agent-browser-adapters.md)) is safe no matter how old that bundle is. Do not
+let this section scare you off that pattern; the risk described above is specific to a linked source run
+that was itself **executed**, and therefore holds `evidence`, before the bump.
+
 ## Check the JSON body, not just the exit code
 
 `WorkflowResult` (returned by `qaTester()` / `createQaTester()`, and printed as JSON by

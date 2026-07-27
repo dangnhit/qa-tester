@@ -331,7 +331,14 @@ const testResultRule: SemanticRule = {
  *  approved Test DSL, so there is no canonical step list to equal. And there is no relationship binding
  *  requirement on the matched test cases — a batch covers many cases and Phase 7 owns what it declares.
  *  Evidence resolution keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
- *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check. */
+ *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check.
+ *
+ *  This rule does not touch `commitSha` or `specTreeSha256` either, though both are `required` by the
+ *  schema with hex patterns: the git anchor ADR-0010 rests coverage credit on ("a human merged the spec
+ *  and a hash proves it") is recorded here but NOT verified here, and cannot be — semantic rules are pure
+ *  over registered artifacts, and confirming a commit is merged and a spec tree hash is current needs
+ *  git, which this layer has no access to. Verifying the anchor before it is recorded is the producer's
+ *  obligation (`qa-skill execute playwright`, plan line 95), not this rule's. */
 const testResultBatchRule: SemanticRule = {
   type: "test-result-batch",
   appliesTo: { write: true, read: true },
@@ -361,6 +368,14 @@ const testResultBatchRule: SemanticRule = {
       if (entry.status === "PASSED") {
         return { code: "ARTIFACT_BINDING", message: "Passed test result batch entry must not declare evidence artifacts" };
       }
+      // This resolves a declared evidence id by manifest EXISTENCE only. Nothing here (or anywhere else,
+      // on write or read) requires the resolved evidence's `subject.executionId` to equal this entry's
+      // batch's `executionId` — a batch may declare evidence whose subject is an unrelated attempt, and
+      // both paths accept it. The linkage is unenforced in both directions, and enforcing it isn't a
+      // small addition here: `ctx.relatedOfType` is relationship-scoped (it answers "what does this
+      // artifact's relationship graph reach"), and this check only has an id, not a relationship — so
+      // closing this would need Phase 7 to declare the evidence as a relationship, a design decision
+      // left to that phase.
       if (!array(entry.evidenceArtifactIds).every((id) => typeof id === "string" && ctx.registeredRecord(id, "evidence") !== undefined)) {
         return { code: "ARTIFACT_BINDING", message: "Test result batch entry references unregistered evidence" };
       }

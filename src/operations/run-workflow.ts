@@ -4,7 +4,7 @@ import { selectRegressionCases, type RegressionSelection } from "../regression/s
 import { regressionCaseFromCanonical, type ChangeScope, type RegressionCase } from "../regression/change-scope.js";
 import { sha256Text } from "../core/checksum.js";
 import { QaSkillsError } from "../core/errors.js";
-import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactIndex, type TestCaseIdentity } from "../core/artifact-index.js";
+import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactIndex, type TestCaseIdentity, type TestCaseIdentityIndex } from "../core/artifact-index.js";
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
@@ -178,7 +178,7 @@ function testCaseIdentityOf(artifact: RegisteredWorkspaceArtifact): TestCaseIden
   return { testCaseId: artifact.value.testCaseId, testCaseRevisionId: artifact.value.revisionId, testCaseInstanceId: artifact.value.instanceId };
 }
 
-function indexTestCasesByIdentity(artifacts: readonly RegisteredWorkspaceArtifact[]) {
+function indexTestCasesByIdentity(artifacts: readonly RegisteredWorkspaceArtifact[]): TestCaseIdentityIndex<RegisteredWorkspaceArtifact> {
   return indexByTestCaseIdentity(artifacts.filter((artifact) => artifact.record.type === "test-case"), testCaseIdentityOf);
 }
 

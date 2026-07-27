@@ -12,6 +12,11 @@ export type CoverageObligation = {
 };
 
 export type CoverageAttempt = {
+  // Shared namespace across both lanes: readers populate this from a lane-1 `test-result`'s `attemptId`
+  // AND from a lane-2 `test-result-batch` entry's `entryId`, with no cross-uniqueness check between the
+  // two. Harmless today because both readers only aggregate qualifying ids into a `Set`, but whoever
+  // next resolves a `qualifyingAttemptId` back to a source artifact must know a collision between an
+  // attempt id and an entry id is possible.
   attemptId: string;
   status: string;
   requirementId: string;

@@ -27,6 +27,11 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const incidents = artifacts.filter((artifact) => artifact.record.type === "incident").map((artifact) => artifact.value);
   const evidenceGaps = artifacts.filter((artifact) => artifact.record.type === "evidence-gap").map((artifact) => artifact.value);
   const cleanupLeaks = artifacts.filter((artifact) => artifact.record.type === "cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter((resource) => isRecord(resource) && resource.status === "failed") as Values[]);
+  // Lane-1-only projection: filters `test-result` alone, so a `test-result-batch` entry with
+  // `status: "NOT_RUN"` is invisible here even though the embedded release gate is batch-aware. This is
+  // unreachable today — no producer emits `test-result-batch` yet — so it is documented rather than
+  // extended now, to keep Phase 5 additive; Phase 7, which makes batches reachable, owns extending this
+  // projection and can test it against real batch data.
   const excludedNotRun = artifacts.filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "NOT_RUN").map((artifact) => str(artifact.value.testCaseId) ?? artifact.record.id);
   const criticalFindings = currentOpenBugs.filter((bug) => bug.severity === "Blocker" || bug.severity === "Critical").map((bug) => bug.bugId);
   const remainingRisks = [...gateResult.ruleInputs.coverage.optionalGaps, ...currentOpenBugs.filter((bug) => bug.severity !== "Blocker" && bug.severity !== "Critical").map((bug) => bug.bugId), ...evidenceGaps.map((gap) => str(gap.reason) ?? "Evidence gap")];
@@ -36,6 +41,10 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
     const attemptId = evidenceAttemptId(artifact.value);
     return array(artifact.value.telemetryFindings).filter(isRecord).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, ...(attemptId === undefined ? {} : { attemptId }) }));
   });
+  // `summary`'s attempt count below has the same lane-1-only gap as `excludedNotRun` above: it counts
+  // `test-result` alone, so a run credited entirely by a `test-result-batch` would report "0 registered
+  // attempts evaluated" next to an embedded gate that is already batch-aware and may say READY. Same
+  // rationale as above: unreachable today, documented rather than extended, Phase 7's obligation.
   const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${artifacts.filter((artifact) => artifact.record.type === "test-result").length} registered attempts evaluated; ${currentOpenBugs.length} open product bug${currentOpenBugs.length === 1 ? "" : "s"}.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, protectedEnvironment: gateResult.protectedEnvironment, releaseGate: gateResult };
   const value = toQaExecutionReport(model);
   const report = await input.workspace.registerArtifactValue({ type: "qa-execution-report", value, relationships: [gate.id, ...artifacts.map((artifact) => artifact.record.id)], provenance: "runtime" });

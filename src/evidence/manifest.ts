@@ -27,9 +27,12 @@ export type ScreenshotEvidenceProvenance = EvidenceProvenanceBase & {
   annotationLabels?: readonly string[];
 };
 
-/** Trace/console/network/log captures measure no geometry. `viewport` is present only when the capture
- *  genuinely knows one (the trace path does); every other geometry field is absent because it is unknown,
- *  and the evidence contract forbids inventing it. */
+/** Trace/console/network/log captures measure no geometry. `viewport` is optional here so the type stays
+ *  total over a capture that happens to know it; every other geometry field is absent because it is
+ *  unknown, and the evidence contract forbids inventing it. No current caller constructs a non-visual
+ *  provenance value with `viewport` set through this type — the one trace-evidence writer
+ *  (`src/operations/run-workflow.ts`) builds its descriptor inline and does not go through it — so this
+ *  is currently unexercised, not a documented behavior of an existing trace path. */
 export type NonVisualEvidenceProvenance = EvidenceProvenanceBase & {
   captureType: "trace" | "console" | "network" | "log";
   viewport?: { width: number; height: number };

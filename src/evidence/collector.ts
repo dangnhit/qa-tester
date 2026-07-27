@@ -66,9 +66,13 @@ async function removeRegionMasks(session: ActiveBrowserSession, ids: readonly st
   await session.page.evaluate((maskIds) => { const browser = globalThis as unknown as PageRuntime; for (const id of maskIds) browser.document.getElementById(id)?.remove(); }, [...ids]);
 }
 
-/** Geometry is emitted only for a screenshot, which is the only capture that measures it. A
- *  trace/console/network/log descriptor omits it entirely rather than defaulting it — the evidence
- *  contract forbids the fields outright, so a reintroduced default would fail validation loudly. */
+/** Geometry is emitted only for a screenshot, which is the only capture that measures it. For a
+ *  trace/console/network/log descriptor, `viewport` is carried through only if the caller's
+ *  `EvidenceProvenance` set it, never defaulted — the evidence contract forbids inventing it, so a
+ *  reintroduced default would fail validation loudly. That conditional spread keeps this function total
+ *  over `EvidenceProvenance`'s non-screenshot variants, but it is currently unexercised: the only
+ *  trace-evidence writer (`src/operations/run-workflow.ts`) builds its descriptor inline and never calls
+ *  this function, and the telemetry path that does call it only ever passes `console`/`network`/`log`. */
 function provenanceValue(provenance: EvidenceProvenance) {
   const shared = { url: provenance.url, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }) };
   if (provenance.captureType !== "screenshot") {

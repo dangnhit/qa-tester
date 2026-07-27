@@ -108,9 +108,13 @@ describe("evaluateWorkspaceCoverage", () => {
 
   it("rejects a test-result with stripped provenance at the manifest validation gate", async () => {
     // This test pins an invariant: undefined provenance is unreachable at the coverage-predicate layer
-    // because the artifact-manifest schema (additionalProperties: false, required: ["provenance"], minLength: 1)
-    // rejects it at the workspace read/validation gate before creditsCoverage is ever called.
-    // If future changes loosen the manifest schema, this test will fail and should be revisited.
+    // because the manifest record's `required: ["provenance"]` alone rejects a record with the key
+    // deleted, at the workspace read/validation gate, before creditsCoverage is ever called.
+    // (`additionalProperties: false` guards against EXTRA keys, not a missing required one, so it plays
+    // no part in catching this deletion.) If this test starts failing, do NOT "fix" it by loosening or
+    // dropping `required: ["provenance"]` — that would let a stripped-provenance record reach the
+    // coverage predicate, which is exactly the invariant this test exists to block. Investigate why the
+    // manifest schema stopped rejecting the deletion instead.
     const fixture = await setup({ resultProvenance: "runtime-observed" });
     const manifestPath = join(fixture.workspacePath, "artifact-manifest.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: { id: string; type: string; relativePath: string; sha256: string; provenance?: string }[] };
