@@ -26,7 +26,7 @@ describe("CLI core", () => {
     const directory = await root();
     expect(await runCli(["--version"], { cwd: directory })).toEqual({
       exitCode: ExitCode.SUCCESS,
-      stdout: "0.2.0\n",
+      stdout: "0.3.0\n",
       stderr: "",
     });
   });

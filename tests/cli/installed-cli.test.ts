@@ -22,7 +22,7 @@ describe("installed Unix CLI", () => {
       const directCli = join(root, "node_modules", "@vigentix", "qa-skills", "dist", "src", "cli", "index.js");
       expect(await readFile(join(root, "node_modules", "@vigentix", "qa-skills", "dist", "src", "cli", "index.js"), "utf8")).toMatch(/^#!\/usr\/bin\/env node/);
       const verified = await run(executable, ["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], { cwd: root });
-      expect(JSON.parse(verified.stdout)).toMatchObject({ version: "0.2.0", compatible: true });
+      expect(JSON.parse(verified.stdout)).toMatchObject({ version: "0.3.0", compatible: true });
       await run(executable, ["skills", "install", "--agent", "codex"], { cwd: root });
       await rm(executable);
       try {
