@@ -113,13 +113,32 @@ behind the old-schema source. The only remedy is to **re-execute the linked sour
 package version** so
 it writes fresh `evidence` at `2.0.0`, then retest, regress, or compare against that new run instead.
 
-The common case is unaffected: a source run created by `qa-skill workflow bootstrap` (a `plan`-mode run)
-never registers `evidence` at all — it holds only `requirement-analysis`, `test-plan`, `test-case`, and
-`coverage-obligation` — so linking a new `full`-mode run to a bootstrap bundle (the
-`--source-root`/`--source-run-id` pattern in
-[agent-browser-adapters](./agent-browser-adapters.md)) is safe no matter how old that bundle is. Do not
-let this section scare you off that pattern; the risk described above is specific to a linked source run
-that was itself **executed**, and therefore holds `evidence`, before the bump.
+**A bootstrap bundle is not exempt — it is now the most likely thing to break.** A source run created by
+`qa-skill workflow bootstrap` (a `plan`-mode run) never registers `evidence`, so the `evidence` story
+above does not reach it. But it holds `requirement-analysis`, `test-plan`, `test-case`, and
+`coverage-obligation`, and **two of those four broke in this release**: `test-case` went `1.0.0` →
+`2.0.0` and `coverage-obligation` went `1.0.0` → `3.0.0`. The same mechanism applies with the same
+force. `buildCanonicalPlanImportBatch` (`src/operations/run-workflow.ts`) opens the source run and calls
+`readRegisteredArtifacts()` on it, which throws on the **first** diagnostic in that run — so a bootstrap
+bundle written before this release fails the import outright, and it fails while acting on the *source*
+run, not the `full`-mode run you just started.
+
+An earlier revision of this section said the opposite — that linking to a bootstrap bundle is "safe no
+matter how old that bundle is". That is now false, and it was the sentence most likely to be read after
+a break. The `--source-root`/`--source-run-id` pattern in
+[agent-browser-adapters](./agent-browser-adapters.md) is still the right pattern; what changed is that
+the bundle it points at must have been produced by the **current** package version.
+
+The remedy is the same shape as above and no worse: re-run `qa-skill workflow bootstrap` against the
+current version to write a fresh plan bundle, then link the new `full`-mode run to *that* bundle. Unlike
+the executed-source-run case, this is cheap — bootstrapping registers no evidence and drives no browser;
+it re-validates the same four agent-authored files. Any `test-case` or `coverage-obligation` file you
+kept on disk will need its `schemaVersion` raised to the current contract first (and
+`coverage-obligation` additionally needs `executionSurface`, and an `accessibilityMethod` drawn from the
+enum rather than a free-form label) — `qa-skill draft init --type <t>` prints a current-shape skeleton,
+and `qa-skill schema show --type <t>` prints the contract itself. Do not raise a `schemaVersion` inside
+an already-registered artifact: those are read-only history, and the checksum in the manifest will no
+longer match.
 
 ## Attestation and the gate: there is no position between them
 
