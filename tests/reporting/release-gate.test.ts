@@ -200,4 +200,99 @@ describe("evaluateReleaseGate", () => {
       expect.stringMatching(/evidence gap.*video capture/i),
     ]));
   });
+
+  /**
+   * CONTEXT.md:438-439 through the LIVE gate. An unmet Accessibility Obligation must reach the
+   * coverage buckets and drive the recommendation exactly as Task 32's unexecutable surfaces do —
+   * verified here rather than assumed to fall out.
+   *
+   * The obligation is on the BROWSER surface deliberately: every other dimension (surface, engine,
+   * geometry, requirement, role, behavior, risk, outcome) lines up perfectly with a passing attempt,
+   * so the accessibility rule is the only thing that can decide these cases. A `manual`-surface
+   * obligation would already be rejected by the surface check and prove nothing.
+   */
+  describe("accessibility obligations", () => {
+    const dimensions = {
+      requirementId: "REQ-A11Y", role: "member", behavior: "complete checkout", browser: "chromium",
+      viewport: { width: 1440, height: 900 }, risk: "critical", outcome: "Order confirmation is shown",
+    };
+    // Distinct per artifact, unlike this suite's usual "a".repeat(64) filler: an attestation names the
+    // exact immutable BYTES of the obligation it attests to, so a shared checksum would let one
+    // attestation stand for every obligation in the workspace and hide the binding entirely.
+    const obligationSha256 = "b".repeat(64);
+    const attestation = (obligationChecksum: string) => ({
+      record: { id: "ATT-A11Y", sha256: "e".repeat(64), type: "human-attestation", provenance: "human-attestation:reviewer@example.test" },
+      value: {
+        artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-1",
+        runId: "RUN-1", obligationId: "COV-A11Y", obligationSha256: obligationChecksum, method: "screen-reader",
+        attestedBy: "reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z",
+        statement: "Drove the whole checkout flow with VoiceOver; every control was announced with its role and current state.",
+      },
+    });
+    /** One authoritative obligation declaring `method`, one matching test case, one passing attempt. */
+    const workspace = (method: string, options: { required?: boolean; attested?: string; omitResult?: boolean } = {}) => [
+      { record: { id: "RA-A11Y", sha256: "a".repeat(64), type: "requirement-analysis" }, value: { statements: [{ requirementId: "REQ-A11Y", authority: "AUTHORITATIVE" }] } },
+      {
+        record: { id: "OBL-A11Y", sha256: obligationSha256, type: "coverage-obligation" },
+        value: { ...dimensions, obligationId: "COV-A11Y", requirementAnalysisArtifactId: "RA-A11Y", executionSurface: "browser", required: options.required ?? true, accessibilityMethod: method },
+      },
+      { record: { id: "TC-A11Y", sha256: "c".repeat(64), type: "test-case" }, value: { testCaseId: "TC-1", revisionId: "REV-1", instanceId: "INST-1", coverage: { ...dimensions, accessibilityMethod: method } } },
+      ...(options.omitResult === true ? [] : [{
+        record: { id: "RES-A11Y", sha256: "d".repeat(64), type: "test-result", provenance: "runtime-execution" },
+        value: { attemptId: "ATT-1", status: "PASSED", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", observedEngine: "chromium" },
+      }]),
+      ...(options.attested === undefined ? [] : [attestation(options.attested)]),
+    ];
+
+    it("blocks the release on a required screen-reader obligation that no attestation covers", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("screen-reader"));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-A11Y"]);
+      expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-A11Y", passed: false }]);
+      expect(result.verdicts.find((verdict) => verdict.rule === "REQUIRED_COVERAGE_COMPLETE")).toMatchObject({ passed: false });
+      expect(result.recommendation).toBe("NOT_READY");
+    });
+
+    it("clears the same obligation from a Human Attestation naming its exact bytes, with no attempt at all", () => {
+      // No `test-result` whatsoever: the attestation is unambiguously the thing doing the work here,
+      // not a bystander next to a passing attempt that would have credited the obligation anyway.
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("screen-reader", { attested: obligationSha256, omitResult: true }));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+      expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-A11Y", passed: true }]);
+      expect(result.recommendation).toBe("READY");
+      // The artifact that earned the credit is bound into the immutable gate snapshot.
+      expect(result.sourceArtifacts.map((source) => source.type)).toContain("human-attestation");
+    });
+
+    it("does not clear it from an attestation naming some other obligation's bytes", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("screen-reader", { attested: "f".repeat(64) }));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-A11Y"]);
+      expect(result.recommendation).toBe("NOT_READY");
+    });
+
+    it("reports an unattested OPTIONAL accessibility obligation as a risk gap rather than dropping it", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("keyboard", { required: false }));
+
+      expect(result.ruleInputs.coverage.optionalGaps).toEqual(["COV-A11Y"]);
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+      expect(result.recommendation).toBe("READY_WITH_RISKS");
+    });
+
+    it("blocks the release on a required automated-analysis obligation, which nothing in this repo can satisfy", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("automated-analysis"));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-A11Y"]);
+      expect(result.recommendation).toBe("NOT_READY");
+    });
+
+    it("still credits a null-method obligation from the passing attempt, with nothing attested", () => {
+      // The common case, unaffected: `accessibilityMethod: null` is not an Accessibility Obligation.
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace(null as unknown as string));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+      expect(result.recommendation).toBe("READY");
+    });
+  });
 });

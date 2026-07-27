@@ -60,8 +60,10 @@ function asObligation(value: Readonly<Record<string, unknown>>): CoverageObligat
  * comes from the claim that observed it (CONTEXT.md:442). `declared.browser` — the test case's own
  * engine label — is validated (a test case missing it is malformed, exactly as before) and then
  * deliberately dropped on the floor: it is the value whose agreement with the obligation used to
- * manufacture credit for engines nothing ran. Each field is copied by name rather than spread so that
- * re-admitting it would have to be a visible, deliberate edit.
+ * manufacture credit for engines nothing ran. `declared.accessibilityMethod` is dropped the same way
+ * and for the same reason (CONTEXT.md:439): an attempt cannot address an Accessibility Obligation at
+ * all, so the test case's declared method buys nothing and vetoes nothing. Each field is copied by
+ * name rather than spread so that re-admitting either would have to be a visible, deliberate edit.
  */
 function dimensions(value: Readonly<Record<string, unknown>>, observedEngine: string): CoverageDimensions {
   const coverage = value.coverage;
@@ -75,7 +77,7 @@ function dimensions(value: Readonly<Record<string, unknown>>, observedEngine: st
   return {
     requirementId: declared.requirementId, executionSurface: declared.executionSurface, role: declared.role,
     behavior: declared.behavior, observedEngine, viewport: declared.viewport,
-    accessibilityMethod: declared.accessibilityMethod, risk: declared.risk, outcome: declared.outcome,
+    risk: declared.risk, outcome: declared.outcome,
   };
 }
 
@@ -89,10 +91,34 @@ function requirementAuthority(artifacts: readonly RegisteredWorkspaceArtifact[],
   return matches[0]?.authority ?? "";
 }
 
-function resolveObligation(artifacts: readonly RegisteredWorkspaceArtifact[], value: Readonly<Record<string, unknown>>): ResolvedCoverageObligation {
+/**
+ * The obligation BYTES every registered Human Attestation attests to (CONTEXT.md:438). The join key
+ * is the checksum, not `obligationId`: obligation ids are not unique across a workspace, and
+ * `obligationSha256` is the byte-exact binding the artifact carries so a reader need not trust an id.
+ *
+ * This reader is the fail-CLOSED one and still does not throw on a checksum-less attestation, which
+ * is not a lapse: for every OTHER record it reads, malformed-means-drop would silently GRANT credit
+ * the run did not earn, which is what it refuses to do. An attestation is the one input where a drop
+ * can only ever WITHHOLD credit — already the closed direction — so there is nothing to fail closed
+ * on. The schema requires the field regardless, and `readRegisteredArtifacts` above has already
+ * rejected the whole workspace if any registered artifact failed it.
+ */
+function attestedObligationChecksums(artifacts: readonly RegisteredWorkspaceArtifact[]): ReadonlySet<string> {
+  return new Set(artifacts
+    .filter((artifact) => artifact.record.type === "human-attestation")
+    .map((artifact) => artifact.value.obligationSha256)
+    .filter((checksum): checksum is string => typeof checksum === "string"));
+}
+
+function resolveObligation(artifacts: readonly RegisteredWorkspaceArtifact[], artifact: RegisteredWorkspaceArtifact, attested: ReadonlySet<string>): ResolvedCoverageObligation {
+  const value = artifact.value;
   const obligation = asObligation(value);
   const analysisId = requireString(value.requirementAnalysisArtifactId, "coverage obligation requirement analysis artifact ID");
-  return { ...obligation, authoritativeRequirement: requirementAuthority(artifacts, analysisId, obligation.requirementId) === "AUTHORITATIVE" };
+  return {
+    ...obligation,
+    authoritativeRequirement: requirementAuthority(artifacts, analysisId, obligation.requirementId) === "AUTHORITATIVE",
+    humanAttested: attested.has(artifact.record.sha256),
+  };
 }
 
 /** Resolves coverage from revalidated registered workspace records; caller strings only locate that workspace. */
@@ -101,7 +127,8 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
   const ownsWorkspace = options.workspace === undefined;
   try {
     const artifacts = await workspace.readRegisteredArtifacts();
-    const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact.value));
+    const attested = attestedObligationChecksums(artifacts);
+    const obligations = artifacts.filter((artifact) => artifact.record.type === "coverage-obligation").map((artifact) => resolveObligation(artifacts, artifact, attested));
     // `resolveDimensions` runs once per registered attempt and once per batch entry, so the test-case
     // scan it used to run is indexed once here. This function only reads (`artifacts` comes from the
     // single read above and nothing is registered before the try block ends), so the pool is invariant

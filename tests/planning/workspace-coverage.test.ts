@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { sha256Text } from "../../src/core/checksum.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { evaluateWorkspaceCoverage } from "../../src/operations/evaluate-workspace-coverage.js";
+import { recordHumanAttestation } from "../../src/operations/record-human-attestation.js";
 import { deriveReleaseGateFromWorkspaceArtifacts } from "../../src/reporting/release-gate.js";
 
 const roots: string[] = [];
@@ -16,10 +17,18 @@ const environmentProfile = {
   baseUrl: "https://test.example.test", productionReadOnly: false,
 } as const;
 
-/** The dimensions an obligation carries on every Execution Surface. */
+/** The dimensions an obligation carries on every Execution Surface.
+ *
+ *  `accessibilityMethod` is `null` — "this obligation names no accessibility method", the common case
+ *  and NOT an Accessibility Obligation at all. It was `"keyboard"` until CONTEXT.md:438 was enforced,
+ *  which was incidental to every test in this file: none of them is about accessibility, and all of
+ *  them assert that a passing ATTEMPT credits COV-SAVE. A manual Accessibility Obligation is now
+ *  correctly unsatisfiable by any attempt, so leaving `"keyboard"` here would have silently changed
+ *  what eight provenance/observed-engine/batch tests were exercising. The accessibility behaviour has
+ *  its own describe block below, which sets the method explicitly. */
 const surfacelessDimensions = {
   requirementId: "REQ-SAVE", role: "member", behavior: "save profile",
-  accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+  accessibilityMethod: null, risk: "high", outcome: "confirmation shown",
 } as const;
 /** Plus the two only the browser surface owns; `test-case.coverage` always carries both. */
 const dimensions = { ...surfacelessDimensions, browser: "chromium", viewport: { width: 1440, height: 900 } } as const;
@@ -28,6 +37,8 @@ async function setup(overrides: {
   requirementAuthority?: string; result?: Record<string, unknown>; resultProvenance?: string;
   testCase?: Record<string, unknown>; obligation?: Record<string, unknown>; obligationSurface?: string;
   omitResult?: boolean; batchEntries?: readonly Record<string, unknown>[]; batchProvenance?: string;
+  /** A SECOND registered coverage obligation over the same authoritative requirement. */
+  extraObligation?: Record<string, unknown>;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-workspace-coverage-"));
   roots.push(root);
@@ -44,6 +55,12 @@ async function setup(overrides: {
     artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
     executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.obligation,
   });
+  if (overrides.extraObligation !== undefined) {
+    await register("coverage-obligation", {
+      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-OTHER", requirementAnalysisArtifactId: requirement.id,
+      executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.extraObligation,
+    });
+  }
   const { coverage: coverageOverride, ...testCaseOverrides } = overrides.testCase ?? {};
   const testCase = await register("test-case", {
     artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
@@ -155,9 +172,14 @@ describe("evaluateWorkspaceCoverage", () => {
   // `browser` is deliberately absent from this list: since CONTEXT.md:442 the attempt's engine comes
   // from what the runtime OBSERVED, so a mismatched declared label on the test case is not a coverage
   // mismatch at all. That whole dimension is covered by "evaluateWorkspaceCoverage — observed engine".
+  //
+  // `accessibility` was removed from this list for the same reason, one rule later: since
+  // CONTEXT.md:439 an attempt cannot address an Accessibility Obligation at all, so the test case's
+  // declared method is not a coverage dimension either — it can no more veto a credit than buy one.
+  // Both halves of that are pinned in "evaluateWorkspaceCoverage — accessibility obligations" below.
   it.each([
     ["requirement", { requirementId: "REQ-OTHER" }], ["role", { role: "admin" }], ["behavior", { behavior: "delete profile" }],
-    ["viewport", { viewport: { width: 390, height: 844 } }], ["accessibility", { accessibilityMethod: "screen-reader" }],
+    ["viewport", { viewport: { width: 390, height: 844 } }],
     ["risk", { risk: "low" }], ["outcome", { outcome: "redirected" }],
   ])("does not satisfy on a %s dimension mismatch", async (_dimension, coverage) => {
     const fixture = await setup({ testCase: { coverage } });
@@ -258,6 +280,95 @@ describe("evaluateWorkspaceCoverage — execution surfaces", () => {
     await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ missing: ["COV-SAVE"] });
     expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
     expect(gate.recommendation).toBe("NOT_READY");
+  });
+});
+
+/**
+ * CONTEXT.md:438-439 — an Accessibility Obligation is satisfied only by the artifact its method calls
+ * for, and never by a declared evaluation method matching its own label. These run against a
+ * REGISTERED, schema-validated workspace, so the obligation's `accessibilityMethod`, the test case's
+ * declared one, and the `human-attestation` are all real persisted artifacts written by the shipped
+ * producer — no hand-built record stands in for any of them.
+ *
+ * This reader is the fail-CLOSED one: it rejects a malformed record rather than dropping it. An
+ * attestation is the one input where that distinction cannot arise, because a malformed attestation
+ * can only ever WITHHOLD credit, never grant it — the closed direction already.
+ */
+describe("evaluateWorkspaceCoverage — accessibility obligations", () => {
+  const attested = {
+    method: "screen-reader", attestedBy: "reviewer@example.test",
+    statement: "Drove the whole save-profile flow with VoiceOver; every control was announced with its role and current state.",
+  };
+  /** A manual Accessibility Obligation whose test case declares the very same method. */
+  const screenReader = { obligation: { accessibilityMethod: "screen-reader" }, testCase: { coverage: { accessibilityMethod: "screen-reader" } } };
+
+  it("does not credit a screen-reader obligation from a passing attempt whose test case declares screen-reader", async () => {
+    // THE KILL: two declared labels agreeing with each other. No screen reader, no human, and no
+    // human-attestation artifact exists anywhere in this workspace.
+    const fixture = await setup(screenReader);
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({
+      complete: false, missing: ["COV-SAVE"], satisfied: [], qualifyingAttemptIds: [],
+    });
+  });
+
+  it("credits it once a Human Attestation for that obligation is registered", async () => {
+    const fixture = await setup(screenReader);
+
+    await recordHumanAttestation({ root: fixture.root, runId: fixture.runId, obligationId: "COV-SAVE", ...attested });
+
+    // The passing ATTEMPT-SAVE is still registered and still passing; it contributes nothing, because
+    // an attestation contains no attempt for `qualifyingAttemptIds` to report.
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toEqual({
+      complete: true, satisfied: ["COV-SAVE"], missing: [], qualifyingAttemptIds: [],
+    });
+  });
+
+  it("credits it from the attestation alone, with no passing attempt registered at all", async () => {
+    const fixture = await setup({ ...screenReader, omitResult: true });
+
+    await recordHumanAttestation({ root: fixture.root, runId: fixture.runId, obligationId: "COV-SAVE", ...attested });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toEqual({
+      complete: true, satisfied: ["COV-SAVE"], missing: [], qualifyingAttemptIds: [],
+    });
+  });
+
+  it("does not let an attestation bound to a different obligation satisfy this one", async () => {
+    const fixture = await setup({ ...screenReader, extraObligation: { obligationId: "COV-OTHER", behavior: "delete profile", accessibilityMethod: "screen-reader" } });
+
+    await recordHumanAttestation({ root: fixture.root, runId: fixture.runId, obligationId: "COV-OTHER", ...attested });
+
+    // Same run, same method, same attester — but the attestation names COV-OTHER's exact immutable
+    // bytes, so COV-SAVE stays unmet.
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({
+      complete: false, satisfied: ["COV-OTHER"], missing: ["COV-SAVE"],
+    });
+  });
+
+  it("still credits a null-method obligation whose test case declares a method of its own", async () => {
+    // The replacement for the `accessibility` row removed from the dimension-mismatch table above,
+    // and the mirror of the kill test: the obligation asks for no accessibility evaluation, so the
+    // test case's declared method is a fact about the test case that this reader no longer consults.
+    const fixture = await setup({ testCase: { coverage: { accessibilityMethod: "screen-reader" } } });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({
+      complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ATTEMPT-SAVE"],
+    });
+  });
+
+  it("leaves an automated-analysis obligation unmet, with no artifact in this repo able to satisfy it", async () => {
+    // No accessibility scanner exists here — no dependency, no import, no evidence kind for a scan
+    // result — so the obligation is EXPLICITLY UNMET, exactly like Task 32's unexecutable surfaces.
+    // The two rejections below close the only other door: a person cannot stand in for the machine.
+    const fixture = await setup({ obligation: { accessibilityMethod: "automated-analysis" }, testCase: { coverage: { accessibilityMethod: "automated-analysis" } } });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], satisfied: [] });
+    await expect(recordHumanAttestation({ root: fixture.root, runId: fixture.runId, obligationId: "COV-SAVE", ...attested, method: "automated-analysis" }))
+      .rejects.toThrow(/manual evaluation only/i);
+    await expect(recordHumanAttestation({ root: fixture.root, runId: fixture.runId, obligationId: "COV-SAVE", ...attested }))
+      .rejects.toThrow(/method must equal/i);
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"] });
   });
 });
 

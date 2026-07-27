@@ -21,8 +21,10 @@ import { recordHumanAttestation } from "../../src/operations/record-human-attest
  * immutable signed claim that an evaluation no machine performed was actually carried out", and the
  * only thing CONTEXT.md:438 says can satisfy a MANUAL Accessibility Obligation.
  *
- * Task 34 builds the shape and its producer; Task 35 changes what satisfies an obligation. Nothing
- * here asserts anything about coverage crediting — `matchesObligation` still compares labels.
+ * This suite covers the SHAPE and its producer: that an attestation is honest about what it binds to
+ * and who made it. Nothing here asserts anything about coverage crediting — what an honest
+ * attestation then buys is the coverage layer's decision, pinned in `tests/planning/coverage.test.ts`
+ * and both readers' suites.
  */
 
 const roots: string[] = [];

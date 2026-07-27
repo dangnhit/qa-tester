@@ -101,6 +101,17 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   // parameter and this function registers nothing, so the pool is invariant for the whole call: the
   // index built here serves exactly the array `valuesOf("test-case")` returned, in that order.
   const casesByIdentity = indexByTestCaseIdentity(valuesOf("test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
+  // The obligation BYTES every registered Human Attestation attests to (CONTEXT.md:438). The join key
+  // is the checksum, not `obligationId`, because obligation ids are not unique across a workspace —
+  // `obligationSha256` is the byte-exact binding the artifact carries precisely so a reader need not
+  // trust an id. This reader is fail-OPEN and re-validates nothing: an attestation whose checksum is
+  // missing or malformed contributes no credit, which is the only direction a bad attestation can
+  // move the gate. A SEMANTICALLY invalid one (wrong method, unbound obligation) cannot reach a READY
+  // gate either — it lands in `validationDiagnostics`, which fails VALID_ARTIFACTS outright.
+  const attestedObligationChecksums = new Set(valuesOf("human-attestation").flatMap((artifact) => {
+    const checksum = string(artifact.value.obligationSha256);
+    return checksum === undefined ? [] : [checksum];
+  }));
   const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {
     const value = artifact.value;
     const analysis = source.find((candidate) => candidate.record.id === value.requirementAnalysisArtifactId && candidate.record.type === "requirement-analysis");
@@ -115,7 +126,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (geometry === undefined) return [];
     const fields = [value.obligationId, value.requirementId, value.role, value.behavior, value.risk, value.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
+    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) }];
   });
   /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
    *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
@@ -143,7 +154,10 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     // Phase 7 obligation (see CoverageAttempt#executionSurface in planning/coverage.ts): this hardcoded
     // "browser" literal must become a real read off the observed-execution record once test-case.coverage
     // stops being browser-only, or a non-browser batch entry will mis-credit a browser obligation.
-    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, observedEngine, viewport: geometry.viewport, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
+    // `dimensions.accessibilityMethod` is the SECOND declared label this reader now drops on the floor
+    // (after `geometry.browser`): an attempt cannot address an Accessibility Obligation at all, so the
+    // test case's own label is neither necessary nor sufficient for any credit (CONTEXT.md:439).
+    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, observedEngine, viewport: geometry.viewport, risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
   };
   const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
     .flatMap((artifact) => asAttempt(artifact.value.attemptId, artifact.value.status, artifact.value));

@@ -224,12 +224,23 @@ method at all. Otherwise pick exactly one of the four evaluation categories:
 | `"screen-reader"` | a person evaluating with a screen reader |
 | `"cognitive-manual"` | a person's cognitive / manual review |
 
-A label outside that list is rejected. An arbitrary string in a checksummed audit record is a claim
-nothing can check, and an accessibility obligation is credited by comparing this value — so a private
-label would credit itself. Note also that **this runtime ships no accessibility scanner**: an
-`"automated-analysis"` obligation has no machine artifact that could satisfy it and stays explicitly
-unmet, exactly like an obligation on an unexecutable surface. A manual method is recorded by a person
-with `qa-skill attestation record` (see below), which writes a `human-attestation` artifact.
+A label outside that list is rejected: an arbitrary string in a checksummed audit record is a claim
+nothing can check.
+
+**Declaring any method other than `null` makes this an accessibility obligation, and a passing test
+result can no longer satisfy it.** A test case declaring the same method back at it earns nothing —
+that is two labels agreeing with each other, with no screen reader, no human, and no artifact
+anywhere in the run. Concretely:
+
+- a **manual** method (`keyboard`, `screen-reader`, `cognitive-manual`) is satisfied only by a
+  `human-attestation` bound to that obligation, recorded by a person with `qa-skill attestation
+  record` (see below);
+- `"automated-analysis"` is satisfied only by a machine artifact, and **this runtime ships no
+  accessibility scanner** — so it stays explicitly unmet, exactly like an obligation on an
+  unexecutable surface.
+
+So an unattested `required` accessibility obligation blocks the release with `NOT_READY`, and an
+optional one appears as a coverage gap. Write `null` unless you mean that.
 
 Minimal valid example:
 

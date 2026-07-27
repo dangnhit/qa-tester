@@ -19,8 +19,7 @@ export function asExecutionSurface(value: unknown): ExecutionSurface | undefined
  * The accessibility evaluation methods an Accessibility Obligation may name. These are exactly
  * CONTEXT.md:437's four categories — "automated analysis, keyboard evaluation, screen-reader
  * evaluation, and cognitive/manual review" — and nothing else: a free-form label in a checksummed
- * audit record is a claim nothing can check, and until Task 35 lands, label equality is what credits
- * the obligation (CONTEXT.md:439 is the rule that forbids exactly that).
+ * audit record is a claim nothing can check.
  *
  * `null`, deliberately NOT a member here, is how an obligation says it names no accessibility method
  * at all — the common case. It stays a different JSON type rather than a fifth enum member so that
@@ -59,12 +58,17 @@ export type CoverageObligation = {
   /** Browser-surface only. Absent on every other surface — the schema forbids it there. */
   viewport?: { width: number; height: number } | undefined;
   /**
-   * Deliberately still `string`, not `AccessibilityMethod`, even though the schema is now an enum.
-   * Both readers project this with `string(value.accessibilityMethod)`, which maps `null` to
-   * `undefined` and passes any other string through. Narrowing the type here would need either an
-   * unchecked cast (a lie) or a runtime narrow that silently drops an unrecognised label — and
-   * dropping it would change what `matchesObligation` credits. What an accessibility obligation is
-   * satisfied by is Task 35's decision, so this stays as wide as the reader actually is.
+   * The declaration that makes this an ACCESSIBILITY OBLIGATION. `undefined` (projected from the
+   * schema's `null`) means it is not one at all — the common case — and is the ONLY value an attempt
+   * can address. Any other value routes the obligation to the attestation path, where a declared
+   * label can never satisfy itself (CONTEXT.md:439).
+   *
+   * Deliberately still `string`, not `AccessibilityMethod`, even though the schema is an enum, and
+   * now for a sharper reason than before: narrowing would need either an unchecked cast (a lie) or a
+   * runtime narrow that maps an unrecognised label to `undefined` — and `undefined` is exactly the
+   * value that re-opens the attempt path. A tampered or hand-authored `"manual-keyboard"` would then
+   * be CREDITED by a passing browser attempt. The wide type is what keeps every non-`undefined`
+   * label unsatisfiable-by-attempt, so it stays as wide as the readers actually are.
    */
   accessibilityMethod?: string | undefined;
   risk: string;
@@ -131,22 +135,52 @@ export type CoverageAttempt = {
    * sequenced before or alongside that producer, not merely sometime after it.
    */
   viewport?: { width: number; height: number } | undefined;
-  /**
-   * DECLARED, and the last declared-value slot of the kind Task 33 removed for the engine: this is
-   * read straight off `test-case.coverage.accessibilityMethod`, so `matchesObligation` comparing it to
-   * the obligation's is one declared label matching another — exactly what CONTEXT.md:439 forbids.
-   * Constraining both sides to an enum (Task 34) narrows what those labels may say but does not fix
-   * that; removing this field, and making a manual obligation require a `human-attestation` instead,
-   * is Task 35's job. Same `string`-not-`AccessibilityMethod` reasoning as the obligation's field.
-   */
-  accessibilityMethod?: string | undefined;
+  // There is deliberately NO `accessibilityMethod` here, for the same reason there is no declared
+  // engine (CONTEXT.md:442, `observedEngine` above). It used to be read straight off
+  // `test-case.coverage.accessibilityMethod` and compared to the obligation's, which is one declared
+  // label matching another — exactly what CONTEXT.md:439 forbids. An attempt now cannot address an
+  // Accessibility Obligation at all (see `matchesObligation`), so the slot has no reader left, and
+  // leaving it would only let a future one reach for it. `test-case.coverage.accessibilityMethod`
+  // still exists and is still validated by the schema; both readers now drop it on the floor.
   risk: string;
   outcome: string;
 };
 
-/** A coverage obligation after its requirement-analysis provenance has been resolved. */
+/** A coverage obligation after its requirement-analysis provenance AND its Human Attestation have
+ *  been resolved from the workspace. */
 export type ResolvedCoverageObligation = CoverageObligation & {
   authoritativeRequirement: boolean;
+  /**
+   * A registered, valid `human-attestation` names THIS obligation artifact's exact immutable bytes.
+   *
+   * A boolean per obligation rather than a list of attestations passed alongside `evaluateCoverage`,
+   * because that is all this layer needs and because the join belongs to the readers: they hold the
+   * artifact RECORD, so they can match `attestation.obligationSha256` against the obligation's own
+   * checksum. A list reaching `evaluateCoverage` would have to be keyed by `obligationId` — the only
+   * identity this layer has — and that id is NOT unique across a workspace (`coverageObligationRule`
+   * never checks it), so one attestation could credit an unrelated obligation that happens to share
+   * an id. Joining in the reader keeps the byte-exact binding `obligationSha256` exists for.
+   *
+   * What this field does NOT re-verify, because Task 34's semantic rule already guarantees it for
+   * any attestation that validates: that it binds exactly one registered `coverage-obligation` by
+   * relationship, that its checksum matches, and that its `method` equals the obligation's declared
+   * `accessibilityMethod`. Its schema additionally admits only the three MANUAL methods, so `true`
+   * here can only ever mean "a person carried out the manual evaluation this obligation names".
+   * Every live entry point feeds these readers artifacts that have passed that validation
+   * (`readRegisteredArtifacts` throws on any diagnostic and returns only valid records; the
+   * `release-gate` rule re-derives from the cascade-sensitive valid pool).
+   *
+   * A boolean also settles what TWO attestations for one obligation mean, which stops being inert the
+   * moment attestations are load-bearing: nothing. Credit is set membership, so N attestations grant
+   * exactly what one does, and `human-attestation` carries no verdict field — no `passed`, no
+   * `blocked` — so a second attestation cannot contradict the first. Both say the same kind of thing
+   * ("I carried out this evaluation"), and a second person saying it does not weaken the first; both
+   * artifacts stay immutable and independently auditable. Forbidding duplicates would need a
+   * uniqueness clause in a rule this task deliberately does not touch, and would buy nothing. What
+   * WOULD make duplicates load-bearing is a negative attestation or a quorum policy; neither exists,
+   * and whoever adds one must revisit this line before doing so.
+   */
+  humanAttested: boolean;
 };
 
 export type CoverageEvaluation = {
@@ -176,6 +210,13 @@ function matchesBrowserDimensions(attempt: CoverageAttempt, obligation: Coverage
 }
 
 function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
+  // An Accessibility Obligation is never addressed by an attempt — CONTEXT.md:438 says "only by",
+  // and a passing browser attempt is evidence about a browser interaction, not about a screen-reader
+  // or keyboard evaluation. This clause replaces `attempt.accessibilityMethod ===
+  // obligation.accessibilityMethod`, which credited an obligation whenever a test case declared the
+  // same label back at it (CONTEXT.md:439). Whether the obligation is satisfiable at all is decided
+  // in `evaluateCoverage` below; here it is simply out of the attempt path.
+  if (obligation.accessibilityMethod !== undefined) return false;
   // An attempt may only address an obligation on the surface the attempt actually has: a browser run
   // is not evidence about an API, a unit suite, or a manual review.
   return attempt.executionSurface === obligation.executionSurface
@@ -183,9 +224,31 @@ function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligat
     && attempt.requirementId === obligation.requirementId
     && attempt.role === obligation.role
     && attempt.behavior === obligation.behavior
-    && attempt.accessibilityMethod === obligation.accessibilityMethod
     && attempt.risk === obligation.risk
     && attempt.outcome === obligation.outcome;
+}
+
+/**
+ * The satisfier of an Accessibility Obligation (CONTEXT.md:438) — the whole of it.
+ *
+ * A MANUAL method (`keyboard`, `screen-reader`, `cognitive-manual`) is satisfied by a Human
+ * Attestation bound to this obligation's exact bytes, and by nothing else.
+ *
+ * `automated-analysis` is satisfiable by NOTHING today, and falls out of this expression rather than
+ * needing a clause: no `human-attestation` can name it (its schema admits only the manual three, and
+ * its rule demands equality with the obligation's declared method), so `humanAttested` can never be
+ * true for one. What would satisfy it is a machine-produced artifact from an accessibility scanner
+ * run against the product — an axe/Lighthouse-style analysis registered as its own evidence-bearing
+ * artifact type, carrying the ruleset, its version, and the violations found. No such scanner, and
+ * no such artifact type, exists in this repo; inventing a stand-in would be the same
+ * credit-without-evidence defect in a new costume. Until one ships, such an obligation is EXPLICITLY
+ * UNMET, exactly like an Execution Surface no executor covers (CONTEXT.md:445).
+ *
+ * An unrecognised label — reachable because `accessibilityMethod` is deliberately typed `string` —
+ * is unsatisfiable for the same reason, and that is the correct fail-closed answer.
+ */
+function satisfiedByAttestation(obligation: ResolvedCoverageObligation): boolean {
+  return obligation.accessibilityMethod !== undefined && obligation.humanAttested;
 }
 
 /**
@@ -197,7 +260,16 @@ export function evaluateCoverage(
   obligations: readonly ResolvedCoverageObligation[],
   attempts: readonly CoverageAttempt[],
 ): CoverageEvaluation {
-  const satisfied = new Set<string>();
+  // Attested Accessibility Obligations first, and separately: they are satisfied by an artifact, not
+  // by an attempt, so they contribute NOTHING to `qualifyingAttemptIds` below. There is no attempt to
+  // report — a Human Attestation records an evaluation a machine never performed — and that field's
+  // id namespace already mixes `test-result.attemptId` with `test-result-batch` entry ids, so
+  // stuffing an attestation id into it would make an already-ambiguous key unresolvable. The
+  // authority gate is the same one the attempt path applies: it is about the REQUIREMENT, not about
+  // how the requirement was evidenced.
+  const satisfied = new Set(obligations
+    .filter((obligation) => obligation.authoritativeRequirement && satisfiedByAttestation(obligation))
+    .map((obligation) => obligation.obligationId));
   const qualifyingAttemptIds = new Set<string>();
   const obligationIds = new Set(obligations.map((obligation) => obligation.obligationId));
   for (const attempt of attempts) {

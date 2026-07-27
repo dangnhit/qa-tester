@@ -15,6 +15,8 @@ const obligation = {
   required: true,
   outcome: "confirmation shown",
   authoritativeRequirement: true,
+  // Not an Accessibility Obligation (`accessibilityMethod: undefined`), so nothing attests to it.
+  humanAttested: false,
 };
 
 function matchingAttempt(overrides: Record<string, unknown> = {}) {
@@ -31,7 +33,6 @@ function matchingAttempt(overrides: Record<string, unknown> = {}) {
     // the two field names differ on purpose, so a reader can never confuse which side is which.
     observedEngine: obligation.browser,
     viewport: obligation.viewport,
-    accessibilityMethod: obligation.accessibilityMethod,
     risk: obligation.risk,
     outcome: obligation.outcome,
     ...overrides,
@@ -60,13 +61,16 @@ describe("evaluateCoverage", () => {
     expect(evaluation.complete).toBe(false);
   });
 
+  // "accessibility method" was a row here until CONTEXT.md:439 was enforced. It cannot be one now:
+  // an attempt has no `accessibilityMethod` to mismatch WITH, because it cannot address an
+  // Accessibility Obligation at all. Both halves of what replaced it — the label buying no credit,
+  // and the label vetoing none — are pinned in "evaluateCoverage — accessibility obligations".
   it.each([
     ["requirement", { requirementId: "REQ-OTHER" }],
     ["role", { role: "admin" }],
     ["behavior", { behavior: "delete profile" }],
     ["observed engine", { observedEngine: "webkit" }],
     ["viewport", { viewport: { width: 390, height: 844 } }],
-    ["accessibility method", { accessibilityMethod: "keyboard" }],
     ["risk", { risk: "low" }],
     ["outcome", { outcome: "redirected" }],
   ])("does not satisfy an obligation with a mismatched %s", (_dimension, mismatch) => {
@@ -98,6 +102,114 @@ describe("evaluateCoverage", () => {
   });
 });
 
+/**
+ * CONTEXT.md:438 — "An automated Accessibility Obligation is satisfied only by a machine-produced
+ * artifact, and a manual one only by a Human Attestation." CONTEXT.md:439 — "A declared evaluation
+ * method never satisfies an Accessibility Obligation by matching its own label."
+ *
+ * Before this change `matchesObligation` compared `attempt.accessibilityMethod ===
+ * obligation.accessibilityMethod`: two DECLARED labels agreeing with each other, with no screen
+ * reader, no human, and no artifact anywhere in the run. The kill test below is that defect; the one
+ * after it is the converse, and credits the obligation with no passing attempt in the set at all —
+ * so the attestation is demonstrably doing the work rather than merely accompanying an attempt.
+ */
+describe("evaluateCoverage — accessibility obligations", () => {
+  /** A MANUAL Accessibility Obligation: the only thing that can satisfy it is a Human Attestation. */
+  const screenReader = { ...obligation, obligationId: "COV-SAVE-SCREEN-READER", accessibilityMethod: "screen-reader" };
+
+  it("does not credit a screen-reader obligation from a passing attempt declaring screen-reader, with no attestation", () => {
+    // The attempt agrees on EVERY other dimension and carries the very label the old matcher
+    // compared — smuggled on exactly as the declared-engine test smuggles `browser`, because the
+    // field no longer exists on `CoverageAttempt`. Nothing in this evaluation is a screen reader,
+    // a human, or an artifact: the obligation must stay unmet.
+    const evaluation = evaluateCoverage([screenReader], [matchingAttempt({ accessibilityMethod: "screen-reader" })]);
+
+    expect(evaluation.satisfied).toEqual([]);
+    expect(evaluation.missing).toEqual([screenReader.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual([]);
+    expect(evaluation.complete).toBe(false);
+  });
+
+  it("credits that same obligation from its Human Attestation with no passing attempt at all", () => {
+    const evaluation = evaluateCoverage([{ ...screenReader, humanAttested: true }], []);
+
+    expect(evaluation.satisfied).toEqual([screenReader.obligationId]);
+    expect(evaluation.missing).toEqual([]);
+    expect(evaluation.complete).toBe(true);
+  });
+
+  it("credits an attested obligation without qualifying the attempt that happened to run beside it", () => {
+    // An attestation contains no attempt, so no attempt id may be reported as qualifying for it.
+    const evaluation = evaluateCoverage([{ ...screenReader, humanAttested: true }], [matchingAttempt({ accessibilityMethod: "screen-reader" })]);
+
+    expect(evaluation.satisfied).toEqual([screenReader.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual([]);
+  });
+
+  it("does not credit an attested obligation whose requirement is not authoritative", () => {
+    // The authority gate is about the REQUIREMENT, not about how it was evidenced, so it applies to
+    // the attestation path exactly as it applies to the attempt path.
+    const evaluation = evaluateCoverage([{ ...screenReader, humanAttested: true, authoritativeRequirement: false }], []);
+
+    expect(evaluation.satisfied).toEqual([]);
+    expect(evaluation.missing).toEqual([screenReader.obligationId]);
+  });
+
+  it("does not let an attestation for one obligation satisfy another declaring the same method", () => {
+    const attested = { ...screenReader, obligationId: "COV-OTHER-SCREEN-READER", behavior: "delete profile", humanAttested: true };
+
+    const evaluation = evaluateCoverage([screenReader, attested], [matchingAttempt({ accessibilityMethod: "screen-reader" })]);
+
+    expect(evaluation.satisfied).toEqual([attested.obligationId]);
+    expect(evaluation.missing).toEqual([screenReader.obligationId]);
+  });
+
+  /** `automated-analysis` is satisfiable by nothing in this repo today — there is no accessibility
+   *  scanner, no dependency, and no evidence kind for a scan result — so it must be EXPLICITLY
+   *  UNMET, exactly like Task 32's unexecutable surfaces. An unrecognised label is treated the same
+   *  way and for a stronger reason: no Human Attestation can ever name it (the attestation schema
+   *  admits only the three manual members and its rule demands equality with the obligation's
+   *  declared method), so nothing can satisfy it either. */
+  it.each(["automated-analysis", "manual-keyboard"])("never credits an obligation declaring %s from an attempt declaring the same", (method) => {
+    const evaluation = evaluateCoverage([{ ...screenReader, accessibilityMethod: method }], [matchingAttempt({ accessibilityMethod: method })]);
+
+    expect(evaluation.satisfied).toEqual([]);
+    expect(evaluation.missing).toEqual([screenReader.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual([]);
+  });
+
+  /** The no-regression pin for the common case: `accessibilityMethod: null` (projected to
+   *  `undefined`) is NOT an Accessibility Obligation at all, and keeps being satisfied by a matching
+   *  passing attempt with no attestation anywhere. */
+  it("still satisfies a null-method obligation from a passing attempt, with nothing attested", () => {
+    const evaluation = evaluateCoverage([obligation], [matchingAttempt()]);
+
+    expect(evaluation.satisfied).toEqual([obligation.obligationId]);
+    expect(evaluation.missing).toEqual([]);
+    expect(evaluation.qualifyingAttemptIds).toEqual(["ATTEMPT-PASS"]);
+  });
+
+  it("still satisfies a null-method obligation when the test case declares a method of its own", () => {
+    // The mirror of the kill test, and the reason the attempt's declared slot is gone rather than
+    // merely unused: a declared label can no more VETO a credit the run earned than it can BUY one
+    // it did not. The obligation asks for no accessibility evaluation, so the label is not a
+    // coverage dimension here — it is a fact about the test case that the gate does not consult.
+    const evaluation = evaluateCoverage([obligation], [matchingAttempt({ accessibilityMethod: "keyboard" })]);
+
+    expect(evaluation.satisfied).toEqual([obligation.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual(["ATTEMPT-PASS"]);
+  });
+
+  it("does not credit a null-method obligation from an attestation alone", () => {
+    // Defence in depth: no valid attestation can bind an obligation declaring no method (Task 34's
+    // rule rejects it), so this record could only arise from a bug. It must still take an attempt.
+    const evaluation = evaluateCoverage([{ ...obligation, humanAttested: true }], []);
+
+    expect(evaluation.satisfied).toEqual([]);
+    expect(evaluation.missing).toEqual([obligation.obligationId]);
+  });
+});
+
 /** An obligation declares exactly one Execution Surface (CONTEXT.md:443). The runtime executes only
  *  the browser surface, so every other surface is authorable but unexecuted — and must therefore stay
  *  EXPLICITLY UNMET rather than quietly vanish (CONTEXT.md:445). */
@@ -114,6 +226,7 @@ describe("evaluateCoverage — execution surfaces", () => {
     required: true,
     outcome: "confirmation shown",
     authoritativeRequirement: true,
+    humanAttested: false,
   };
 
   // RENAMED (was "reports a required non-browser obligation as MISSING, never as absent, when nothing
@@ -154,7 +267,7 @@ describe("evaluateCoverage — execution surfaces", () => {
     const apiAttempt = {
       attemptId: "ATTEMPT-API", status: "PASSED", executionSurface: "api" as const,
       requirementId: apiObligation.requirementId, role: apiObligation.role, behavior: apiObligation.behavior,
-      accessibilityMethod: apiObligation.accessibilityMethod, risk: apiObligation.risk, outcome: apiObligation.outcome,
+      risk: apiObligation.risk, outcome: apiObligation.outcome,
     };
 
     const evaluation = evaluateCoverage([apiObligation], [apiAttempt]);

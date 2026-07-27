@@ -411,13 +411,18 @@ const testResultBatchRule: SemanticRule = {
  *  because CONTEXT.md:438 makes a Human Attestation the satisfier of a specific manual method, not a
  *  free-floating claim.
  *
+ *  This rule is what the coverage layer relies on and does not re-check: `evaluateCoverage` credits a
+ *  manual Accessibility Obligation from a bound attestation (CONTEXT.md:438) without re-verifying the
+ *  relationship, the checksum, or the method, because every clause below has already run on every
+ *  artifact either reader can see. See `ResolvedCoverageObligation#humanAttested`.
+ *
  *  Two things this rule deliberately does NOT check. There is no `value.runId !== ctx.runId` clause:
  *  BOTH paths already enforce that universally for any artifact carrying a `runId`
  *  (`assertArtifactBinding` on write, `inspectWorkspaceState`'s per-artifact loop on read), so a
  *  clause here would be unreachable — and a test naming it would pass for the universal check's
- *  reason, not this rule's. And nothing here says an attestation SATISFIES its obligation: Task 35
- *  owns what satisfies an Accessibility Obligation, and `matchesObligation` still compares
- *  `accessibilityMethod` labels until it lands. This rule only makes the artifact honest. */
+ *  reason, not this rule's. And nothing here says an attestation SATISFIES its obligation: that is
+ *  the coverage layer's decision, made in `evaluateCoverage`. This rule only makes the artifact
+ *  honest; what an honest artifact then buys is decided elsewhere. */
 const humanAttestationRule: SemanticRule = {
   type: "human-attestation",
   appliesTo: { write: true, read: true },

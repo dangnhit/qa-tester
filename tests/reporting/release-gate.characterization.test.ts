@@ -349,20 +349,28 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
   });
 
   /** Byte-identity pin: a workspace with NO batch must produce exactly the gate it produced before
-   *  `test-result-batch` existed. The literal below was captured from the pre-change code. */
+   *  `test-result-batch` existed. The literal below was captured from the pre-change code.
+   *
+   *  The fixture's `accessibilityMethod` was `"keyboard"` on both the obligation and the test case
+   *  until CONTEXT.md:438 was enforced; it is `null` now. That is an INPUT change, not an expectation
+   *  change — the expected literal below is byte-for-byte the one captured originally, because
+   *  `accessibilityMethod` appears nowhere in a gate. The old fixture credited COV-SAVE by matching
+   *  one declared label against another, which is precisely the defect; keeping it would have made
+   *  this pin assert NOT_READY and stop pinning what it was written to pin (a satisfied browser
+   *  obligation yielding a READY gate, unchanged by the arrival of `test-result-batch`). */
   it("produces byte-identical gate output for a workspace containing no batches", () => {
     const noBatch = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("requirement-analysis", { statements: [{ requirementId: "REQ-SAVE", authority: "AUTHORITATIVE" }] }, "RA-1"),
       artifact("coverage-obligation", {
         obligationId: "COV-SAVE", requirementAnalysisArtifactId: "RA-1", required: true, executionSurface: "browser",
         requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
-        viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+        viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", outcome: "confirmation shown",
       }, "OBL-1"),
       artifact("test-case", {
         testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1",
         coverage: {
           requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
-          viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+          viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", outcome: "confirmation shown",
         },
       }, "TC-1"),
       artifact("test-result", {
