@@ -293,12 +293,53 @@ refuses unless exactly one registered obligation carries that `obligationId`, an
 obligation declares the same `accessibilityMethod`. `--statement` is the substance of the claim and
 must actually say something — without it the record only shows that somebody pressed a button.
 
-**Run this before `qa-skill report generate`, never after.** A release gate is an immutable snapshot of
-every artifact registered up to the moment it is generated; registering a `human-attestation` afterward
-changes what a re-derivation of the gate would produce, so the persisted gate permanently mismatches and
-gets flagged (`ARTIFACT_BINDING`) the next time the workspace is read. `generate-qa-report` also refuses
-to run a second time in the same run (a gate and report are generated once), so there is no regenerate-
-to-fix-it path — see [recovery](./recovery.md#attestation-after-the-gate-is-generated) if this happens.
+### There is no run position where this command both binds and counts
+
+This is a real gap in the shipped release, stated here rather than papered over.
+
+**There is no `qa-skill report generate`.** The whole command set is `init`, `run create`, `skills
+list|install|verify|update|uninstall`, `workflow run|scaffold|bootstrap`, `runtime verify`,
+`schema show`, `draft init`, `fingerprint`, `artifact ingest`, `approval record`, `attestation record`,
+and `validate` (`src/cli/program.ts`). The release gate and the QA report are written by the
+`generate-qa-report` **operation**, which runs only inside `qa-skill workflow run`, and only in `full`
+and `regression` modes (`src/core/modes.ts`).
+
+That operation leaves no gap to step into:
+
+- `qa-skill workflow run` registers the coverage obligations, runs every operation for the mode,
+  generates the gate, and finalizes the run — all in one process invocation, with no pause anywhere in
+  between (`runQaTesterWithAdapters`, `src/operations/run-workflow.ts`). **Before** that invocation the
+  obligation does not exist in the run, so `attestation record` refuses it ("Human attestation requires
+  exactly one registered coverage obligation carrying that obligation ID"). **After** it the run is
+  terminal and every write is refused with `TERMINAL_WORKSPACE` ("Terminal workspace is immutable",
+  `src/core/run-workspace.ts`).
+- Staging one earlier does not work. `qa-skill workflow bootstrap` finalizes its `plan` run too, and
+  `human-attestation` is not one of the four canonical planning types (`requirement-analysis`,
+  `test-plan`, `test-case`, `coverage-obligation`), so it is neither carried into a later run by a
+  bundle import nor tolerated by `workflow scaffold`, which rejects any source run holding a
+  non-planning artifact.
+- `qa-skill run create` **does** give you a non-terminal run that will accept an ingested
+  `coverage-obligation` and then an attestation against it. But nothing in the package generates a gate
+  for a run built that way — `generate-qa-report` only ever runs from `workflow run` — so the
+  attestation is recorded and never read by a gate.
+
+**The consequence, plainly:** a coverage obligation with `required: true` and a manual
+`accessibilityMethod` cannot be satisfied by any shipped command sequence today. It reports as required
+coverage missing, and every `full` run carrying one gates `NOT_READY`. Authoring it with
+`required: false` instead reports it as an optional gap, letting the run reach `READY_WITH_RISKS` — that
+is an honest "this was not covered", not a pass, and it is the only other option this release offers.
+
+The **human checkpoint** that would make the command reachable — a workflow pause after the obligations
+are registered and before the gate is generated — is Phase 7 work
+(`docs/superpowers/plans/2026-07-24-production-readiness.md`). It is deliberately not in this release.
+
+**When a checkpoint does land, it must still register the attestation before the gate exists.** A
+release gate is an immutable snapshot of every artifact registered up to the moment it is generated;
+registering a `human-attestation` afterward changes what a re-derivation of the gate would produce, so
+the persisted gate permanently mismatches and gets flagged (`ARTIFACT_BINDING`) the next time the
+workspace is read. `generate-qa-report` also refuses to run a second time in the same run (a gate and
+report are generated once), so there is no regenerate-to-fix-it path — see
+[recovery](./recovery.md#attestation-and-the-gate-there-is-no-position-between-them).
 
 ## CLI helpers
 

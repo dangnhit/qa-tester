@@ -121,28 +121,61 @@ never registers `evidence` at all — it holds only `requirement-analysis`, `tes
 let this section scare you off that pattern; the risk described above is specific to a linked source run
 that was itself **executed**, and therefore holds `evidence`, before the bump.
 
-## Attestation after the gate is generated
+## Attestation and the gate: there is no position between them
 
-`qa-skill attestation record` must run before `qa-skill report generate`, not after. A release gate
-(`release-gate` artifact) is an immutable snapshot: it is re-derived from, and checked against, every
-non-gate/non-report artifact registered in the run at read time (`releaseGateRule` in
-`src/core/semantic-rules.ts`). Registering a `human-attestation` after the gate exists changes what that
-re-derivation produces — `sourceArtifacts` gains the attestation, and `ruleInputs` changes if it clears an
-otherwise-unmet Accessibility Obligation — so the persisted gate no longer equals its own re-derivation.
-The next time anything reads the run (another CLI command, a re-open, a future `qa-skill workflow run`
-resume), that mismatch is caught and the gate is invalidated with `ARTIFACT_BINDING`.
+**There is no `qa-skill report generate` command.** Earlier revisions of this reference and of
+[artifact-authoring](./artifact-authoring.md) named one; it never existed. The commands this CLI
+actually has are `init`, `run create`, `skills list|install|verify|update|uninstall`,
+`workflow run|scaffold|bootstrap`, `runtime verify`, `schema show`, `draft init`, `fingerprint`,
+`artifact ingest`, `approval record`, `attestation record`, and `validate` (`src/cli/program.ts`). The
+`release-gate` and `qa-execution-report` artifacts are written by the `generate-qa-report` **operation**,
+which runs only inside `qa-skill workflow run`, and only in `full` and `regression` modes
+(`src/core/modes.ts`).
 
-There is no regenerate-in-place fix: `generateQaReport` (`src/operations/generate-qa-report.ts`) refuses
-to run a second time once a `release-gate` or `qa-execution-report` is already registered in the run, by
-design — a gate and report are meant to be generated exactly once. A run caught in this state is in the
-same position as the "artifacts from a run written by an older version" case above: nothing is repairable
-in place, because the artifact that would need to change (the gate) is immutable by contract. The remedy
-is procedural, not technical — record every Human Attestation the run needs *before* generating the
-report, not after.
+So the honest statement is stronger than an ordering rule: **`qa-skill attestation record` has no
+reachable position in a shipped workflow today.**
 
-This is not a new failure mode; it is true of any artifact registered after the gate. It is documented
-here because Task 35 put a human step (`qa-skill attestation record`) on the coverage path for the first
-time, so this ordering is newly reachable in ordinary use rather than a corner case.
+- `qa-skill workflow run` registers the coverage obligations, runs every operation for the mode,
+  generates the gate, and finalizes the run in a **single process invocation**
+  (`runQaTesterWithAdapters`, `src/operations/run-workflow.ts`) — there is no pause to step into.
+  Before it, the obligation is not in the run, and `attestation record` refuses ("Human attestation
+  requires exactly one registered coverage obligation carrying that obligation ID"). After it, the run
+  is terminal and refuses every write with `TERMINAL_WORKSPACE` ("Terminal workspace is immutable",
+  `src/core/run-workspace.ts`).
+- The one non-terminal early return, `AWAITING_RUNTIME` (see above), returns **before** the operation
+  loop runs `ingest-coverage-obligation`, so at that point there is still no obligation to attest to.
+  (It is also not reachable from the CLI at all: `qa-skill workflow run` always supplies the local
+  browser manager, and for `full` mode the local test-data registry, so `missingRuntimeLabel` never
+  fires — `AWAITING_RUNTIME` is a programmatic-`createQaTester` outcome.)
+- Staging an attestation in a bootstrap run does not carry it forward. `qa-skill workflow bootstrap`
+  finalizes its `plan` run too, and `human-attestation` is not one of the four canonical planning types,
+  so a bundle import will not bring it across and `workflow scaffold` rejects a source run that holds
+  one.
+- `qa-skill run create` gives a non-terminal run that accepts an ingested `coverage-obligation` and then
+  an attestation against it — but no command generates a gate for such a run, so nothing ever reads it.
+
+**What this costs:** a coverage obligation with `required: true` and a manual `accessibilityMethod` is
+not satisfiable by any shipped command sequence. It stays in `requiredMissing`, `REQUIRED_COVERAGE_COMPLETE`
+fails, and the run gates `NOT_READY` — permanently, for that run and every later one authored the same
+way. There is no recovery procedure for it, because there is nothing broken to recover: the runtime is
+refusing to credit an obligation nobody witnessed. Authoring the obligation with `required: false`
+instead reports it as an optional gap (`READY_WITH_RISKS`), which records "not covered" honestly rather
+than manufacturing a pass.
+
+The **human checkpoint** that would give the command a position — a workflow pause after the obligations
+are registered and before the gate is generated — is Phase 7 work
+(`docs/superpowers/plans/2026-07-24-production-readiness.md`), and is deliberately not in this release.
+
+**The ordering rule still stands for whatever lands next.** A release gate is an immutable snapshot: it
+is re-derived from, and checked against, every non-gate/non-report artifact registered in the run at read
+time (`releaseGateRule` in `src/core/semantic-rules.ts`). Registering a `human-attestation` after the
+gate exists changes what that re-derivation produces — `sourceArtifacts` gains the attestation, and
+`ruleInputs` changes if it clears an otherwise-unmet Accessibility Obligation — so the persisted gate no
+longer equals its own re-derivation, and the next read invalidates it with `ARTIFACT_BINDING`. There is
+no regenerate-in-place fix: `generateQaReport` (`src/operations/generate-qa-report.ts`) refuses to run a
+second time once a `release-gate` or `qa-execution-report` is registered, by design. Like the
+"artifacts from a run written by an older version" case above, nothing is repairable in place, because
+the artifact that would need to change is immutable by contract.
 
 ## Check the JSON body, not just the exit code
 
