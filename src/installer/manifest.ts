@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { sha256Text } from "../core/checksum.js";
 
 export const manifestFilename = ".qa-skill-manifest.json";
-export const runtimeVersion = "0.1.0";
+export const runtimeVersion = "0.2.0";
 export const runtimeCompatibility = ">=0.1.0 <1.0.0";
 
 export type ManifestFile = Readonly<{ path: string; sha256: string }>;
