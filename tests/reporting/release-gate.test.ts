@@ -87,7 +87,18 @@ describe("evaluateReleaseGate", () => {
     expect(result.recommendation).toBe("READY");
   });
 
-  it("does not let a browser attempt credit an obligation on a different surface", () => {
+  // RENAMED (was "does not let a browser attempt credit an obligation on a different surface"): this is
+  // an END-TO-END CHARACTERIZATION, not an isolation of the surface check. The resolver above always
+  // drops `browser`/`viewport` for a non-browser obligation (`geometry = surface === "browser" ?
+  // browserDimensions(value) : {}`), so the derived attempt's `browser: "chromium"` can never equal this
+  // obligation's `browser: undefined` — even matching stripped of all surface-awareness would still
+  // reject this pair, for that reason alone. What isolates the surface check itself, with that confound
+  // removed by smuggling matching geometry onto a plain object, is `tests/planning/coverage.test.ts`'s
+  // "does not let a browser attempt satisfy a non-browser obligation matching on every other dimension"
+  // and "decides on the surface alone, even when browser dimensions would otherwise line up exactly".
+  // This test still earns its place: it pins the full `deriveReleaseGateFromWorkspaceArtifacts` pipeline's
+  // observable outcome (NOT_READY, COV-API missing), which those unit tests never exercise.
+  it("does not let a browser attempt credit an obligation on a different surface, end to end", () => {
     const dimensions = {
       requirementId: "REQ-API", role: "member", behavior: "save profile", browser: "chromium",
       viewport: { width: 1440, height: 900 }, risk: "high", outcome: "confirmation shown",

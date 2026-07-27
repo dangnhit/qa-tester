@@ -52,6 +52,9 @@ function dimensions(value: Readonly<Record<string, unknown>>): CoverageDimension
   if (!isRecord(coverage)) throw new QaSkillsError("Registered test case has no immutable coverage dimensions", "ARTIFACT_BINDING");
   // The attempt's surface is DERIVED, never declared (CONTEXT.md:444, CoverageAttempt#executionSurface).
   // It is applied AFTER the spread so a test case can never talk its way onto another surface.
+  // Phase 7 obligation (see CoverageAttempt#executionSurface): this hardcoded "browser" literal must
+  // become a real read off the observed-execution record once test-case.coverage stops being
+  // browser-only, or a non-browser batch entry will mis-credit a browser obligation.
   return asObligation({ ...coverage, executionSurface: "browser", obligationId: "resolved", required: true });
 }
 

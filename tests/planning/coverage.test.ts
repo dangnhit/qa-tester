@@ -93,7 +93,15 @@ describe("evaluateCoverage — execution surfaces", () => {
     authoritativeRequirement: true,
   };
 
-  it("reports a required non-browser obligation as MISSING, never as absent, when nothing executes it", () => {
+  // RENAMED (was "reports a required non-browser obligation as MISSING, never as absent, when nothing
+  // executes it"): with zero attempts, matchesObligation is never reached, so this cannot exercise —
+  // and never did exercise — anything surface-specific. evaluateCoverage never drops an obligation from
+  // the list it is handed; only the resolver (release-gate.ts / evaluate-workspace-coverage.ts) can do
+  // that, and the guarantee that a non-browser obligation actually reaches this list, rather than being
+  // dropped beforehand, is covered there (release-gate.test.ts's "keeps a required obligation on an
+  // unexecutable surface explicitly unmet, never absent", and workspace-coverage.test.ts). What remains
+  // true and worth pinning here is the surface-independent baseline this test now names honestly.
+  it("reports a required obligation as missing when it has no attempts at all, regardless of surface", () => {
     const evaluation = evaluateCoverage([apiObligation], []);
 
     expect(evaluation.missing).toEqual([apiObligation.obligationId]);
@@ -102,7 +110,14 @@ describe("evaluateCoverage — execution surfaces", () => {
   });
 
   it("does not let a browser attempt satisfy a non-browser obligation matching on every other dimension", () => {
-    const evaluation = evaluateCoverage([apiObligation], [matchingAttempt()]);
+    // Every OTHER dimension must genuinely agree, including browser + viewport — otherwise this would
+    // pass merely because `attempt.browser !== obligation.browser` ("chromium" vs `undefined`), without
+    // the surface check ever being exercised. Smuggling matching geometry on (illegal in a real artifact;
+    // the schema forbids it — see "decides on the surface alone" below) is the only way to close that
+    // gap in a plain-object unit test.
+    const fullyMatchingApiObligation = { ...apiObligation, browser: obligation.browser, viewport: obligation.viewport };
+
+    const evaluation = evaluateCoverage([fullyMatchingApiObligation], [matchingAttempt()]);
 
     expect(evaluation.satisfied).toEqual([]);
     expect(evaluation.missing).toEqual([apiObligation.obligationId]);
@@ -138,7 +153,13 @@ describe("evaluateCoverage — execution surfaces", () => {
   });
 
   it("keeps crediting the browser obligation in a mixed set while the non-browser one stays unmet", () => {
-    const evaluation = evaluateCoverage([obligation, apiObligation], [matchingAttempt()]);
+    // As above: the api obligation must genuinely match on every dimension other than surface, or the
+    // browser attempt's own `browser`/`viewport` mismatch against an undefined obligation `browser`
+    // would reject it for that reason alone, leaving the mixed-set claim this test's name makes
+    // untested — it would pass even with the surface check deleted outright.
+    const fullyMatchingApiObligation = { ...apiObligation, browser: obligation.browser, viewport: obligation.viewport };
+
+    const evaluation = evaluateCoverage([obligation, fullyMatchingApiObligation], [matchingAttempt()]);
 
     expect(evaluation.satisfied).toEqual([obligation.obligationId]);
     expect(evaluation.missing).toEqual([apiObligation.obligationId]);

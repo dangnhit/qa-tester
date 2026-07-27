@@ -47,6 +47,14 @@ export type CoverageAttempt = {
    * value, because the only dimensions any attempt can carry come from `test-case.coverage`, which is
    * browser-shaped by schema (`browser` + `viewport` are both required there). Deliberately NOT added
    * to `test-case.schema.json`: a second declared label would only create a drift surface.
+   *
+   * Phase 7 obligation: `test-result-batch` is the Runtime-Observed Execution artifact (CONTEXT.md:444)
+   * — precisely how a non-browser surface is meant to be reached. If `test-case.coverage` is ever
+   * relaxed to allow non-browser cases, this field must stop being derived from it: the surface signal
+   * has to come from the observed-execution record itself. Until that change lands, the two hardcoded
+   * `"browser"` literals at the derivation sites (`release-gate.ts`'s `asAttempt`, `evaluate-workspace-
+   * coverage.ts`'s `dimensions()`) would become live mis-credit sites — a non-browser batch entry
+   * stamped `browser` could satisfy a browser obligation it never ran.
    */
   executionSurface: ExecutionSurface;
   role: string;

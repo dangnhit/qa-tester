@@ -131,6 +131,9 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (geometry === undefined) return [];
     const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
+    // Phase 7 obligation (see CoverageAttempt#executionSurface in planning/coverage.ts): this hardcoded
+    // "browser" literal must become a real read off the observed-execution record once test-case.coverage
+    // stops being browser-only, or a non-browser batch entry will mis-credit a browser obligation.
     return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, ...geometry, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
   };
   const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
