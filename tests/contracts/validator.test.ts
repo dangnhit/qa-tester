@@ -502,13 +502,16 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
   });
 });
 
-/** `coverage-obligation` 2.0.0 makes the Execution Surface an explicit, declared field so that a
- *  surface the runtime cannot execute is still authorable and therefore still *countable*
- *  (CONTEXT.md:443-445). `browser` and `viewport` describe the browser surface only; on every other
- *  surface they are FORBIDDEN, not merely optional, for the same reason Phase 5 forbade geometry on
- *  non-screenshot evidence — an optional field lets a fabricated value survive into a checksummed
- *  audit record. */
-describe("coverage-obligation schema 2.0.0 (executionSurface)", () => {
+/** `executionSurface` makes the Execution Surface an explicit, declared field so that a surface the
+ *  runtime cannot execute is still authorable and therefore still *countable* (CONTEXT.md:443-445).
+ *  `browser` and `viewport` describe the browser surface only; on every other surface they are
+ *  FORBIDDEN, not merely optional, for the same reason Phase 5 forbade geometry on non-screenshot
+ *  evidence — an optional field lets a fabricated value survive into a checksummed audit record.
+ *
+ *  It arrived as `coverage-obligation` 2.0.0; the fixtures below say `3.0.0` because the
+ *  `accessibilityMethod` enum broke the same schema a second time within Phase 6. The version in this
+ *  block's name is deliberately the shipped one, not the one this field arrived in. */
+describe("coverage-obligation schema 3.0.0 (executionSurface)", () => {
   /** Everything an obligation carries no matter which surface it declares. */
   const common = {
     artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
