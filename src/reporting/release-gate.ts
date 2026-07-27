@@ -144,7 +144,16 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (geometry === undefined) return [];
     const fields = [value.obligationId, value.requirementId, value.role, value.behavior, value.risk, value.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) }];
+    // `typeof`, NOT this file's `string()` helper, and not by accident. `string()` maps `""` to
+    // `undefined`, and per CoverageObligation#accessibilityMethod `undefined` is the one value that
+    // re-opens the ATTEMPT path — so an obligation carrying `accessibilityMethod: ""` would be
+    // credited by a passing browser attempt here while `evaluate-workspace-coverage.ts` (which has
+    // always used `typeof`) kept it unsatisfiable. The schema's enum makes `""` unreachable, so this
+    // is defense-in-depth rather than a live fix; the point is that the two readers of the same
+    // obligation must not disagree about what an empty label means, and the safe reading of an
+    // unrecognised label is "still an Accessibility Obligation", never "not one at all".
+    const accessibilityMethod = typeof value.accessibilityMethod === "string" ? value.accessibilityMethod : undefined;
+    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod, risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) }];
   });
   /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
    *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
