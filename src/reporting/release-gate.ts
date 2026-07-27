@@ -1,6 +1,6 @@
 import type { DefectSeverity } from "../defects/triage.js";
 import { indexByTestCaseIdentity } from "../core/artifact-index.js";
-import { creditsCoverage } from "../core/provenance.js";
+import { creditsAttestation, creditsCoverage } from "../core/provenance.js";
 import { isRecord } from "../core/values.js";
 import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
 import { asExecutionSurface, evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
@@ -120,7 +120,13 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   // (`releaseGateRule` in semantic-rules.ts). Neither this function nor `evaluateCoverage` is exported
   // from the package's public surface (`package.json`'s `exports` names only `qa-tester.ts` and
   // `cli/index.ts`), so no caller outside this repo can hand either an unvalidated set either.
-  const attestedObligationChecksums = new Set(valuesOf("human-attestation").flatMap((artifact) => {
+  //
+  // The type+checksum join is necessary but not sufficient: credit also requires the record to have
+  // been STAMPED by the one producer that can make the claim. `creditsAttestation` is the attestation
+  // sibling of the `creditsCoverage` gate every attempt path below already passes through, and it makes
+  // this reader enforce what the schema's own `attestedBy` description asserts. Fail-OPEN is preserved:
+  // a record that fails the predicate is dropped, which can only withhold credit.
+  const attestedObligationChecksums = new Set(valuesOf("human-attestation").filter((artifact) => creditsAttestation(artifact.record.provenance)).flatMap((artifact) => {
     const checksum = string(artifact.value.obligationSha256);
     return checksum === undefined ? [] : [checksum];
   }));

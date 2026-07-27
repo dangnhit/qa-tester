@@ -1,6 +1,6 @@
 import { indexByTestCaseIdentity } from "../core/artifact-index.js";
 import { QaSkillsError } from "../core/errors.js";
-import { creditsCoverage } from "../core/provenance.js";
+import { creditsAttestation, creditsCoverage } from "../core/provenance.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { array, isRecord } from "../core/values.js";
 import {
@@ -96,16 +96,23 @@ function requirementAuthority(artifacts: readonly RegisteredWorkspaceArtifact[],
  * is the checksum, not `obligationId`: obligation ids are not unique across a workspace, and
  * `obligationSha256` is the byte-exact binding the artifact carries so a reader need not trust an id.
  *
- * This reader is the fail-CLOSED one and still does not throw on a checksum-less attestation, which
- * is not a lapse: for every OTHER record it reads, malformed-means-drop would silently GRANT credit
- * the run did not earn, which is what it refuses to do. An attestation is the one input where a drop
- * can only ever WITHHOLD credit — already the closed direction — so there is nothing to fail closed
- * on. The schema requires the field regardless, and `readRegisteredArtifacts` above has already
- * rejected the whole workspace if any registered artifact failed it.
+ * The join is necessary but not sufficient. Credit additionally requires `creditsAttestation` — the
+ * attestation sibling of the `creditsCoverage` gate every attempt below already passes through — so an
+ * attestation payload that reached the workspace by any route other than `recordHumanAttestation`
+ * carries `agent-draft` (registration's default) rather than `human-attestation:<identity>`, fails the
+ * predicate, and credits nothing. That is what the schema's own `attestedBy` description already
+ * asserts about the artifact, now actually enforced by a reader.
+ *
+ * This reader is the fail-CLOSED one and still does not throw on a checksum-less or wrongly-stamped
+ * attestation, which is not a lapse: for every OTHER record it reads, malformed-means-drop would
+ * silently GRANT credit the run did not earn, which is what it refuses to do. An attestation is the one
+ * input where a drop can only ever WITHHOLD credit — already the closed direction — so there is nothing
+ * to fail closed on. The schema requires the checksum regardless, and `readRegisteredArtifacts` above
+ * has already rejected the whole workspace if any registered artifact failed it.
  */
 function attestedObligationChecksums(artifacts: readonly RegisteredWorkspaceArtifact[]): ReadonlySet<string> {
   return new Set(artifacts
-    .filter((artifact) => artifact.record.type === "human-attestation")
+    .filter((artifact) => artifact.record.type === "human-attestation" && creditsAttestation(artifact.record.provenance))
     .map((artifact) => artifact.value.obligationSha256)
     .filter((checksum): checksum is string => typeof checksum === "string"));
 }

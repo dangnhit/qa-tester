@@ -346,6 +346,41 @@ describe("evaluateWorkspaceCoverage — accessibility obligations", () => {
     });
   });
 
+  /**
+   * The provenance guard, mirroring `creditsCoverage` on the attempt paths. Everything else about this
+   * attestation is exactly what `recordHumanAttestation` would have written — same obligation bytes,
+   * same method, same substantive statement, and it satisfies `humanAttestationRule` on the WRITE path
+   * (it registers without error) — so the only thing left to decide it is the manifest stamp.
+   * `agent-draft` is the value `registerArtifactValue` defaults to when nothing supplies a provenance,
+   * i.e. exactly what an attestation payload that did not come from that operation carries.
+   *
+   * Both readers are asserted here off the ONE registered workspace, because the fail-CLOSED and
+   * fail-OPEN readers must reach the same verdict on it and only a shared fixture proves that.
+   */
+  it("does not credit an attestation whose provenance is not human-attestation:<identity>", async () => {
+    const fixture = await setup({ ...screenReader, omitResult: true });
+    const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
+    const obligation = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "coverage-obligation");
+    if (!obligation) throw new Error("Missing coverage-obligation");
+    await workspace.registerArtifactValue({
+      type: "human-attestation", relationships: [obligation.record.id], provenance: "agent-draft",
+      value: {
+        artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-FORGED",
+        runId: workspace.runId, obligationId: "COV-SAVE", obligationSha256: obligation.record.sha256, method: "screen-reader",
+        attestedBy: "reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z", statement: attested.statement,
+      },
+    });
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const gate = deriveReleaseGateFromWorkspaceArtifacts(artifacts);
+    await workspace.close();
+
+    // It really is registered and really is readable — it just earns nothing.
+    expect(artifacts.some((artifact) => artifact.record.type === "human-attestation")).toBe(true);
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], satisfied: [] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+    expect(gate.recommendation).toBe("NOT_READY");
+  });
+
   it("still credits a null-method obligation whose test case declares a method of its own", async () => {
     // The replacement for the `accessibility` row removed from the dimension-mismatch table above,
     // and the mirror of the kill test: the obligation asks for no accessibility evaluation, so the

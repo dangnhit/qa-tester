@@ -20,3 +20,28 @@ export type ExecutionProvenance =
 export function creditsCoverage(provenance?: string): boolean {
   return provenance === "runtime-execution" || provenance === "runtime-observed";
 }
+
+/** The `record.provenance` prefix `recordHumanAttestation` stamps; the suffix is the attester identity. */
+export const humanAttestationProvenancePrefix = "human-attestation:";
+
+/**
+ * The single shared predicate for whether a provenance value may credit an Accessibility Obligation by
+ * attestation — the attestation sibling of `creditsCoverage`, and gating the one remaining credit path
+ * that had none.
+ *
+ * `human-attestation.schema.json`'s own `attestedBy` description already leans on this: "'Identified' …
+ * is this field plus the manifest record's `human-attestation:<identity>` provenance, which no
+ * agent-draft path can write." Only `recordHumanAttestation` (`qa-skill attestation record`) writes that
+ * value; `RunWorkspace.registerArtifactValue` defaults an unstamped registration to `agent-draft`. So an
+ * attestation payload that reached a workspace by any other route fails this predicate and credits
+ * nothing, exactly as an `agent-draft` `test-result` credits nothing.
+ *
+ * The identity suffix must be non-empty: a bare `human-attestation:` names nobody, and an attestation by
+ * nobody is not an identified person's claim. `recordHumanAttestation` rejects an empty attester before
+ * it ever reaches registration, so this only ever fires on a record that did not come from it.
+ */
+export function creditsAttestation(provenance?: string): boolean {
+  return provenance !== undefined
+    && provenance.startsWith(humanAttestationProvenancePrefix)
+    && provenance.length > humanAttestationProvenancePrefix.length;
+}

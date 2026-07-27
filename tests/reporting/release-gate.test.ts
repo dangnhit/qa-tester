@@ -220,8 +220,8 @@ describe("evaluateReleaseGate", () => {
     // exact immutable BYTES of the obligation it attests to, so a shared checksum would let one
     // attestation stand for every obligation in the workspace and hide the binding entirely.
     const obligationSha256 = "b".repeat(64);
-    const attestation = (obligationChecksum: string) => ({
-      record: { id: "ATT-A11Y", sha256: "e".repeat(64), type: "human-attestation", provenance: "human-attestation:reviewer@example.test" },
+    const attestation = (obligationChecksum: string, provenance = "human-attestation:reviewer@example.test") => ({
+      record: { id: "ATT-A11Y", sha256: "e".repeat(64), type: "human-attestation", provenance },
       value: {
         artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-1",
         runId: "RUN-1", obligationId: "COV-A11Y", obligationSha256: obligationChecksum, method: "screen-reader",
@@ -230,7 +230,7 @@ describe("evaluateReleaseGate", () => {
       },
     });
     /** One authoritative obligation declaring `method`, one matching test case, one passing attempt. */
-    const workspace = (method: string, options: { required?: boolean; attested?: string; omitResult?: boolean } = {}) => [
+    const workspace = (method: string, options: { required?: boolean; attested?: string; attestedProvenance?: string; omitResult?: boolean } = {}) => [
       { record: { id: "RA-A11Y", sha256: "a".repeat(64), type: "requirement-analysis" }, value: { statements: [{ requirementId: "REQ-A11Y", authority: "AUTHORITATIVE" }] } },
       {
         record: { id: "OBL-A11Y", sha256: obligationSha256, type: "coverage-obligation" },
@@ -241,7 +241,7 @@ describe("evaluateReleaseGate", () => {
         record: { id: "RES-A11Y", sha256: "d".repeat(64), type: "test-result", provenance: "runtime-execution" },
         value: { attemptId: "ATT-1", status: "PASSED", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", observedEngine: "chromium" },
       }]),
-      ...(options.attested === undefined ? [] : [attestation(options.attested)]),
+      ...(options.attested === undefined ? [] : [attestation(options.attested, options.attestedProvenance)]),
     ];
 
     it("blocks the release on a required screen-reader obligation that no attestation covers", () => {
@@ -271,6 +271,23 @@ describe("evaluateReleaseGate", () => {
       expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-A11Y"]);
       expect(result.recommendation).toBe("NOT_READY");
     });
+
+    /** The provenance guard, mirroring `creditsCoverage` on the attempt paths. Everything else about
+     *  these payloads is perfect — the exact obligation bytes, the exact method, a substantive
+     *  statement — so only the manifest stamp can decide them. `agent-draft` is the value
+     *  `registerArtifactValue` defaults to when nothing stamps a provenance, i.e. exactly what an
+     *  attestation payload that did not come from `recordHumanAttestation` would carry.
+     *  Fail-OPEN is preserved: the record is dropped, never thrown on. */
+    it.each(["agent-draft", "runtime", "runtime-execution", "human-approval:qa-lead", "human-attestation:"])(
+      "does not clear it from an attestation stamped %s instead of human-attestation:<identity>",
+      (provenance) => {
+        const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("screen-reader", { attested: obligationSha256, attestedProvenance: provenance, omitResult: true }));
+
+        expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-A11Y"]);
+        expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-A11Y", passed: false }]);
+        expect(result.recommendation).toBe("NOT_READY");
+      },
+    );
 
     it("reports an unattested OPTIONAL accessibility obligation as a risk gap rather than dropping it", () => {
       const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("keyboard", { required: false }));
