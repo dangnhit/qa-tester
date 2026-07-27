@@ -4,7 +4,7 @@ export type Strings = string[];
 
 export interface TestCase {
   artifactType: "test-case";
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   producerVersion: string;
   testCaseId: string;
   revisionId: string;
@@ -41,7 +41,10 @@ export interface TestCase {
       width: number;
       height: number;
     };
-    accessibilityMethod: string | null;
+    /**
+     * Same enum, same reason as coverage-obligation.accessibilityMethod: CONTEXT.md:437's four categories, or null for none declared. Both sides must be constrained because the coverage matcher compares this value to the obligation's, so a free-form label here would reintroduce exactly the free-form value the obligation no longer accepts.
+     */
+    accessibilityMethod: "automated-analysis" | "keyboard" | "screen-reader" | "cognitive-manual" | null;
     risk: "low" | "medium" | "high" | "critical";
     outcome: string;
   };

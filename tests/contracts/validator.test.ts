@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { schemas } from "../../src/contracts/catalog.js";
 import { formatValidationErrors, validateArtifact } from "../../src/contracts/validator.js";
 import type { ArtifactType, NormalizedValidationError } from "../../src/contracts/types.js";
+import { accessibilityMethods, manualAccessibilityMethods } from "../../src/planning/coverage.js";
 
 const validRun = {
   artifactType: "run-metadata",
@@ -45,7 +47,7 @@ const otherArtifactContracts = [
     requiredField: "steps",
     valid: {
       artifactType: "test-case",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       testCaseId: "TC-1",
       revisionId: "REV-1",
@@ -509,7 +511,7 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
 describe("coverage-obligation schema 2.0.0 (executionSurface)", () => {
   /** Everything an obligation carries no matter which surface it declares. */
   const common = {
-    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     obligationId: "COV-1", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
     role: "member", behavior: "sign in",
     accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
@@ -553,6 +555,162 @@ describe("coverage-obligation schema 2.0.0 (executionSurface)", () => {
 
   it("rejects an obligation still declaring schemaVersion 1.0.0 (hard break, no migration layer)", () => {
     expect(validateArtifact("coverage-obligation", { ...browserObligation, schemaVersion: "1.0.0" }).valid).toBe(false);
+  });
+});
+
+/** CONTEXT.md:437 — an Accessibility Obligation "distinguishes automated analysis, keyboard
+ *  evaluation, screen-reader evaluation, and cognitive/manual review". Those four categories are the
+ *  whole vocabulary, so `accessibilityMethod` is an enum over them plus `null`, which is how an
+ *  obligation says it names NO accessibility method at all. A free-form string is no longer a legal
+ *  value anywhere: an arbitrary label in a checksummed audit record is a claim nothing can check, and
+ *  (until Task 35) label equality is exactly what credits the obligation. */
+describe("accessibilityMethod is an enum (coverage-obligation 3.0.0, test-case 2.0.0)", () => {
+  const obligation = {
+    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    obligationId: "COV-A11Y", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
+    role: "member", behavior: "sign in", executionSurface: "manual",
+    accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+  };
+  const testCase = {
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    testCaseId: "TC-1", revisionId: "REV-1", instanceId: "TC-1--INSTANCE-1", title: "A valid test case",
+    steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
+    coverage: {
+      requirementId: "REQ-1", role: "member", behavior: "sign in", browser: "chromium",
+      viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "medium", outcome: "account opens",
+    },
+  };
+  const withMethod = (method: unknown) => ({
+    obligation: { ...obligation, accessibilityMethod: method },
+    testCase: { ...testCase, coverage: { ...testCase.coverage, accessibilityMethod: method } },
+  });
+
+  it.each(accessibilityMethods)("accepts %s on both schemas", (method) => {
+    const artifacts = withMethod(method);
+    expect(validateArtifact("coverage-obligation", artifacts.obligation).valid).toBe(true);
+    expect(validateArtifact("test-case", artifacts.testCase).valid).toBe(true);
+  });
+
+  it("keeps null as the representation for no declared accessibility method", () => {
+    expect(validateArtifact("coverage-obligation", obligation).valid).toBe(true);
+    expect(validateArtifact("test-case", testCase).valid).toBe(true);
+  });
+
+  // "manual-keyboard" is the label an existing fixture carried; it is not one of CONTEXT.md:437's
+  // four categories, and the enum is what makes that visible instead of silently creditable.
+  it.each(["manual-keyboard", "axe", "a11y", "", "none", "NONE", "Keyboard"] as const)(
+    "rejects the free-form value %o on both schemas",
+    (method) => {
+      const artifacts = withMethod(method);
+      expect(validateArtifact("coverage-obligation", artifacts.obligation).errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ instancePath: "/accessibilityMethod", keyword: "enum" })]),
+      );
+      expect(validateArtifact("test-case", artifacts.testCase).errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ instancePath: "/coverage/accessibilityMethod", keyword: "enum" })]),
+      );
+    },
+  );
+
+  /** Both bumps are independently breaking: a previously-valid free-form label is now invalid, so a
+   *  2.0.0 obligation or a 1.0.0 test case cannot be reinterpreted under the new contract. Hard break,
+   *  no migration layer. */
+  it("rejects the superseded schemaVersion on each schema (hard break, no migration layer)", () => {
+    expect(validateArtifact("coverage-obligation", { ...obligation, schemaVersion: "2.0.0" }).valid).toBe(false);
+    expect(validateArtifact("test-case", { ...testCase, schemaVersion: "1.0.0" }).valid).toBe(false);
+  });
+
+  it("keeps the TypeScript mirror equal to the schema enum", () => {
+    const schemaEnum = (schemas["coverage-obligation"] as { properties: { accessibilityMethod: { enum: unknown[] } } })
+      .properties.accessibilityMethod.enum;
+    const testCaseEnum = (schemas["test-case"] as { properties: { coverage: { properties: { accessibilityMethod: { enum: unknown[] } } } } })
+      .properties.coverage.properties.accessibilityMethod.enum;
+
+    expect(schemaEnum).toEqual([...accessibilityMethods, null]);
+    expect(testCaseEnum).toEqual([...accessibilityMethods, null]);
+  });
+});
+
+/** A **Human Attestation** is "an identified person's immutable signed claim that an evaluation no
+ *  machine performed was actually carried out" (CONTEXT.md:143-145). Distinct from an
+ *  `approval-decision` by that glossary entry's own `_Avoid_` line, and shaped accordingly: it names
+ *  the exact obligation it attests to BY CHECKSUM (so the claim is independently auditable against
+ *  immutable bytes, not against whatever the manifest resolves later), the person and moment it was
+ *  made, and — the substance — a `statement` of what was actually done. */
+describe("human-attestation schema 1.0.0", () => {
+  const attestation = {
+    artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+    attestationId: "ATTESTATION-1", runId: "20260723T123456Z-a1b2c3", obligationId: "COV-A11Y",
+    obligationSha256: "b".repeat(64), method: "keyboard",
+    attestedBy: "accessibility-reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z",
+    statement: "Navigated the checkout flow using only the keyboard; every control was reachable and focus was visible.",
+  };
+
+  it("accepts a well-formed manual attestation", () => {
+    expect(validateArtifact("human-attestation", attestation).valid).toBe(true);
+  });
+
+  it.each(manualAccessibilityMethods)("accepts the manual method %s", (method) => {
+    expect(validateArtifact("human-attestation", { ...attestation, method }).valid).toBe(true);
+  });
+
+  /** The category error the brief names: a person cannot attest to having personally performed
+   *  automated analysis. The SCHEMA says so, rather than leaving it to a rule that a future producer
+   *  could bypass. */
+  it("rejects an attestation claiming automated-analysis", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, method: "automated-analysis" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/method", keyword: "enum" })]),
+    );
+  });
+
+  it("rejects an attestation declaring no method at all", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, method: null }).valid).toBe(false);
+  });
+
+  it.each(["artifactType", "schemaVersion", "producerVersion", "attestationId", "runId", "obligationId", "obligationSha256", "method", "attestedBy", "attestedAt", "statement"] as const)(
+    "rejects an attestation missing %s",
+    (field) => {
+      const invalid: Record<string, unknown> = { ...attestation };
+      delete invalid[field];
+      expect(validateArtifact("human-attestation", invalid).errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+      );
+    },
+  );
+
+  it("rejects unknown properties", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, approved: true }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "additionalProperties" })]),
+    );
+  });
+
+  /** An attestation whose statement is empty — or a placeholder token — is not evidence of anything:
+   *  it records that somebody pressed a button, not what evaluation they carried out. */
+  it.each(["", " ", "ok", "done", "yes", "LGTM", "keyboard tested"] as const)(
+    "rejects the substanceless statement %o",
+    (statement) => {
+      expect(validateArtifact("human-attestation", { ...attestation, statement }).valid).toBe(false);
+    },
+  );
+
+  it("rejects an obligation checksum that is not a sha256", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, obligationSha256: "not-a-sha" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "pattern" })]),
+    );
+  });
+
+  it("rejects an attestedAt that is not a date-time", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, attestedAt: "yesterday" }).valid).toBe(false);
+  });
+
+  it("rejects any schemaVersion other than 1.0.0", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, schemaVersion: "2.0.0" }).valid).toBe(false);
+  });
+
+  it("keeps the TypeScript manual-method mirror equal to the schema's method enum", () => {
+    const methodEnum = (schemas["human-attestation"] as { properties: { method: { enum: unknown[] } } }).properties.method.enum;
+
+    expect(methodEnum).toEqual([...manualAccessibilityMethods]);
+    expect(methodEnum).not.toContain("automated-analysis");
   });
 });
 

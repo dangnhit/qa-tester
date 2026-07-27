@@ -42,7 +42,7 @@ async function registerRaw(workspace: RunWorkspace, options: { attemptId?: strin
   const testCase = await workspace.registerArtifactValue({
     type: "test-case",
     relationships: [],
-    value: { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "0.1.0", testCaseId: "TC-ANNOTATION", revisionId: "REV-ANNOTATION", instanceId: "INSTANCE-ANNOTATION", title: "Annotation source", steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-ANNOTATION", role: "member", behavior: "annotate", browser: "chromium", viewport: { width: 120, height: 80 }, accessibilityMethod: null, risk: "low", outcome: "annotated" } },
+    value: { artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0", testCaseId: "TC-ANNOTATION", revisionId: "REV-ANNOTATION", instanceId: "INSTANCE-ANNOTATION", title: "Annotation source", steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-ANNOTATION", role: "member", behavior: "annotate", browser: "chromium", viewport: { width: 120, height: 80 }, accessibilityMethod: null, risk: "low", outcome: "annotated" } },
   });
   const result = await workspace.registerArtifactValue({
     type: "test-result",

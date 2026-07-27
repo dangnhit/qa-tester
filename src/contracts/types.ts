@@ -24,6 +24,7 @@ export const artifactTypes = [
   "change-scope",
   "workflow-checkpoint",
   "exploratory-finding",
+  "human-attestation",
 ] as const;
 
 export type ArtifactType = (typeof artifactTypes)[number];

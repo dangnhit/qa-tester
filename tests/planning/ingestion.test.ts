@@ -288,7 +288,7 @@ describe("planning ingestion", () => {
     const fixture = await setup();
     const sourcePath = join(fixture.root, "orphan-coverage.json");
     await writeFile(sourcePath, JSON.stringify({
-      artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
       obligationId: "COV-1", requirementId: "REQ-ORPHAN", requirementAnalysisArtifactId: "missing-artifact",
       role: "member", behavior: "sign in", executionSurface: "browser", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
     }));
@@ -314,7 +314,7 @@ describe("planning ingestion", () => {
     const requirement = await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
     const coveragePath = join(fixture.root, "coverage.json");
     await writeFile(coveragePath, JSON.stringify({
-      artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
       obligationId: "COV-1", requirementId: "REQ-LOGIN", requirementAnalysisArtifactId: requirement.id,
       role: "member", behavior: "sign in", executionSurface: "browser", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
     }));

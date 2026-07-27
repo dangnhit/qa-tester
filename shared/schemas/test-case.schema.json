@@ -7,7 +7,7 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "testCaseId", "revisionId", "instanceId", "title", "steps", "coverage"],
   "properties": {
     "artifactType": { "const": "test-case" },
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "2.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "testCaseId": { "type": "string", "minLength": 1 },
     "revisionId": { "type": "string", "minLength": 1 },
@@ -47,7 +47,10 @@
           "type": "object", "additionalProperties": false, "required": ["width", "height"],
           "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } }
         },
-        "accessibilityMethod": { "type": ["string", "null"] },
+        "accessibilityMethod": {
+          "description": "Same enum, same reason as coverage-obligation.accessibilityMethod: CONTEXT.md:437's four categories, or null for none declared. Both sides must be constrained because the coverage matcher compares this value to the obligation's, so a free-form label here would reintroduce exactly the free-form value the obligation no longer accepts.",
+          "enum": ["automated-analysis", "keyboard", "screen-reader", "cognitive-manual", null]
+        },
         "risk": { "enum": ["low", "medium", "high", "critical"] },
         "outcome": { "type": "string", "minLength": 1 }
       }

@@ -32,7 +32,8 @@ export interface RunArtifactManifest {
       | "regression-selection"
       | "change-scope"
       | "workflow-checkpoint"
-      | "exploratory-finding";
+      | "exploratory-finding"
+      | "human-attestation";
     relativePath: string;
     sha256: string;
     mediaType?: string;

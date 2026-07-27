@@ -64,7 +64,7 @@ function plan(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER", dsl: 
 
 function testCase(revisionId = "REV-BROWSER", instanceId = "INSTANCE-BROWSER") {
   return {
-    artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-BROWSER", revisionId, instanceId, title: "Saves email",
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-BROWSER", revisionId, instanceId, title: "Saves email",
     steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-BROWSER", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "The email is saved." },
   };

@@ -15,6 +15,39 @@ export function asExecutionSurface(value: unknown): ExecutionSurface | undefined
   return (executionSurfaces as readonly unknown[]).includes(value) ? value as ExecutionSurface : undefined;
 }
 
+/**
+ * The accessibility evaluation methods an Accessibility Obligation may name. These are exactly
+ * CONTEXT.md:437's four categories — "automated analysis, keyboard evaluation, screen-reader
+ * evaluation, and cognitive/manual review" — and nothing else: a free-form label in a checksummed
+ * audit record is a claim nothing can check, and until Task 35 lands, label equality is what credits
+ * the obligation (CONTEXT.md:439 is the rule that forbids exactly that).
+ *
+ * `null`, deliberately NOT a member here, is how an obligation says it names no accessibility method
+ * at all — the common case. It stays a different JSON type rather than a fifth enum member so that
+ * "no accessibility obligation" can never be mistaken for a declared method that matches itself.
+ *
+ * Mirrors `accessibilityMethod`'s enum in shared/schemas/coverage-obligation.schema.json and the
+ * nested `coverage.accessibilityMethod` in shared/schemas/test-case.schema.json.
+ */
+export const accessibilityMethods = ["automated-analysis", "keyboard", "screen-reader", "cognitive-manual"] as const;
+
+export type AccessibilityMethod = (typeof accessibilityMethods)[number];
+
+/**
+ * The subset a person can carry out. CONTEXT.md:438: an automated Accessibility Obligation is
+ * satisfied only by a machine-produced artifact, and a MANUAL one only by a Human Attestation — so
+ * an attestation claiming `automated-analysis` is a category error, and `human-attestation.schema.
+ * json`'s `method` enum is this list rather than the full one.
+ */
+export const manualAccessibilityMethods = ["keyboard", "screen-reader", "cognitive-manual"] as const satisfies readonly AccessibilityMethod[];
+
+export type ManualAccessibilityMethod = (typeof manualAccessibilityMethods)[number];
+
+/** Narrows an untrusted CLI argument to a method a Human Attestation may claim. */
+export function isManualAccessibilityMethod(value: unknown): value is ManualAccessibilityMethod {
+  return (manualAccessibilityMethods as readonly unknown[]).includes(value);
+}
+
 export type CoverageObligation = {
   obligationId: string;
   requirementId: string;

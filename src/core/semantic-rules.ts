@@ -384,6 +384,51 @@ const testResultBatchRule: SemanticRule = {
   },
 };
 
+/** Rule: `human-attestation` — like `testResultBatchRule`, a type authored directly onto this table,
+ *  so it has no pre-Phase-2a write/read chains to reproduce and therefore NO sanctioned drift: it is
+ *  deliberately stage-agnostic (no `ctx.stage` branch) and both paths surface the same message — write
+ *  throws it as ARTIFACT_BINDING, read soft-invalidates as INVALID_REFERENCE.
+ *
+ *  It enforces the two bindings that make an attestation mean anything. First, the attestation names
+ *  ONE exact immutable `coverage-obligation`: exactly one registered obligation carries its
+ *  `obligationId`, that obligation is its sole declared coverage-obligation relationship, and the
+ *  obligation's manifest checksum equals the declared `obligationSha256`. The checksum clause is the
+ *  same device `approvalDecisionRule` uses for `planSha256` — it makes the claim auditable against the
+ *  bytes the attester saw rather than against whatever the manifest resolves later, and it is what
+ *  turns a rewritten obligation into an invalid attestation instead of a silently re-pointed one.
+ *  Second, the attested `method` equals the obligation's declared `accessibilityMethod`: an
+ *  attestation for an obligation naming a different method, or naming none (`null`), is a violation,
+ *  because CONTEXT.md:438 makes a Human Attestation the satisfier of a specific manual method, not a
+ *  free-floating claim.
+ *
+ *  Two things this rule deliberately does NOT check. There is no `value.runId !== ctx.runId` clause:
+ *  BOTH paths already enforce that universally for any artifact carrying a `runId`
+ *  (`assertArtifactBinding` on write, `inspectWorkspaceState`'s per-artifact loop on read), so a
+ *  clause here would be unreachable — and a test naming it would pass for the universal check's
+ *  reason, not this rule's. And nothing here says an attestation SATISFIES its obligation: Task 35
+ *  owns what satisfies an Accessibility Obligation, and `matchesObligation` still compares
+ *  `accessibilityMethod` labels until it lands. This rule only makes the artifact honest. */
+const humanAttestationRule: SemanticRule = {
+  type: "human-attestation",
+  appliesTo: { write: true, read: true },
+  async: false,
+  evaluate(ctx) {
+    const value = ctx.value;
+    const matches = ctx.relatedOfType("coverage-obligation").filter((candidate) => candidate.value?.obligationId === value.obligationId);
+    const obligation = matches.length === 1 ? matches[0] : undefined;
+    if (!obligation
+      || ctx.relationships.filter((id) => id === obligation.record.id).length !== 1
+      || ctx.relationships.filter((id) => ctx.registeredRecord(id, "coverage-obligation") !== undefined).length !== 1
+      || obligation.record.sha256 !== value.obligationSha256) {
+      return { code: "ARTIFACT_BINDING", message: "Human attestation must bind one exact immutable coverage obligation" };
+    }
+    if (obligation.value?.accessibilityMethod !== value.method) {
+      return { code: "ARTIFACT_BINDING", message: "Human attestation method must equal the accessibility method its obligation declares" };
+    }
+    return undefined;
+  },
+};
+
 /** Rule: `approval-decision` — carries logic drift. WRITE additionally requires the bound plan to be a
  *  pending human-review plan (`approvalPolicy.mode === "human-review"` + `approvalDecision.approved ===
  *  false`) and additionally requires exactly one test-plan relationship; READ has neither extra check
@@ -1060,7 +1105,8 @@ const changeScopeRule: SemanticRule = {
  *  Task 15c adds `evidence` (write-only — read stays inline in-fixpoint to preserve its two independent
  *  diagnostics), `evidence-gap` (write-only — read stays inline post-fixpoint), and `change-scope`
  *  (read-only), finalizing the in-fixpoint migration. Task 29 adds `test-result-batch`, the first type
- *  authored directly onto this table (both paths, no drift). Types with no per-type semantic
+ *  authored directly onto this table (both paths, no drift); Task 34 adds `human-attestation` the same
+ *  way. Types with no per-type semantic
  *  rule on either path (`test-case`, `exploratory-finding`, `run-metadata`, `artifact-manifest`),
  *  `environment-profile` (inline in `assertArtifactBinding`), and `workflow-checkpoint` (read-only,
  *  post-fixpoint inline) intentionally remain outside the table. */
@@ -1071,6 +1117,7 @@ export const semanticRules: Partial<Record<ArtifactType, SemanticRule>> = {
   "test-result": testResultRule,
   "test-result-batch": testResultBatchRule,
   "approval-decision": approvalDecisionRule,
+  "human-attestation": humanAttestationRule,
   "test-step-result": testStepResultRule,
   "incident": incidentRule,
   "release-gate": releaseGateRule,

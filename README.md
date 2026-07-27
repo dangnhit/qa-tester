@@ -74,6 +74,7 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
 | `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact; success has no stdout. |
 | `qa-skill approval record --root <path> --run-id <id> --plan-artifact-id <id> --approved-by <identity>` | Persist an immutable human approval bound to the exact pending plan checksum. |
+| `qa-skill attestation record --root <path> --run-id <id> --obligation-id <id> --method <keyboard\|screen-reader\|cognitive-manual> --attested-by <identity> --statement <text>` | Persist a person's immutable Human Attestation that a manual accessibility evaluation was carried out, bound to the exact obligation checksum. An agent cannot author one. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
 
 Public workflow modes are `plan`, `execute`, `full`, `exploratory`, `retest`, and `regression`. `cleanup` is a linked maintenance-run profile created through the cleanup operation; it is not accepted by the public workflow runner.

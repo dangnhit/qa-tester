@@ -41,12 +41,12 @@ async function setup(overrides: {
   // `browser` + `viewport` belong to the browser surface only; the schema forbids them elsewhere.
   const surface = overrides.obligationSurface ?? "browser";
   await register("coverage-obligation", {
-    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
+    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
     executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.obligation,
   });
   const { coverage: coverageOverride, ...testCaseOverrides } = overrides.testCase ?? {};
   const testCase = await register("test-case", {
-    artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
     steps: [{ id: "save", action: "click", sideEffect: "none" }], coverage: { ...dimensions, ...(coverageOverride ?? {}) }, ...testCaseOverrides,
   });
   if (overrides.omitResult !== true) {

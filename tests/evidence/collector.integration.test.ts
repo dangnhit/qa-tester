@@ -17,7 +17,7 @@ function pixel(bytes: Buffer, width: number, x: number, y: number): number[] {
 
 async function registerAttempt(workspace: RunWorkspace, attemptId: string): Promise<void> {
   const testCase = await workspace.registerArtifactValue({ type: "test-case", value: {
-    artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "test", testCaseId: `TC-${attemptId}`, revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Evidence fixture", steps: [{ id: "step-1", action: "observe", sideEffect: "none" }],
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "test", testCaseId: `TC-${attemptId}`, revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Evidence fixture", steps: [{ id: "step-1", action: "observe", sideEffect: "none" }],
     coverage: { requirementId: "REQ-1", role: "tester", behavior: "capture", browser: "chromium", viewport: { width: 80, height: 60 }, accessibilityMethod: null, risk: "low", outcome: "capture completes" },
   }, relationships: [], provenance: "test" });
   await workspace.registerArtifactValue({ type: "test-result", value: {

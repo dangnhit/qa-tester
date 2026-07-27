@@ -66,7 +66,7 @@ describe("evaluateCoverage", () => {
     ["behavior", { behavior: "delete profile" }],
     ["observed engine", { observedEngine: "webkit" }],
     ["viewport", { viewport: { width: 390, height: 844 } }],
-    ["accessibility method", { accessibilityMethod: "manual-keyboard" }],
+    ["accessibility method", { accessibilityMethod: "keyboard" }],
     ["risk", { risk: "low" }],
     ["outcome", { outcome: "redirected" }],
   ])("does not satisfy an obligation with a mismatched %s", (_dimension, mismatch) => {

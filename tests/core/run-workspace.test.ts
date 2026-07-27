@@ -47,7 +47,7 @@ function metadata(workspace: RunWorkspace, overrides: Record<string, unknown> = 
 function testCase(id: string) {
   return {
     artifactType: "test-case",
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     producerVersion: "1.0.0",
     testCaseId: id,
     revisionId: `REV-${id}`,

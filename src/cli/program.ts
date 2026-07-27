@@ -12,6 +12,8 @@ import { RunWorkspace } from "../core/run-workspace.js";
 import { createRun } from "../operations/create-run.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { recordHumanApproval } from "../operations/record-human-approval.js";
+import { recordHumanAttestation } from "../operations/record-human-attestation.js";
+import { manualAccessibilityMethods } from "../planning/coverage.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "./workflow.js";
 import { isRuntimeCompatible, runtimeCompatibility, runtimeVersion } from "../installer/manifest.js";
@@ -212,6 +214,17 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .requiredOption("--approved-by <identity>", "Identity of the approver")
     .action(async (commandOptions: { root: string; runId: string; planArtifactId: string; approvedBy: string }) => {
       stdout += `${JSON.stringify(await recordHumanApproval(commandOptions))}\n`;
+    });
+  program.command("attestation").description("Manage human attestations recorded against a run").command("record")
+    .description("Record a person's signed claim that a manual accessibility evaluation was carried out")
+    .requiredOption("--root <path>", "Project root directory")
+    .requiredOption("--run-id <id>", "Run workspace ID")
+    .requiredOption("--obligation-id <id>", "obligationId of the coverage obligation being attested to")
+    .requiredOption("--method <method>", `Manual accessibility method: ${manualAccessibilityMethods.join(", ")}`)
+    .requiredOption("--attested-by <identity>", "Identity of the person making the claim")
+    .requiredOption("--statement <text>", "What the attester actually did and observed")
+    .action(async (commandOptions: { root: string; runId: string; obligationId: string; method: string; attestedBy: string; statement: string }) => {
+      stdout += `${JSON.stringify(await recordHumanAttestation(commandOptions))}\n`;
     });
   program.command("validate")
     .description("Validate a run workspace's artifacts against its profile")

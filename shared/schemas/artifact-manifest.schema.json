@@ -44,7 +44,8 @@
               "regression-selection",
               "change-scope",
               "workflow-checkpoint",
-              "exploratory-finding"
+              "exploratory-finding",
+              "human-attestation"
             ]
           },
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },

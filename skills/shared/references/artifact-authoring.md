@@ -153,7 +153,7 @@ identity values before registering):
 ```json
 {
   "artifactType": "test-case",
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "producerVersion": "1.0.0",
   "testCaseId": "TC-PLACEHOLDER-1",
   "revisionId": "REPLACE_WITH_QA_SKILL_FINGERPRINT_OUTPUT",
@@ -213,13 +213,31 @@ surface, so an `api` or `manual` obligation is never satisfied today — that is
 reported as **explicitly unmet** in the release gate (a `required` one blocks with `NOT_READY`, an
 optional one appears as a coverage gap), rather than being silently omitted from the run's record.
 
+**`accessibilityMethod`** is an enum, not free text, and is required on both `coverage-obligation` and
+`test-case.coverage`. Write **`null`** — the common case — when the obligation names no accessibility
+method at all. Otherwise pick exactly one of the four evaluation categories:
+
+| value | means |
+| --- | --- |
+| `"automated-analysis"` | a machine analysis (e.g. a rule-based scan) |
+| `"keyboard"` | a person evaluating with the keyboard alone |
+| `"screen-reader"` | a person evaluating with a screen reader |
+| `"cognitive-manual"` | a person's cognitive / manual review |
+
+A label outside that list is rejected. An arbitrary string in a checksummed audit record is a claim
+nothing can check, and an accessibility obligation is credited by comparing this value — so a private
+label would credit itself. Note also that **this runtime ships no accessibility scanner**: an
+`"automated-analysis"` obligation has no machine artifact that could satisfy it and stays explicitly
+unmet, exactly like an obligation on an unexecutable surface. A manual method is recorded by a person
+with `qa-skill attestation record` (see below), which writes a `human-attestation` artifact.
+
 Minimal valid example:
 
 <!-- artifact-authoring:example coverage-obligation -->
 ```json
 {
   "artifactType": "coverage-obligation",
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "producerVersion": "1.0.0",
   "obligationId": "COV-PLACEHOLDER-1",
   "requirementId": "REQ-PLACEHOLDER-1",
@@ -238,6 +256,29 @@ Minimal valid example:
   "outcome": "PLACEHOLDER: expected outcome"
 }
 ```
+
+## human-attestation (not an agent draft)
+
+Schema: `dist/shared/schemas/human-attestation.schema.json`
+
+A **Human Attestation** is an identified person's immutable signed claim that an evaluation no machine
+performed was actually carried out. **An agent cannot author one.** There is no draft skeleton, and
+`qa-skill artifact ingest --type human-attestation` is refused at the Agent Draft ingestion boundary —
+the whole point of the artifact is that a person, not an agent, made the claim. The only way it enters
+a run is a person running:
+
+```sh
+qa-skill attestation record --root <path> --run-id <id> \
+  --obligation-id <obligationId> --method <keyboard|screen-reader|cognitive-manual> \
+  --attested-by <identity> --statement "<what you actually did and observed>"
+```
+
+The runtime fills the rest: the attestation's ID, the run, the obligation's checksum, the timestamp,
+and a `human-attestation:<identity>` provenance that no agent-draft path can write. It refuses to
+record anything but a manual method (a person attesting to `automated-analysis` is a category error),
+refuses unless exactly one registered obligation carries that `obligationId`, and refuses unless that
+obligation declares the same `accessibilityMethod`. `--statement` is the substance of the claim and
+must actually say something — without it the record only shows that somebody pressed a button.
 
 ## CLI helpers
 
