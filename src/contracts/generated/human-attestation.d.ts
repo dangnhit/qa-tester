@@ -24,7 +24,7 @@ export interface HumanAttestation {
   attestedBy: string;
   attestedAt: string;
   /**
-   * What the attester actually did and observed, in their own words. This is the substance of the claim: without it the artifact records only that somebody pressed a button, and a later auditor cannot tell whether the evaluation performed was the one the obligation required. The floor is well above 1 because a single-token statement ('ok', 'done') is as empty as no statement at all, and this artifact is the ONLY evidence a manual evaluation ever produces.
+   * What the attester actually did and observed, in their own words. This is the substance of the claim: without it the artifact records only that somebody pressed a button, and a later auditor cannot tell whether the evaluation performed was the one the obligation required. The floor is well above 1 because a single-token statement ('ok', 'done') is as empty as no statement at all, and this artifact is the ONLY evidence a manual evaluation ever produces. `minLength` counts Unicode code points, not bytes or words: a terse-but-real English statement just under the floor is rejected, while a CJK statement of the same code-point length carries proportionally more content and clears it. The bound is kept as a floor despite that imprecision.
    */
   statement: string;
 }

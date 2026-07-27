@@ -262,10 +262,12 @@ Minimal valid example:
 Schema: `dist/shared/schemas/human-attestation.schema.json`
 
 A **Human Attestation** is an identified person's immutable signed claim that an evaluation no machine
-performed was actually carried out. **An agent cannot author one.** There is no draft skeleton, and
-`qa-skill artifact ingest --type human-attestation` is refused at the Agent Draft ingestion boundary —
-the whole point of the artifact is that a person, not an agent, made the claim. The only way it enters
-a run is a person running:
+performed was actually carried out. **An agent cannot author one across the ingestion boundary.** There
+is no draft skeleton, and `qa-skill artifact ingest --type human-attestation` is refused there — the
+whole point of the artifact is that a person, not an agent, made the claim through that path.
+`qa-skill attestation record` (below) is a shell command exactly like `qa-skill approval record`; it can
+be invoked the same way any command can. The only way this artifact is meant to enter a run is a person
+running:
 
 ```sh
 qa-skill attestation record --root <path> --run-id <id> \

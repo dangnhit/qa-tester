@@ -390,12 +390,22 @@ const testResultBatchRule: SemanticRule = {
  *  throws it as ARTIFACT_BINDING, read soft-invalidates as INVALID_REFERENCE.
  *
  *  It enforces the two bindings that make an attestation mean anything. First, the attestation names
- *  ONE exact immutable `coverage-obligation`: exactly one registered obligation carries its
- *  `obligationId`, that obligation is its sole declared coverage-obligation relationship, and the
- *  obligation's manifest checksum equals the declared `obligationSha256`. The checksum clause is the
- *  same device `approvalDecisionRule` uses for `planSha256` — it makes the claim auditable against the
- *  bytes the attester saw rather than against whatever the manifest resolves later, and it is what
- *  turns a rewritten obligation into an invalid attestation instead of a silently re-pointed one.
+ *  ONE exact immutable `coverage-obligation`: among the coverage-obligation artifacts the attestation
+ *  itself DECLARES AS A RELATIONSHIP, exactly one carries its `obligationId`, that obligation is the
+ *  attestation's sole declared coverage-obligation relationship, and the obligation's manifest checksum
+ *  equals the declared `obligationSha256`. The `obligationId` match is scoped to the declared
+ *  relationship (not to every registered `coverage-obligation` in the run) deliberately: `obligationId`
+ *  uniqueness is NOT otherwise enforced (`coverageObligationRule` never checks it, and the CLI-shipped
+ *  skeleton in `src/cli/artifact-drafts.ts` uses a fixed placeholder ID), so an unrelated later
+ *  obligation that happens to share the ID must not retroactively invalidate an already-signed
+ *  attestation it has nothing to do with. The relationship-count clauses below already pin the
+ *  attestation to exactly one coverage-obligation relationship, so scoping the `obligationId` search to
+ *  that same declared relationship loses no precision: the binding is still exact via relationship-id
+ *  PLUS `obligationSha256`, and the `obligationId` match now only has to disambiguate within a set that
+ *  the other clauses already cap at one. The checksum clause is the same device `approvalDecisionRule`
+ *  uses for `planSha256` — it makes the claim auditable against the bytes the attester saw rather than
+ *  against whatever the manifest resolves later, and it is what turns a rewritten obligation into an
+ *  invalid attestation instead of a silently re-pointed one.
  *  Second, the attested `method` equals the obligation's declared `accessibilityMethod`: an
  *  attestation for an obligation naming a different method, or naming none (`null`), is a violation,
  *  because CONTEXT.md:438 makes a Human Attestation the satisfier of a specific manual method, not a
@@ -414,7 +424,12 @@ const humanAttestationRule: SemanticRule = {
   async: false,
   evaluate(ctx) {
     const value = ctx.value;
-    const matches = ctx.relatedOfType("coverage-obligation").filter((candidate) => candidate.value?.obligationId === value.obligationId);
+    // Scoped to the attestation's OWN declared relationships first (see the rule doc above): an
+    // unrelated coverage-obligation elsewhere in the run that happens to share this `obligationId`
+    // must not affect this lookup at all.
+    const matches = ctx.relatedOfType("coverage-obligation")
+      .filter((candidate) => ctx.relationships.includes(candidate.record.id))
+      .filter((candidate) => candidate.value?.obligationId === value.obligationId);
     const obligation = matches.length === 1 ? matches[0] : undefined;
     if (!obligation
       || ctx.relationships.filter((id) => id === obligation.record.id).length !== 1

@@ -191,9 +191,13 @@ describe("recordHumanAttestation (the producer)", () => {
   it("refuses a statement carrying no substance", async () => {
     const { root, workspace } = await closedFixture();
 
-    await expect(recordHumanAttestation({
-      root, runId: workspace.runId, obligationId: "COV-A11Y", method: "keyboard", attestedBy: "reviewer", statement: "  done  ",
-    })).rejects.toThrow(/statement/i);
+    await expectQaReject(
+      recordHumanAttestation({
+        root, runId: workspace.runId, obligationId: "COV-A11Y", method: "keyboard", attestedBy: "reviewer", statement: "  done  ",
+      }),
+      "INVALID_ARTIFACT",
+      /statement/i,
+    );
   });
 
   it("refuses to attest to an obligation no registered artifact carries", async () => {
@@ -319,6 +323,42 @@ describe("human-attestation semantic rule", () => {
         message: "Human attestation must bind one exact immutable coverage obligation",
       }),
     ]));
+  });
+
+  it("READ does not invalidate a correctly bound attestation when an unrelated later obligation shares its obligationId", async () => {
+    const { workspace, obligation } = await fixture();
+    const record = await workspace.registerArtifactValue({
+      type: "human-attestation", relationships: [obligation.id], provenance: "human-attestation:reviewer",
+      value: attestation(obligation, { runId: workspace.runId }),
+    });
+
+    // An agent later registers a second, wholly unrelated coverage-obligation that happens to share
+    // this `obligationId` — e.g. by copying the skeleton in `src/cli/artifact-drafts.ts` without
+    // editing its fixed placeholder ID. Nothing enforces `obligationId` uniqueness across the
+    // workspace, and this duplicate declares no relationship to the attestation above at all. The
+    // already-signed, correctly bound attestation must survive it (Finding 1).
+    const otherAnalysis = await workspace.registerArtifactValue({
+      type: "requirement-analysis", relationships: [],
+      value: {
+        artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-OTHER",
+        statements: [{
+          requirementId: "REQ-OTHER", sourceProvenance: { kind: "user", reference: "ticket-2" },
+          normalizedText: "Members must be able to complete an unrelated flow this attestation never references.",
+          authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [],
+        }],
+      },
+    });
+    await workspace.registerArtifactValue({
+      type: "coverage-obligation", relationships: [],
+      value: {
+        artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-A11Y",
+        requirementAnalysisArtifactId: otherAnalysis.id, requirementId: "REQ-OTHER", role: "member", behavior: "an unrelated behavior",
+        executionSurface: "manual", accessibilityMethod: "screen-reader", risk: "low", required: true,
+        outcome: "An unrelated outcome",
+      },
+    });
+
+    expect(await targetDiagnostics(workspace, record.relativePath)).toHaveLength(0);
   });
 });
 
