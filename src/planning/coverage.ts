@@ -58,6 +58,14 @@ export type CoverageObligation = {
   browser?: string | undefined;
   /** Browser-surface only. Absent on every other surface — the schema forbids it there. */
   viewport?: { width: number; height: number } | undefined;
+  /**
+   * Deliberately still `string`, not `AccessibilityMethod`, even though the schema is now an enum.
+   * Both readers project this with `string(value.accessibilityMethod)`, which maps `null` to
+   * `undefined` and passes any other string through. Narrowing the type here would need either an
+   * unchecked cast (a lie) or a runtime narrow that silently drops an unrecognised label — and
+   * dropping it would change what `matchesObligation` credits. What an accessibility obligation is
+   * satisfied by is Task 35's decision, so this stays as wide as the reader actually is.
+   */
   accessibilityMethod?: string | undefined;
   risk: string;
   required: boolean;
@@ -123,6 +131,14 @@ export type CoverageAttempt = {
    * sequenced before or alongside that producer, not merely sometime after it.
    */
   viewport?: { width: number; height: number } | undefined;
+  /**
+   * DECLARED, and the last declared-value slot of the kind Task 33 removed for the engine: this is
+   * read straight off `test-case.coverage.accessibilityMethod`, so `matchesObligation` comparing it to
+   * the obligation's is one declared label matching another — exactly what CONTEXT.md:439 forbids.
+   * Constraining both sides to an enum (Task 34) narrows what those labels may say but does not fix
+   * that; removing this field, and making a manual obligation require a `human-attestation` instead,
+   * is Task 35's job. Same `string`-not-`AccessibilityMethod` reasoning as the obligation's field.
+   */
   accessibilityMethod?: string | undefined;
   risk: string;
   outcome: string;
