@@ -63,7 +63,7 @@ async function sourceBundle(root: string, options: { sourceBug?: boolean | "inte
   } }) : undefined;
   const second = options.sourceBug === "partial" ? await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "1.0.0", testCaseId: "TC-RUNTIME", revisionId: "REV-RUNTIME", instanceId: "INSTANCE-RUNTIME-SECOND", title: "Save email second instance", steps: [{ id: "plan-open-2", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-RUNTIME", role: "member", behavior: "save email second", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Broken" } } }) : undefined;
   const coverage = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV-RUNTIME", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-RUNTIME", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true,
+    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0", obligationId: "COV-RUNTIME", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-RUNTIME", role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true,
   } });
   let sourceBug: { artifactId: string; sha256: string; bugId: string } | undefined;
   if (options.sourceBug) {

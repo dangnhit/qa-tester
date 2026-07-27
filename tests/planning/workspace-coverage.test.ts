@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { sha256Text } from "../../src/core/checksum.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { evaluateWorkspaceCoverage } from "../../src/operations/evaluate-workspace-coverage.js";
+import { deriveReleaseGateFromWorkspaceArtifacts } from "../../src/reporting/release-gate.js";
 
 const roots: string[] = [];
 const environmentProfile = {
@@ -15,14 +16,17 @@ const environmentProfile = {
   baseUrl: "https://test.example.test", productionReadOnly: false,
 } as const;
 
-const dimensions = {
-  requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
-  viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
+/** The dimensions an obligation carries on every Execution Surface. */
+const surfacelessDimensions = {
+  requirementId: "REQ-SAVE", role: "member", behavior: "save profile",
+  accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
 } as const;
+/** Plus the two only the browser surface owns; `test-case.coverage` always carries both. */
+const dimensions = { ...surfacelessDimensions, browser: "chromium", viewport: { width: 1440, height: 900 } } as const;
 
 async function setup(overrides: {
   requirementAuthority?: string; result?: Record<string, unknown>; resultProvenance?: string;
-  testCase?: Record<string, unknown>; obligation?: Record<string, unknown>;
+  testCase?: Record<string, unknown>; obligation?: Record<string, unknown>; obligationSurface?: string;
   omitResult?: boolean; batchEntries?: readonly Record<string, unknown>[]; batchProvenance?: string;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "qa-skills-workspace-coverage-"));
@@ -34,9 +38,11 @@ async function setup(overrides: {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-SAVE",
     statements: [{ requirementId: dimensions.requirementId, sourceProvenance: { kind: overrides.requirementAuthority === "INFERRED" ? "code" : "user", reference: "ticket-1" }, normalizedText: "Members must be able to save their profile.", authority: overrides.requirementAuthority ?? "AUTHORITATIVE", role: dimensions.role, rules: [], risks: [], assumptions: [], openQuestions: [] }],
   });
+  // `browser` + `viewport` belong to the browser surface only; the schema forbids them elsewhere.
+  const surface = overrides.obligationSurface ?? "browser";
   await register("coverage-obligation", {
-    artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
-    ...dimensions, required: true, ...overrides.obligation,
+    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
+    executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.obligation,
   });
   const { coverage: coverageOverride, ...testCaseOverrides } = overrides.testCase ?? {};
   const testCase = await register("test-case", {
@@ -176,6 +182,36 @@ describe("evaluateWorkspaceCoverage", () => {
 
     expect(JSON.stringify(await evaluateWorkspaceCoverage(fixture)))
       .toBe("{\"complete\":true,\"satisfied\":[\"COV-SAVE\"],\"missing\":[],\"qualifyingAttemptIds\":[\"ATTEMPT-SAVE\"]}");
+  });
+});
+
+/** CONTEXT.md:443-445 — an obligation on a surface no executor covers is still authorable, and both
+ *  coverage readers must agree it is VALID and UNMET. These run against a REGISTERED, schema-validated
+ *  workspace, so a non-browser obligation genuinely carries no `browser` and no `viewport`. */
+describe("evaluateWorkspaceCoverage — execution surfaces", () => {
+  it("resolves a required non-browser obligation instead of rejecting it for the viewport it lacks", async () => {
+    const fixture = await setup({ obligationSurface: "api" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"] });
+  });
+
+  it("does not let the passing browser attempt credit an api-surface obligation", async () => {
+    const fixture = await setup({ obligationSurface: "api" });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ satisfied: [], qualifyingAttemptIds: [] });
+  });
+
+  it("agrees with the release gate's reader that the same registered obligation is valid and unmet", async () => {
+    const fixture = await setup({ obligationSurface: "security" });
+    const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const gate = deriveReleaseGateFromWorkspaceArtifacts(artifacts);
+    await workspace.close();
+
+    // Fail-closed reader: resolves it and reports it missing. Fail-open reader: same conclusion.
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ missing: ["COV-SAVE"] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+    expect(gate.recommendation).toBe("NOT_READY");
   });
 });
 

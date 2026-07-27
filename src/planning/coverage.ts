@@ -1,10 +1,30 @@
+/**
+ * The Execution Surfaces an obligation may declare (CONTEXT.md:443). The QA Runtime executes only
+ * `browser` itself and reaches every other surface through a Runtime-Observed Execution
+ * (CONTEXT.md:444) — so the rest are authorable but, until a producer exists, never satisfied. That
+ * is deliberate: an uncovered surface must stay EXPLICITLY UNMET rather than absent (CONTEXT.md:445).
+ *
+ * Mirrors `executionSurface`'s enum in shared/schemas/coverage-obligation.schema.json.
+ */
+export const executionSurfaces = ["browser", "api", "unit", "integration", "performance", "security", "manual"] as const;
+
+export type ExecutionSurface = (typeof executionSurfaces)[number];
+
+/** Narrows an untrusted artifact field to a known surface; `undefined` means "not a surface at all". */
+export function asExecutionSurface(value: unknown): ExecutionSurface | undefined {
+  return (executionSurfaces as readonly unknown[]).includes(value) ? value as ExecutionSurface : undefined;
+}
+
 export type CoverageObligation = {
   obligationId: string;
   requirementId: string;
+  executionSurface: ExecutionSurface;
   role: string;
   behavior: string;
-  browser: string;
-  viewport: { width: number; height: number };
+  /** Browser-surface only. Absent on every other surface — the schema forbids it there. */
+  browser?: string | undefined;
+  /** Browser-surface only. Absent on every other surface — the schema forbids it there. */
+  viewport?: { width: number; height: number } | undefined;
   accessibilityMethod?: string | undefined;
   risk: string;
   required: boolean;
@@ -20,10 +40,19 @@ export type CoverageAttempt = {
   attemptId: string;
   status: string;
   requirementId: string;
+  /**
+   * DERIVED, never declared. Both readers set this from how the claim was produced, not from a label
+   * on the test case: per CONTEXT.md:444 the runtime executes the browser surface itself, so a lane-1
+   * `test-result` is `browser` by construction. A lane-2 `test-result-batch` entry derives the same
+   * value, because the only dimensions any attempt can carry come from `test-case.coverage`, which is
+   * browser-shaped by schema (`browser` + `viewport` are both required there). Deliberately NOT added
+   * to `test-case.schema.json`: a second declared label would only create a drift surface.
+   */
+  executionSurface: ExecutionSurface;
   role: string;
   behavior: string;
-  browser: string;
-  viewport: { width: number; height: number };
+  browser?: string | undefined;
+  viewport?: { width: number; height: number } | undefined;
   accessibilityMethod?: string | undefined;
   risk: string;
   outcome: string;
@@ -41,13 +70,28 @@ export type CoverageEvaluation = {
   qualifyingAttemptIds: string[];
 };
 
+/**
+ * Browser engine and viewport are dimensions OF the browser surface — they describe geometry the QA
+ * Runtime actually drove. They participate only when the obligation declares that surface. On any
+ * other surface the schema forbids them outright, so comparing them would compare two absences and
+ * silently widen the match; the surface equality check above is what discriminates there.
+ */
+function matchesBrowserDimensions(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
+  if (obligation.executionSurface !== "browser") return true;
+  return attempt.browser !== undefined && attempt.browser === obligation.browser
+    && attempt.viewport !== undefined && obligation.viewport !== undefined
+    && attempt.viewport.width === obligation.viewport.width
+    && attempt.viewport.height === obligation.viewport.height;
+}
+
 function matchesObligation(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
-  return attempt.requirementId === obligation.requirementId
+  // An attempt may only address an obligation on the surface the attempt actually has: a browser run
+  // is not evidence about an API, a unit suite, or a manual review.
+  return attempt.executionSurface === obligation.executionSurface
+    && matchesBrowserDimensions(attempt, obligation)
+    && attempt.requirementId === obligation.requirementId
     && attempt.role === obligation.role
     && attempt.behavior === obligation.behavior
-    && attempt.browser === obligation.browser
-    && attempt.viewport.width === obligation.viewport.width
-    && attempt.viewport.height === obligation.viewport.height
     && attempt.accessibilityMethod === obligation.accessibilityMethod
     && attempt.risk === obligation.risk
     && attempt.outcome === obligation.outcome;

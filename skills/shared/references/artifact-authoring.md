@@ -201,19 +201,32 @@ with `"type": "requirement-analysis"`). Either way, the schema requires the fiel
 non-empty string in the draft file, so a placeholder is still required even in the bootstrap path — it
 is simply thrown away there.
 
+**`executionSurface`** names the one **Execution Surface** the obligation is about, and is required:
+`browser`, `api`, `unit`, `integration`, `performance`, `security`, or `manual`. It decides which other
+fields the obligation may carry. `browser` and `viewport` describe the browser surface, so they are
+**required when `executionSurface` is `"browser"` and forbidden on every other surface** — an `api`
+obligation has no engine and no geometry, and writing one in would put a value into a checksummed
+audit record that nothing ever measured.
+
+Author obligations on surfaces the runtime cannot execute. The QA Runtime drives only the `browser`
+surface, so an `api` or `manual` obligation is never satisfied today — that is the point. It is
+reported as **explicitly unmet** in the release gate (a `required` one blocks with `NOT_READY`, an
+optional one appears as a coverage gap), rather than being silently omitted from the run's record.
+
 Minimal valid example:
 
 <!-- artifact-authoring:example coverage-obligation -->
 ```json
 {
   "artifactType": "coverage-obligation",
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "producerVersion": "1.0.0",
   "obligationId": "COV-PLACEHOLDER-1",
   "requirementId": "REQ-PLACEHOLDER-1",
   "requirementAnalysisArtifactId": "REPLACE_WITH_REGISTERED_REQUIREMENT_ANALYSIS_ARTIFACT_ID",
   "role": "PLACEHOLDER: the user role this covers",
   "behavior": "PLACEHOLDER: the behavior under test",
+  "executionSurface": "browser",
   "browser": "chromium",
   "viewport": {
     "width": 1280,

@@ -455,6 +455,62 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
   });
 });
 
+/** `coverage-obligation` 2.0.0 makes the Execution Surface an explicit, declared field so that a
+ *  surface the runtime cannot execute is still authorable and therefore still *countable*
+ *  (CONTEXT.md:443-445). `browser` and `viewport` describe the browser surface only; on every other
+ *  surface they are FORBIDDEN, not merely optional, for the same reason Phase 5 forbade geometry on
+ *  non-screenshot evidence — an optional field lets a fabricated value survive into a checksummed
+ *  audit record. */
+describe("coverage-obligation schema 2.0.0 (executionSurface)", () => {
+  /** Everything an obligation carries no matter which surface it declares. */
+  const common = {
+    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    obligationId: "COV-1", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
+    role: "member", behavior: "sign in",
+    accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+  };
+  const browserGeometry = { browser: "chromium", viewport: { width: 1440, height: 900 } };
+  const browserObligation = { ...common, executionSurface: "browser", ...browserGeometry };
+  /** The same obligation on a surface no executor covers: no engine, no geometry, still authorable. */
+  const apiObligation = { ...common, obligationId: "COV-API", executionSurface: "api" };
+
+  it("accepts a browser obligation carrying its engine and viewport", () => {
+    expect(validateArtifact("coverage-obligation", browserObligation).valid).toBe(true);
+  });
+
+  it.each(["browser", "viewport"] as const)("rejects a browser obligation missing %s", (field) => {
+    const partial: Record<string, unknown> = { ...browserObligation };
+    delete partial[field];
+    expect(validateArtifact("coverage-obligation", partial).valid).toBe(false);
+  });
+
+  it.each(["api", "unit", "integration", "performance", "security", "manual"] as const)(
+    "accepts a %s obligation that declares neither browser nor viewport",
+    (surface) => {
+      expect(validateArtifact("coverage-obligation", { ...apiObligation, executionSurface: surface }).valid).toBe(true);
+    },
+  );
+
+  it.each([["browser", "chromium"], ["viewport", { width: 1440, height: 900 }]] as const)(
+    "forbids (not merely permits) %s on a non-browser obligation",
+    (field, value) => {
+      expect(validateArtifact("coverage-obligation", { ...apiObligation, [field]: value }).valid).toBe(false);
+    },
+  );
+
+  it("rejects an obligation that declares no execution surface at all", () => {
+    expect(validateArtifact("coverage-obligation", { ...common, ...browserGeometry }).valid).toBe(false);
+  });
+
+  it("rejects an unknown execution surface value", () => {
+    expect(validateArtifact("coverage-obligation", { ...browserObligation, executionSurface: "smoke" }).valid).toBe(false);
+  });
+
+  it("rejects an obligation still declaring schemaVersion 1.0.0 (hard break, no migration layer)", () => {
+    expect(validateArtifact("coverage-obligation", { ...browserObligation, schemaVersion: "1.0.0" }).valid).toBe(false);
+  });
+});
+
 describe("formatValidationErrors", () => {
   it("renders each error's instancePath and message, in Ajv's original order", () => {
     const errors: NormalizedValidationError[] = [

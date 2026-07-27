@@ -1,16 +1,19 @@
 /* This file is generated from shared/schemas. Do not edit manually. */
 
-export interface CoverageObligation {
+export type CoverageObligation = {
+  [k: string]: unknown | undefined;
+} & {
   artifactType: "coverage-obligation";
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   producerVersion: string;
   obligationId: string;
   requirementId: string;
   requirementAnalysisArtifactId: string;
   role: string;
   behavior: string;
-  browser: string;
-  viewport: {
+  executionSurface: "browser" | "api" | "unit" | "integration" | "performance" | "security" | "manual";
+  browser?: string;
+  viewport?: {
     width: number;
     height: number;
   };
@@ -18,4 +21,4 @@ export interface CoverageObligation {
   risk: "low" | "medium" | "high" | "critical";
   required: boolean;
   outcome: string;
-}
+};

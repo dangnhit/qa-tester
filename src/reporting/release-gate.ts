@@ -3,7 +3,7 @@ import { indexByTestCaseIdentity } from "../core/artifact-index.js";
 import { creditsCoverage } from "../core/provenance.js";
 import { isRecord } from "../core/values.js";
 import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
-import { evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
+import { asExecutionSurface, evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
 
 export type GateBug = Readonly<{ bugId: string; triageStatus: "NEEDS_TRIAGE" | "TRIAGED"; severity?: DefectSeverity; open: boolean }>;
 export type ReleaseGateInput = Readonly<{
@@ -32,6 +32,17 @@ export type GateWorkspaceArtifact = Readonly<{
 
 function string(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value : []; }
+/**
+ * The two dimensions only the `browser` surface owns, or `undefined` when they are malformed. Kept
+ * exactly as strict as before for browser-surface records — a broken viewport still drops the record,
+ * preserving the deliberately-deferred fail-OPEN behavior. It is only ever consulted for that surface,
+ * which is what lets a non-browser obligation (which legitimately has neither) resolve at all.
+ */
+function browserDimensions(value: Readonly<Record<string, unknown>>): Readonly<{ browser: string; viewport: { width: number; height: number } }> | undefined {
+  const viewport = value.viewport; const browser = string(value.browser);
+  if (browser === undefined || !isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") return undefined;
+  return { browser, viewport: { width: viewport.width, height: viewport.height } };
+}
 function canonical<T>(items: readonly T[], key: (item: T) => string): readonly T[] { return [...items].sort((left, right) => key(left).localeCompare(key(right))); }
 
 /** Deterministic policy only: narrative code may describe this result but cannot alter it. */
@@ -91,13 +102,20 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   // index built here serves exactly the array `valuesOf("test-case")` returned, in that order.
   const casesByIdentity = indexByTestCaseIdentity(valuesOf("test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
   const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {
-    const value = artifact.value; const viewport = value.viewport;
+    const value = artifact.value;
     const analysis = source.find((candidate) => candidate.record.id === value.requirementAnalysisArtifactId && candidate.record.type === "requirement-analysis");
     const authoritative = array(analysis?.value.statements).some((statement) => isRecord(statement) && statement.requirementId === value.requirementId && statement.authority === "AUTHORITATIVE");
-    if (!isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") return [];
-    const fields = [value.obligationId, value.requirementId, value.role, value.behavior, value.browser, value.risk, value.outcome];
+    // An obligation with no recognizable surface is malformed (the schema requires one) and is dropped
+    // exactly like any other malformed record. A VALID non-browser surface is the opposite case: it
+    // carries neither engine nor viewport by design and must flow through to the coverage buckets, so
+    // an Execution Surface no executor covers stays explicitly unmet rather than absent (CONTEXT.md:445).
+    const surface = asExecutionSurface(value.executionSurface);
+    if (surface === undefined) return [];
+    const geometry = surface === "browser" ? browserDimensions(value) : {};
+    if (geometry === undefined) return [];
+    const fields = [value.obligationId, value.requirementId, value.role, value.behavior, value.risk, value.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, role: value.role as string, behavior: value.behavior as string, browser: value.browser as string, viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
+    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod: string(value.accessibilityMethod), risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative }];
   });
   /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
    *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
@@ -105,10 +123,15 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   const asAttempt = (attemptId: unknown, status: unknown, identity: Readonly<Record<string, unknown>>): CoverageAttempt[] => {
     const testCase = casesByIdentity.get({ testCaseId: identity.testCaseId, testCaseRevisionId: identity.testCaseRevisionId, testCaseInstanceId: identity.testCaseInstanceId })[0];
     const dimensions = testCase?.value.coverage;
-    if (!isRecord(dimensions) || !isRecord(dimensions.viewport) || typeof dimensions.viewport.width !== "number" || typeof dimensions.viewport.height !== "number") return [];
-    const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.browser, dimensions.risk, dimensions.outcome];
+    if (!isRecord(dimensions)) return [];
+    // Both lanes DERIVE the browser surface (see CoverageAttempt#executionSurface): these dimensions
+    // come from `test-case.coverage`, which is browser-shaped by schema. So the browser-geometry guard
+    // stays mandatory here and every attempt-drop path is unchanged.
+    const geometry = browserDimensions(dimensions);
+    if (geometry === undefined) return [];
+    const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, role: dimensions.role as string, behavior: dimensions.behavior as string, browser: dimensions.browser as string, viewport: { width: dimensions.viewport.width, height: dimensions.viewport.height }, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
+    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, ...geometry, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
   };
   const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
     .flatMap((artifact) => asAttempt(artifact.value.attemptId, artifact.value.status, artifact.value));

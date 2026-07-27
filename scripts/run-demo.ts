@@ -130,8 +130,8 @@ async function createSourceBundle(root: string, baseUrl: string, testcase: DemoT
       type: "coverage-obligation",
       relationships: [requirement.id],
       value: {
-        artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "0.1.0", obligationId: "COV-DEMO-SAVE", requirementAnalysisArtifactId: requirement.id,
-        requirementId: testcase.requirement.id, role: "member", behavior: "save profile", browser: "chromium", viewport: testcase.matrix[0]!.viewport, accessibilityMethod: null, risk: "high", outcome: testcase.testCase.expectedText, required: true,
+        artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "0.1.0", obligationId: "COV-DEMO-SAVE", requirementAnalysisArtifactId: requirement.id,
+        requirementId: testcase.requirement.id, role: "member", behavior: "save profile", executionSurface: "browser", browser: "chromium", viewport: testcase.matrix[0]!.viewport, accessibilityMethod: null, risk: "high", outcome: testcase.testCase.expectedText, required: true,
       },
     });
     registered.push(coverage);

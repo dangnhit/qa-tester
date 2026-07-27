@@ -91,7 +91,7 @@ Goal: the documented happy path works end-to-end, the foundation is clean, and i
 - `evidence.schema.json` → `subject` union (`attempt` | `observed-execution`); `provenance` → discriminated union by `kind` (geometry required only for `screenshot`/`annotation`). Fixes the pre-existing "log evidence must declare dpr/scroll" wart. Bump `schemaVersion`.
 
 **Phase 6 — Coverage model integrity (2 weeks).**
-- `coverage-obligation` → add `executionSurface` (`browser|api|unit|integration|performance|security|manual`); `browser`+`viewport` required only when `surface=browser`. Bump to `2.0.0`. Uncovered surfaces become **authorable → explicitly unmet** in the gate (closes the CONTEXT.md:415 promise).
+- `coverage-obligation` → add `executionSurface` (`browser|api|unit|integration|performance|security|manual`); `browser`+`viewport` required only when `surface=browser`. Bump to `2.0.0`. Uncovered surfaces become **authorable → explicitly unmet** in the gate (closes the CONTEXT.md:443-445 promise).
 - `test-result` → add `observedEngine`; coverage matches the **observed** engine, never the declared label (kills XB-1).
 - `accessibilityMethod` → enum; automated methods require a machine artifact, manual methods require a **Human Attestation**, never inferred (kills A11Y-1).
 

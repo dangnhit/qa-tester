@@ -288,9 +288,9 @@ describe("planning ingestion", () => {
     const fixture = await setup();
     const sourcePath = join(fixture.root, "orphan-coverage.json");
     await writeFile(sourcePath, JSON.stringify({
-      artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+      artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
       obligationId: "COV-1", requirementId: "REQ-ORPHAN", requirementAnalysisArtifactId: "missing-artifact",
-      role: "member", behavior: "sign in", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+      role: "member", behavior: "sign in", executionSurface: "browser", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
     }));
 
     await expect(ingestCoverageObligation({ ...fixture, sourcePath })).rejects.toThrow(/orphan|requirement/i);
@@ -314,9 +314,9 @@ describe("planning ingestion", () => {
     const requirement = await ingestRequirementAnalysis({ ...fixture, sourcePath: requirementPath });
     const coveragePath = join(fixture.root, "coverage.json");
     await writeFile(coveragePath, JSON.stringify({
-      artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+      artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
       obligationId: "COV-1", requirementId: "REQ-LOGIN", requirementAnalysisArtifactId: requirement.id,
-      role: "member", behavior: "sign in", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+      role: "member", behavior: "sign in", executionSurface: "browser", browser: "chromium", viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
     }));
     const coverage = await ingestCoverageObligation({ ...fixture, sourcePath: coveragePath });
     const tampered = JSON.parse(await readFile(coverage.absolutePath, "utf8")) as Record<string, unknown>;

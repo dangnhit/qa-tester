@@ -66,8 +66,8 @@ function requirementAnalysis(overrides: { authority?: string; statementCount?: n
 
 function coverageObligation(requirementAnalysisArtifactId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    artifactType: "coverage-obligation", schemaVersion: "1.0.0", producerVersion: "1.0.0", obligationId: "COV",
-    requirementAnalysisArtifactId, requirementId: "REQ", role: "member", behavior: "save", browser: "chromium",
+    artifactType: "coverage-obligation", schemaVersion: "2.0.0", producerVersion: "1.0.0", obligationId: "COV",
+    requirementAnalysisArtifactId, requirementId: "REQ", role: "member", behavior: "save", executionSurface: "browser", browser: "chromium",
     viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true, ...overrides,
   };
 }

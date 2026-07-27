@@ -4,10 +4,12 @@ import { creditsCoverage } from "../core/provenance.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { array, isRecord } from "../core/values.js";
 import {
+  asExecutionSurface,
   evaluateCoverage,
   type CoverageAttempt,
   type CoverageEvaluation,
   type CoverageObligation,
+  type ExecutionSurface,
   type ResolvedCoverageObligation,
 } from "../planning/coverage.js";
 
@@ -19,15 +21,28 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function asObligation(value: Readonly<Record<string, unknown>>): CoverageObligation {
+/**
+ * The two dimensions only the `browser` surface owns. On every other surface the schema forbids them,
+ * so they are not read at all — that absence is legitimate, not malformed, and is precisely what lets
+ * an obligation the runtime cannot execute resolve and be reported unmet (CONTEXT.md:445). For the
+ * browser surface the checks are byte-for-byte the ones this reader has always applied.
+ */
+function browserDimensions(surface: ExecutionSurface, value: Readonly<Record<string, unknown>>): Readonly<{ browser?: string; viewport?: { width: number; height: number } }> {
+  if (surface !== "browser") return {};
   const viewport = value.viewport;
   if (!isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") {
     throw new QaSkillsError("Registered coverage obligation viewport is invalid", "ARTIFACT_BINDING");
   }
+  return { browser: requireString(value.browser, "coverage obligation browser"), viewport: { width: viewport.width, height: viewport.height } };
+}
+
+function asObligation(value: Readonly<Record<string, unknown>>): CoverageObligation {
+  const surface = asExecutionSurface(value.executionSurface);
+  if (surface === undefined) throw new QaSkillsError("Registered coverage obligation execution surface is invalid", "ARTIFACT_BINDING");
   return {
     obligationId: requireString(value.obligationId, "coverage obligation ID"), requirementId: requireString(value.requirementId, "coverage obligation requirement ID"),
-    role: requireString(value.role, "coverage obligation role"), behavior: requireString(value.behavior, "coverage obligation behavior"), browser: requireString(value.browser, "coverage obligation browser"),
-    viewport: { width: viewport.width, height: viewport.height }, accessibilityMethod: typeof value.accessibilityMethod === "string" ? value.accessibilityMethod : undefined,
+    executionSurface: surface, role: requireString(value.role, "coverage obligation role"), behavior: requireString(value.behavior, "coverage obligation behavior"),
+    ...browserDimensions(surface, value), accessibilityMethod: typeof value.accessibilityMethod === "string" ? value.accessibilityMethod : undefined,
     risk: requireString(value.risk, "coverage obligation risk"), required: value.required === true, outcome: requireString(value.outcome, "coverage obligation outcome"),
   };
 }
@@ -35,7 +50,9 @@ function asObligation(value: Readonly<Record<string, unknown>>): CoverageObligat
 function dimensions(value: Readonly<Record<string, unknown>>): CoverageDimensions {
   const coverage = value.coverage;
   if (!isRecord(coverage)) throw new QaSkillsError("Registered test case has no immutable coverage dimensions", "ARTIFACT_BINDING");
-  return asObligation({ ...coverage, obligationId: "resolved", required: true });
+  // The attempt's surface is DERIVED, never declared (CONTEXT.md:444, CoverageAttempt#executionSurface).
+  // It is applied AFTER the spread so a test case can never talk its way onto another surface.
+  return asObligation({ ...coverage, executionSurface: "browser", obligationId: "resolved", required: true });
 }
 
 function requirementAuthority(artifacts: readonly RegisteredWorkspaceArtifact[], analysisId: string, requirementId: string): string {

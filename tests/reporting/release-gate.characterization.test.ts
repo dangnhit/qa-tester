@@ -90,7 +90,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("coverage-obligation", {
         obligationId: "COV-CRIT", requirementId: "REQ-1", role: "member", behavior: "pay",
-        browser: "chromium", risk: "critical", outcome: "charged", required: true,
+        executionSurface: "browser", browser: "chromium", risk: "critical", outcome: "charged", required: true,
         viewport: { width: 1440 },
       }, "OBL-1"),
     ]);
@@ -106,7 +106,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("coverage-obligation", {
         obligationId: "COV-CRIT2", requirementId: "REQ-1", role: "member", behavior: "pay",
-        browser: "chromium", risk: "critical", required: true,
+        executionSurface: "browser", browser: "chromium", risk: "critical", required: true,
         viewport: { width: 1440, height: 900 },
       }, "OBL-2"),
     ]);
@@ -244,7 +244,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — coverage credit by provena
         statements: [{ requirementId: dimensions.requirementId, authority: "AUTHORITATIVE" }],
       }, "RA-CREDIT"),
       artifact("coverage-obligation", {
-        obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, ...dimensions,
+        obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, executionSurface: "browser", ...dimensions,
       }, "OBL-CREDIT"),
       artifact("test-case", {
         testCaseId: "TC-CREDIT", revisionId: "REV-CREDIT", instanceId: "INST-CREDIT", coverage: dimensions,
@@ -291,7 +291,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
   function planning(): GateWorkspaceArtifact[] {
     return [
       artifact("requirement-analysis", { statements: [{ requirementId: dimensions.requirementId, authority: "AUTHORITATIVE" }] }, "RA-CREDIT"),
-      artifact("coverage-obligation", { obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, ...dimensions }, "OBL-CREDIT"),
+      artifact("coverage-obligation", { obligationId: "COV-CREDIT", requirementAnalysisArtifactId: "RA-CREDIT", required: true, executionSurface: "browser", ...dimensions }, "OBL-CREDIT"),
       artifact("test-case", { testCaseId: "TC-CREDIT", revisionId: "REV-CREDIT", instanceId: "INST-CREDIT", coverage: dimensions }, "TC-ART-CREDIT"),
     ];
   }
@@ -354,7 +354,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
     const noBatch = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("requirement-analysis", { statements: [{ requirementId: "REQ-SAVE", authority: "AUTHORITATIVE" }] }, "RA-1"),
       artifact("coverage-obligation", {
-        obligationId: "COV-SAVE", requirementAnalysisArtifactId: "RA-1", required: true,
+        obligationId: "COV-SAVE", requirementAnalysisArtifactId: "RA-1", required: true, executionSurface: "browser",
         requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
         viewport: { width: 1440, height: 900 }, accessibilityMethod: "keyboard", risk: "high", outcome: "confirmation shown",
       }, "OBL-1"),
