@@ -10,6 +10,9 @@
   "status": "FAILED",
   "failureClassification": "PRODUCT_DEFECT",
   "observedEngine": "chromium",
+  "steps": [
+    { "stepId": "open-profile", "status": "FAILED", "durationMs": 1000 }
+  ],
   "startedAt": "2026-07-23T00:00:00.000Z",
   "finishedAt": "2026-07-23T00:00:01.000Z"
 }

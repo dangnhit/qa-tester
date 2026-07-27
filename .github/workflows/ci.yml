@@ -27,6 +27,8 @@ jobs:
       - run: npm run check:generated
       - run: npm run typecheck
       - run: npm run lint
+      - name: Shipped examples satisfy the current contracts
+        run: npm run check:examples
       - name: Full test suite with coverage floor
         run: npm run test:coverage
       - run: npm run build

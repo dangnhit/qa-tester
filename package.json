@@ -33,6 +33,7 @@
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/run-demo.ts",
     "scan:secrets": "tsx scripts/check-secrets.ts",
+    "check:examples": "tsx scripts/check-examples.ts",
     "generate:types": "tsx scripts/generate-types.ts",
     "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated",
     "smoke:package": "tsx scripts/smoke-package-consumer.ts"
