@@ -78,6 +78,16 @@ export type CoverageAttempt = {
    * check than `observedEngine`, not a vacuous one, and closing the gap (reading `page.viewportSize()`)
    * is deliberately out of this task's scope. Until then this half of CONTEXT.md:441 rests on the
    * runtime applying what it was told.
+   *
+   * That argument holds only for lane 1: the DSL's action union (`shared/schemas/browser-test-dsl.
+   * schema.json`) has no resize or emulation action, so nothing can change the viewport after
+   * `createBrowserAttemptSession` sets it from the declaration. Phase 7 obligation: a `test-result-batch`
+   * entry carries no viewport at all, so the same two derivation sites (`release-gate.ts`'s `asAttempt`,
+   * `evaluate-workspace-coverage.ts`'s `dimensions()`) would fall back to `test-case.coverage.viewport`
+   * with no causal link whatsoever to whatever produced the entry — the exact two-declarations-agreeing
+   * shape `observedEngine` exists to kill, just not yet closed here. It is not live today because no batch
+   * producer exists; it becomes live the moment Phase 7 lands one, so this viewport follow-up must be
+   * sequenced before or alongside that producer, not merely sometime after it.
    */
   viewport?: { width: number; height: number } | undefined;
   accessibilityMethod?: string | undefined;

@@ -134,7 +134,7 @@ describe("evaluateCoverage — execution surfaces", () => {
 
   it("does not let a browser attempt satisfy a non-browser obligation matching on every other dimension", () => {
     // Every OTHER dimension must genuinely agree, including browser + viewport — otherwise this would
-    // pass merely because `attempt.browser !== obligation.browser` ("chromium" vs `undefined`), without
+    // pass merely because `attempt.observedEngine !== obligation.browser` ("chromium" vs `undefined`), without
     // the surface check ever being exercised. Smuggling matching geometry on (illegal in a real artifact;
     // the schema forbids it — see "decides on the surface alone" below) is the only way to close that
     // gap in a plain-object unit test.
@@ -177,7 +177,7 @@ describe("evaluateCoverage — execution surfaces", () => {
 
   it("keeps crediting the browser obligation in a mixed set while the non-browser one stays unmet", () => {
     // As above: the api obligation must genuinely match on every dimension other than surface, or the
-    // browser attempt's own `browser`/`viewport` mismatch against an undefined obligation `browser`
+    // browser attempt's own `observedEngine`/`viewport` mismatch against an undefined obligation `browser`
     // would reject it for that reason alone, leaving the mixed-set claim this test's name makes
     // untested — it would pass even with the surface check deleted outright.
     const fullyMatchingApiObligation = { ...apiObligation, browser: obligation.browser, viewport: obligation.viewport };

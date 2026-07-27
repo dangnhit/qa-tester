@@ -16,7 +16,12 @@ import {
 type RequirementStatement = { requirementId: string; authority: string };
 /** Every dimension an ATTEMPT carries. Derived from `CoverageAttempt`, not `CoverageObligation`: since
  *  CONTEXT.md:442 the two shapes differ where it matters — an attempt has an `observedEngine`, an
- *  obligation a declared `browser` — and a missing dimension here has to be a compile error. */
+ *  obligation a declared `browser`. Dropping a REQUIRED dimension from `dimensions()`'s return literal
+ *  below has to be a compile error; `observedEngine` is the one exception, since it is optional on
+ *  `CoverageAttempt`, so omitting it there would still type-check. It would still be caught, just later:
+ *  the `observedEngine` parameter would go unused (`@typescript-eslint/no-unused-vars`, enforced via
+ *  `recommendedTypeChecked` in `eslint.config.js`) and the credit tests would fail — fail-closed either
+ *  way, just not at compile time for this one field. */
 type CoverageDimensions = Omit<CoverageAttempt, "attemptId" | "status">;
 
 function requireString(value: unknown, label: string): string {
