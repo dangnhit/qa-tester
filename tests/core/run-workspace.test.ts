@@ -967,7 +967,7 @@ describe("RunWorkspace", () => {
     await workspace.close();
   });
 
-  it("accepts a failing batch entry whose evidence is the observed execution's registered evidence", async () => {
+  it("resolves a failing batch entry's declared evidence by manifest existence only, not by executionId linkage", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
     const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
