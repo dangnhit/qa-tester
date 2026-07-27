@@ -262,7 +262,7 @@ describe("executeTestInstance", () => {
     ] } satisfies { steps: readonly BrowserTestStep[] };
     const { workspace, registeredCase } = await governedWorkspace({ dsl });
     let createdContexts = 0;
-    const countedBrowser = { newContext: (...args: Parameters<Browser["newContext"]>) => {
+    const countedBrowser = { browserType: () => browser.browserType(), newContext: (...args: Parameters<Browser["newContext"]>) => {
       createdContexts += 1;
       return browser.newContext(...args);
     } } as Browser;
@@ -316,5 +316,73 @@ describe("executeTestInstance", () => {
     expect(activeBrowserSessions.get("ATTEMPT-LIVE-DUPLICATE")?.page).toBeTruthy();
     release?.();
     await expect(first).resolves.toMatchObject({ status: "PASSED" });
+  });
+});
+
+/** CONTEXT.md:442 — a Browser Matrix member is credited from the engine the QA Runtime OBSERVED, never
+ *  from the engine a test case declared. The runtime therefore has to MEASURE it, off the live handle
+ *  it was actually handed, at the moment it drives the attempt. Asserting the literal "chromium" would
+ *  pass just as happily against a hardcoded constant or against the test case's declared label (which
+ *  also says "chromium"), so these drive the reported engine from the handle instead. */
+describe("executeTestInstance — observed engine", () => {
+  /** The real Chromium browser, reporting a different engine name. Everything the attempt actually
+   *  drives is still the live browser; only the engine the handle reports is swapped. A capture that
+   *  hardcodes an engine, or reads it from `test-case.coverage.browser`, cannot pass against this. */
+  const reportingEngine = (engine: unknown): Browser => new Proxy(browser, {
+    get(target, property) {
+      if (property === "browserType") return () => ({ name: () => engine });
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+
+  const registeredResult = async (workspace: RunWorkspace, attemptId: string) =>
+    (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
+
+  it("records the engine the live browser reports", async () => {
+    const { workspace, registeredCase } = await governedWorkspace();
+
+    await executeTestInstance({ workspace, browser, attemptId: "ATTEMPT-ENGINE-REAL", testCaseArtifactId: registeredCase.id, resolveSecret: () => "qa@example.test" });
+
+    expect(browser.browserType().name()).toBe("chromium");
+    expect((await registeredResult(workspace, "ATTEMPT-ENGINE-REAL"))?.value.observedEngine).toBe(browser.browserType().name());
+  });
+
+  it("persists whatever engine the handle it was given reports, so the value is measured and not a constant", async () => {
+    const { workspace, registeredCase } = await governedWorkspace();
+
+    await executeTestInstance({ workspace, browser: reportingEngine("webkit"), attemptId: "ATTEMPT-ENGINE-SWAPPED", testCaseArtifactId: registeredCase.id, resolveSecret: () => "qa@example.test" });
+
+    // The test case still declares "chromium" and the process still runs Chromium; the persisted
+    // record follows the handle. A hardcoded "chromium" — or a read of the declared label — fails here.
+    expect((await registeredResult(workspace, "ATTEMPT-ENGINE-SWAPPED"))?.value.observedEngine).toBe("webkit");
+  });
+
+  it.each([
+    ["names no engine at all", "", "ATTEMPT-ENGINE-EMPTY"],
+    ["reports a non-string engine", 42, "ATTEMPT-ENGINE-NONSTRING"],
+  ] as const)("refuses to run against a handle that %s, rather than registering a guessed engine", async (_label, reported, attemptId) => {
+    const { workspace, registeredCase } = await governedWorkspace();
+
+    await expect(executeTestInstance({ workspace, browser: reportingEngine(reported), attemptId, testCaseArtifactId: registeredCase.id }))
+      .rejects.toThrow(/engine/i);
+    // Nothing guessed and nothing half-written: an unmeasurable engine leaves no audit record behind.
+    expect(await registeredResult(workspace, attemptId)).toBeUndefined();
+  });
+
+  it("refuses before driving the browser at all when the handle cannot be asked for its engine", async () => {
+    const { workspace, registeredCase } = await governedWorkspace();
+    let createdContexts = 0;
+    const engineless = { newContext: (...args: Parameters<Browser["newContext"]>) => {
+      createdContexts += 1;
+      return browser.newContext(...args);
+    } } as Browser;
+
+    await expect(executeTestInstance({ workspace, browser: engineless, attemptId: "ATTEMPT-ENGINE-ABSENT", testCaseArtifactId: registeredCase.id }))
+      .rejects.toThrow(/engine/i);
+    // Fail FAST: the refusal precedes any browser context, so no navigation or side effect happens
+    // for an attempt that could never have produced a creditable result.
+    expect(createdContexts).toBe(0);
+    expect(await registeredResult(workspace, "ATTEMPT-ENGINE-ABSENT")).toBeUndefined();
   });
 });

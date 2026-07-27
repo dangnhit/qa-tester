@@ -126,7 +126,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
         coverage: { requirementId: "REQ-1", role: "member", behavior: "pay", browser: "chromium", viewport: { width: 1440, height: 900 }, risk: "critical", outcome: "charged" },
       }, "TC-ART-1"),
       artifact("test-result", {
-        attemptId: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1",
+        attemptId: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", observedEngine: "chromium",
       }, "RES-1", "runtime-execution"),
     ]);
     // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
@@ -138,7 +138,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
     // dimensions guard (release-gate.ts:93).
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("test-result", {
-        attemptId: "ATT-2", status: "PASSED", testCaseId: "TC-GHOST", testCaseRevisionId: "REV-GHOST", testCaseInstanceId: "INST-GHOST",
+        attemptId: "ATT-2", status: "PASSED", testCaseId: "TC-GHOST", testCaseRevisionId: "REV-GHOST", testCaseInstanceId: "INST-GHOST", observedEngine: "chromium",
       }, "RES-2", "runtime-execution"),
     ]);
     // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
@@ -250,7 +250,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — coverage credit by provena
         testCaseId: "TC-CREDIT", revisionId: "REV-CREDIT", instanceId: "INST-CREDIT", coverage: dimensions,
       }, "TC-ART-CREDIT"),
       artifact("test-result", {
-        attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT",
+        attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT", observedEngine: dimensions.browser,
       }, "RES-CREDIT", resultProvenance),
     ];
   }
@@ -302,7 +302,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
     }, "BATCH-CREDIT", provenance);
   }
 
-  const passingEntry = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT" };
+  const passingEntry = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT", observedEngine: dimensions.browser };
 
   it("credits coverage from a runtime-observed (lane 2) batch entry", () => {
     const result = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [passingEntry])]);
@@ -337,7 +337,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
 
   it("keeps the per-attempt test-result path intact in a mixed workspace", () => {
     const perAttempt = artifact("test-result", {
-      attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT",
+      attemptId: "ATT-CREDIT", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT", observedEngine: dimensions.browser,
     }, "RES-CREDIT", "runtime-execution");
     const mixed = deriveReleaseGateFromWorkspaceArtifacts([...planning(), perAttempt, batch("runtime-observed", [passingEntry])]);
     const perAttemptOnly = deriveReleaseGateFromWorkspaceArtifacts([...planning(), perAttempt]);
@@ -366,7 +366,7 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
         },
       }, "TC-1"),
       artifact("test-result", {
-        attemptId: "ATTEMPT-SAVE", status: "PASSED", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
+        attemptId: "ATTEMPT-SAVE", status: "PASSED", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", observedEngine: "chromium",
       }, "RES-1", "runtime-execution"),
     ]);
 

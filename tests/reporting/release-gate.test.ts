@@ -130,6 +130,56 @@ describe("evaluateReleaseGate", () => {
     expect(result.recommendation).toBe("NOT_READY");
   });
 
+  /** CONTEXT.md:442 — the gate credits a Browser Matrix member from the engine the QA Runtime OBSERVED,
+   *  never from the engine a test case declared. Before this change `asAttempt` sourced the attempt's
+   *  engine from `test-case.coverage.browser`, so the gate compared the obligation's declaration
+   *  against the test case's declaration and the execution was never consulted at all. */
+  describe("observed engine", () => {
+    const declared = {
+      requirementId: "REQ-SAVE", role: "member", behavior: "save profile", browser: "chromium",
+      viewport: { width: 1440, height: 900 }, risk: "high", outcome: "confirmation shown",
+    };
+    /** One authoritative required browser obligation, one matching test case, one passing attempt. */
+    const workspace = (obligationBrowser: string, result: Record<string, unknown>) => [
+      { record: { id: "RA-1", sha256: "a".repeat(64), type: "requirement-analysis" }, value: { statements: [{ requirementId: "REQ-SAVE", authority: "AUTHORITATIVE" }] } },
+      {
+        record: { id: "OBL-1", sha256: "a".repeat(64), type: "coverage-obligation" },
+        value: { ...declared, obligationId: "COV-SAVE", requirementAnalysisArtifactId: "RA-1", executionSurface: "browser", required: true, browser: obligationBrowser },
+      },
+      { record: { id: "TC-1", sha256: "a".repeat(64), type: "test-case" }, value: { testCaseId: "TC-SAVE", revisionId: "REV-1", instanceId: "INST-1", coverage: declared } },
+      {
+        record: { id: "RES-1", sha256: "a".repeat(64), type: "test-result", provenance: "runtime-execution" },
+        value: { attemptId: "ATT-1", status: "PASSED", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", ...result },
+      },
+    ];
+
+    it("does not credit a chromium obligation from an attempt that observed firefox, though the test case declares chromium", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("chromium", { observedEngine: "firefox" }));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+      expect(result.recommendation).toBe("NOT_READY");
+    });
+
+    it("credits a firefox obligation from an attempt that observed firefox, though the test case declares chromium", () => {
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("firefox", { observedEngine: "firefox" }));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
+      expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-SAVE", passed: true }]);
+      expect(result.recommendation).toBe("READY");
+    });
+
+    it("drops an attempt that records no observed engine rather than falling back to the declared one", () => {
+      // The `test-result` schema requires `observedEngine`, so a registered artifact always carries it;
+      // this reader is nonetheless the fail-OPEN one and takes unvalidated records. A missing engine
+      // must DROP the attempt (leaving the obligation unmet) and never silently re-read the test case's
+      // label, which here would agree with the obligation and manufacture a credit.
+      const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("chromium", {}));
+
+      expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+      expect(result.recommendation).toBe("NOT_READY");
+    });
+  });
+
   it("never recommends READY while an Evidence Gap leaves a claim unsubstantiated", () => {
     const result = deriveReleaseGateFromWorkspaceArtifacts([{
       record: { id: "GAP-1", sha256: "a".repeat(64), type: "evidence-gap" },

@@ -15,7 +15,7 @@ const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0
 const testCase = { artifactType: "test-case", schemaVersion: "1.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
 
 function result(runId: string, attemptId: string, classification: "PRODUCT_DEFECT" | "TEST_DEFECT" = "PRODUCT_DEFECT") {
-  return { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, steps: [{ stepId: "open", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
+  return { artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, observedEngine: "chromium", steps: [{ stepId: "open", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
 }
 
 async function evidence(workspace: RunWorkspace, attemptId: string) {

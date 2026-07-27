@@ -4,10 +4,10 @@
   "title": "Test Result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "steps", "startedAt", "finishedAt"],
+  "required": ["artifactType", "schemaVersion", "producerVersion", "attemptId", "runId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "observedEngine", "steps", "startedAt", "finishedAt"],
   "properties": {
     "artifactType": { "const": "test-result" },
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "2.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "attemptId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
@@ -16,6 +16,11 @@
     "testCaseInstanceId": { "type": "string", "minLength": 1 },
     "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
     "failureClassification": { "enum": ["PRODUCT_DEFECT", "TEST_DEFECT", "ENVIRONMENT_DEFECT", "UNDETERMINED", "NONE"] },
+    "observedEngine": {
+      "description": "The browser engine the QA Runtime OBSERVED while driving this attempt, read from the live browser handle. A Browser Matrix member is credited from this value and never from the engine a test case declared (CONTEXT.md:442). Deliberately a free non-empty string rather than an enum: Playwright types BrowserType.name() as string, coverage-obligation.browser is a free string too, and lane 2 reports engines from an external runner this repo does not enumerate. An unrecognized engine matches no obligation, which is already fail-closed; rejecting an honest observation is not.",
+      "type": "string",
+      "minLength": 1
+    },
     "steps": {
       "type": "array",
       "minItems": 1,

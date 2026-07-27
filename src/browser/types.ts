@@ -94,6 +94,12 @@ export type TestAttempt = {
   testCaseRevisionId: string;
   testCaseInstanceId: string;
   contextId: string;
+  /**
+   * The engine the QA Runtime OBSERVED driving this attempt, read off the live `Browser` handle — never
+   * the engine a test case declared (CONTEXT.md:442). Non-optional on purpose: an attempt that could
+   * not name its engine is refused before it runs, so there is no state in which this is absent.
+   */
+  observedEngine: string;
   status: ExecutionStatus;
   startedAt: string;
   finishedAt: string;

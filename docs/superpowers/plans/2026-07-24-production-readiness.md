@@ -92,7 +92,7 @@ Goal: the documented happy path works end-to-end, the foundation is clean, and i
 
 **Phase 6 — Coverage model integrity (2 weeks).**
 - `coverage-obligation` → add `executionSurface` (`browser|api|unit|integration|performance|security|manual`); `browser`+`viewport` required only when `surface=browser`. Bump to `2.0.0`. Uncovered surfaces become **authorable → explicitly unmet** in the gate (closes the CONTEXT.md:443-445 promise).
-- `test-result` → add `observedEngine`; coverage matches the **observed** engine, never the declared label (kills XB-1).
+- `test-result` → add `observedEngine`; coverage matches the **observed** engine, never the declared label (closes the CONTEXT.md:441-442 promise; the "XB-1" report this line used to cite does not exist in this repo or its history).
 - `accessibilityMethod` → enum; automated methods require a machine artifact, manual methods require a **Human Attestation**, never inferred (kills A11Y-1).
 
 **Phase 7 — Lane 2 (2 weeks).**

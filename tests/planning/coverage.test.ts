@@ -27,7 +27,9 @@ function matchingAttempt(overrides: Record<string, unknown> = {}) {
     executionSurface: "browser" as const,
     role: obligation.role,
     behavior: obligation.behavior,
-    browser: obligation.browser,
+    // OBSERVED, not declared (CONTEXT.md:442). The obligation's `browser` beside it is a DECLARATION;
+    // the two field names differ on purpose, so a reader can never confuse which side is which.
+    observedEngine: obligation.browser,
     viewport: obligation.viewport,
     accessibilityMethod: obligation.accessibilityMethod,
     risk: obligation.risk,
@@ -62,7 +64,7 @@ describe("evaluateCoverage", () => {
     ["requirement", { requirementId: "REQ-OTHER" }],
     ["role", { role: "admin" }],
     ["behavior", { behavior: "delete profile" }],
-    ["browser", { browser: "webkit" }],
+    ["observed engine", { observedEngine: "webkit" }],
     ["viewport", { viewport: { width: 390, height: 844 } }],
     ["accessibility method", { accessibilityMethod: "manual-keyboard" }],
     ["risk", { risk: "low" }],
@@ -72,6 +74,27 @@ describe("evaluateCoverage", () => {
 
     expect(evaluation.satisfied).toEqual([]);
     expect(evaluation.missing).toEqual([obligation.obligationId]);
+  });
+
+  /** CONTEXT.md:442: a Browser Matrix member is credited from the engine the QA Runtime OBSERVED,
+   *  never from the engine a test case declared. An attempt therefore has no declared-engine field at
+   *  all. This pins the matcher against a `browser` label smuggled onto an attempt record — the exact
+   *  field it used to compare, and the only way this unit could regress to comparing a declaration. */
+  it("never falls back to a declared browser label smuggled onto an attempt", () => {
+    const evaluation = evaluateCoverage([obligation], [matchingAttempt({ observedEngine: "firefox", browser: obligation.browser })]);
+
+    expect(evaluation.satisfied).toEqual([]);
+    expect(evaluation.missing).toEqual([obligation.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual([]);
+  });
+
+  it("credits an obligation whose declared engine the attempt actually observed", () => {
+    const firefoxObligation = { ...obligation, browser: "firefox" };
+
+    const evaluation = evaluateCoverage([firefoxObligation], [matchingAttempt({ observedEngine: "firefox", browser: "chromium" })]);
+
+    expect(evaluation.satisfied).toEqual([firefoxObligation.obligationId]);
+    expect(evaluation.qualifyingAttemptIds).toEqual(["ATTEMPT-PASS"]);
   });
 });
 

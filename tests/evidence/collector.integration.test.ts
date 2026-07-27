@@ -21,7 +21,7 @@ async function registerAttempt(workspace: RunWorkspace, attemptId: string): Prom
     coverage: { requirementId: "REQ-1", role: "tester", behavior: "capture", browser: "chromium", viewport: { width: 80, height: 60 }, accessibilityMethod: null, risk: "low", outcome: "capture completes" },
   }, relationships: [], provenance: "test" });
   await workspace.registerArtifactValue({ type: "test-result", value: {
-    artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
+    artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
   }, relationships: [testCase.id], provenance: "test" });
 }
 

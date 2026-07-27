@@ -64,7 +64,7 @@ function testCase(id: string) {
 function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "ATTEMPT-1") {
   return {
     artifactType: "test-result",
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     producerVersion: "1.0.0",
     attemptId,
     runId: workspace.runId,
@@ -73,6 +73,7 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
     testCaseInstanceId: `${testCaseId}--INSTANCE-1`,
     status: "PASSED",
     failureClassification: "NONE",
+    observedEngine: "chromium",
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
     startedAt: "2026-07-23T12:34:56.000Z",
     finishedAt: "2026-07-23T12:35:56.000Z",
@@ -88,6 +89,7 @@ function batchEntry(overrides: Record<string, unknown> = {}) {
     testCaseInstanceId: "TC-1--INSTANCE-1",
     status: "PASSED",
     failureClassification: "NONE",
+    observedEngine: "chromium",
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
     ...overrides,
   };
@@ -96,7 +98,7 @@ function batchEntry(overrides: Record<string, unknown> = {}) {
 function testResultBatch(workspace: RunWorkspace, entries: readonly Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
   return {
     artifactType: "test-result-batch",
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     producerVersion: "1.0.0",
     executionId: "EXEC-1",
     runId: workspace.runId,

@@ -59,7 +59,26 @@ export type CoverageAttempt = {
   executionSurface: ExecutionSurface;
   role: string;
   behavior: string;
-  browser?: string | undefined;
+  /**
+   * OBSERVED, never declared (CONTEXT.md:442): the engine the QA Runtime saw driving this attempt,
+   * carried on the claim itself (`test-result.observedEngine`, or a `test-result-batch` entry's). It is
+   * named differently from `CoverageObligation.browser` on purpose — that one is a DECLARATION, and the
+   * whole defect this field exists to kill was comparing two declarations to each other while the
+   * execution went unconsulted. There is deliberately no declared-engine field on an attempt, so no
+   * reader can reach for one; both readers drop or reject a claim that carries no observed engine
+   * rather than falling back to `test-case.coverage.browser`.
+   *
+   * Browser-surface only, like `viewport`: `undefined` on every other surface, where it is not compared.
+   */
+  observedEngine?: string | undefined;
+  /**
+   * DECLARED, still: unlike the engine, the runtime does not measure the viewport it ends up with — it
+   * SETS it from `test-case.coverage.viewport` (`createBrowserAttemptSession`), so the declaration is
+   * causally upstream of the geometry rather than an independent claim about it. That makes it a weaker
+   * check than `observedEngine`, not a vacuous one, and closing the gap (reading `page.viewportSize()`)
+   * is deliberately out of this task's scope. Until then this half of CONTEXT.md:441 rests on the
+   * runtime applying what it was told.
+   */
   viewport?: { width: number; height: number } | undefined;
   accessibilityMethod?: string | undefined;
   risk: string;
@@ -83,10 +102,15 @@ export type CoverageEvaluation = {
  * Runtime actually drove. They participate only when the obligation declares that surface. On any
  * other surface the schema forbids them outright, so comparing them would compare two absences and
  * silently widen the match; the surface equality check above is what discriminates there.
+ *
+ * The engine comparison is OBSERVED-against-DECLARED (CONTEXT.md:442): the attempt contributes the
+ * engine that ran, the obligation the engine that was required. An obligation naming an engine the
+ * runtime never launches is therefore correctly unsatisfiable — that is CONTEXT.md:441 working, not a
+ * regression: a missing Browser Matrix member is never satisfied by another engine.
  */
 function matchesBrowserDimensions(attempt: CoverageAttempt, obligation: CoverageObligation): boolean {
   if (obligation.executionSurface !== "browser") return true;
-  return attempt.browser !== undefined && attempt.browser === obligation.browser
+  return attempt.observedEngine !== undefined && attempt.observedEngine === obligation.browser
     && attempt.viewport !== undefined && obligation.viewport !== undefined
     && attempt.viewport.width === obligation.viewport.width
     && attempt.viewport.height === obligation.viewport.height;

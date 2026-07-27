@@ -14,7 +14,10 @@ import {
 } from "../planning/coverage.js";
 
 type RequirementStatement = { requirementId: string; authority: string };
-type CoverageDimensions = Omit<CoverageObligation, "obligationId" | "required">;
+/** Every dimension an ATTEMPT carries. Derived from `CoverageAttempt`, not `CoverageObligation`: since
+ *  CONTEXT.md:442 the two shapes differ where it matters — an attempt has an `observedEngine`, an
+ *  obligation a declared `browser` — and a missing dimension here has to be a compile error. */
+type CoverageDimensions = Omit<CoverageAttempt, "attemptId" | "status">;
 
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) throw new QaSkillsError(`Registered ${label} is invalid`, "ARTIFACT_BINDING");
@@ -47,7 +50,15 @@ function asObligation(value: Readonly<Record<string, unknown>>): CoverageObligat
   };
 }
 
-function dimensions(value: Readonly<Record<string, unknown>>): CoverageDimensions {
+/**
+ * The attempt's dimensions: every one but the engine comes from the matched test case, and the engine
+ * comes from the claim that observed it (CONTEXT.md:442). `declared.browser` — the test case's own
+ * engine label — is validated (a test case missing it is malformed, exactly as before) and then
+ * deliberately dropped on the floor: it is the value whose agreement with the obligation used to
+ * manufacture credit for engines nothing ran. Each field is copied by name rather than spread so that
+ * re-admitting it would have to be a visible, deliberate edit.
+ */
+function dimensions(value: Readonly<Record<string, unknown>>, observedEngine: string): CoverageDimensions {
   const coverage = value.coverage;
   if (!isRecord(coverage)) throw new QaSkillsError("Registered test case has no immutable coverage dimensions", "ARTIFACT_BINDING");
   // The attempt's surface is DERIVED, never declared (CONTEXT.md:444, CoverageAttempt#executionSurface).
@@ -55,7 +66,12 @@ function dimensions(value: Readonly<Record<string, unknown>>): CoverageDimension
   // Phase 7 obligation (see CoverageAttempt#executionSurface): this hardcoded "browser" literal must
   // become a real read off the observed-execution record once test-case.coverage stops being
   // browser-only, or a non-browser batch entry will mis-credit a browser obligation.
-  return asObligation({ ...coverage, executionSurface: "browser", obligationId: "resolved", required: true });
+  const declared = asObligation({ ...coverage, executionSurface: "browser", obligationId: "resolved", required: true });
+  return {
+    requirementId: declared.requirementId, executionSurface: declared.executionSurface, role: declared.role,
+    behavior: declared.behavior, observedEngine, viewport: declared.viewport,
+    accessibilityMethod: declared.accessibilityMethod, risk: declared.risk, outcome: declared.outcome,
+  };
 }
 
 function requirementAuthority(artifacts: readonly RegisteredWorkspaceArtifact[], analysisId: string, requirementId: string): string {
@@ -94,7 +110,10 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
       const instanceId = requireString(value.testCaseInstanceId, `${field} test case instance ID`);
       const matches = casesByIdentity.get({ testCaseId, testCaseRevisionId: revisionId, testCaseInstanceId: instanceId });
       if (matches.length !== 1) throw new QaSkillsError(`${subject} references an orphan or ambiguous test case revision and instance`, "ARTIFACT_BINDING");
-      return dimensions(matches[0]?.value ?? {});
+      // Read off the claim, never the test case. This reader is the fail-CLOSED one, so a claim with no
+      // observed engine is rejected outright rather than dropped; the schema requires the field, so
+      // reaching this throw means a registered artifact stopped matching its own contract.
+      return dimensions(matches[0]?.value ?? {}, requireString(value.observedEngine, `${field} observed engine`));
     };
     const attempts: CoverageAttempt[] = artifacts
       .filter((artifact) => artifact.record.type === "test-result" && creditsCoverage(artifact.record.provenance))

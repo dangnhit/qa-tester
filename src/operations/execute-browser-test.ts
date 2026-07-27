@@ -1,6 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { Browser } from "@playwright/test";
+
 import { aggregateStepResults } from "../browser/assertions.js";
 import { executeBrowserStep } from "../browser/playwright/executor.js";
 import { createBrowserAttemptSession } from "../browser/playwright/session.js";
@@ -85,7 +87,31 @@ function permitTarget(step: BrowserTestStep): string {
   return step.action.kind === "open" && typeof step.action.url === "string" ? step.action.url : JSON.stringify(step.action);
 }
 
+/**
+ * The one place the engine is MEASURED (CONTEXT.md:442): whatever the live handle names itself, taken
+ * at the moment that handle is about to drive the attempt. Nothing here consults `test-case.coverage`
+ * — a declared label agreeing with an obligation is precisely the defect this replaces.
+ *
+ * The handle is read structurally rather than trusted through its `Browser` type because the type is
+ * only a compile-time claim: a partial double, a remote/CDP-connected handle, or a future non-Playwright
+ * driver can all reach here. An engine that cannot be determined is REFUSED, not defaulted. A guessed
+ * "chromium" would be indistinguishable from a measured one on the checksummed record, and would credit
+ * a Browser Matrix member nothing ever ran — which is the exact failure this artifact exists to prevent.
+ * Playwright documents `BrowserType.name()` as `string` ("For example: 'chromium', 'webkit' or
+ * 'firefox'"), so the value is validated as a non-empty string and otherwise passed through unchanged.
+ */
+function observedEngineOf(browser: Browser): string {
+  const reported: unknown = (browser as { browserType?: () => { name?: () => unknown } | undefined }).browserType?.()?.name?.();
+  if (typeof reported !== "string" || reported.length === 0) {
+    throw new QaSkillsError("Execution requires a browser that reports the engine it runs", "ARTIFACT_BINDING");
+  }
+  return reported;
+}
+
 async function executeCanonical(input: InternalExecuteTestInput & { safety: LaneSafetyContext; persistAttempt?: (attempt: TestAttempt) => Promise<void> }): Promise<TestAttempt> {
+  // Read the engine BEFORE anything is driven: an attempt that could never carry an observed engine
+  // must not navigate, act, or leave a side effect behind first.
+  const observedEngine = observedEngineOf(input.browser);
   const started = Date.now();
   const session = await createBrowserAttemptSession(input.browser, input.testCase);
   const contextId = `${input.attemptId}:context`;
@@ -116,7 +142,7 @@ async function executeCanonical(input: InternalExecuteTestInput & { safety: Lane
     const scrub = (text: string) => [...secrets].reduce((result, secret) => secret.length === 0 ? result : result.replaceAll(secret, "[REDACTED]"), text);
     const safeSteps = steps.map((step) => step.error === undefined ? step : { ...step, error: scrub(step.error) });
     const safeTelemetry = session.telemetry.findings.map((finding) => ({ ...finding, message: scrub(finding.message), ...(finding.url === undefined ? {} : { url: scrub(finding.url) }) }));
-    const attempt = { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
+    const attempt = { attemptId: input.attemptId, runId: input.runId, testCaseId: input.testCase.testCaseId, testCaseRevisionId: input.testCase.revisionId, testCaseInstanceId: input.testCase.instanceId, contextId, observedEngine, status: aggregateStepResults(safeSteps), startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString(), steps: safeSteps, telemetry: safeTelemetry };
     // Register the canonical attempt before any evidence hook runs.  Evidence
     // descriptors are never provisional: each one binds this immutable result
     // while the browser context is still available for capture.
@@ -157,9 +183,12 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       await input.workspace.registerArtifactValue({
         type: "test-result",
         value: {
-          artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0",
+          artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "0.1.0",
           attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
           testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
+          // The MEASURED engine, carried straight from the attempt that observed it. Coverage matching
+          // reads this field and never `test-case.coverage.browser` (CONTEXT.md:442).
+          observedEngine: attempt.observedEngine,
           steps: attempt.steps.map((step) => ({
             stepId: step.stepId,
             status: step.status,

@@ -47,7 +47,7 @@ async function registerRaw(workspace: RunWorkspace, options: { attemptId?: strin
   const result = await workspace.registerArtifactValue({
     type: "test-result",
     relationships: [testCase.id],
-    value: { artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
+    value: { artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", observedEngine: "chromium", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
   });
   const bytes = options.bytes ?? await patternedPng();
   return workspace.registerEvidenceBundle({

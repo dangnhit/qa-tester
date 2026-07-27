@@ -126,15 +126,24 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     if (!isRecord(dimensions)) return [];
     // Both lanes DERIVE the browser surface (see CoverageAttempt#executionSurface): these dimensions
     // come from `test-case.coverage`, which is browser-shaped by schema. So the browser-geometry guard
-    // stays mandatory here and every attempt-drop path is unchanged.
+    // stays mandatory here and every attempt-drop path is unchanged. Only `geometry.viewport` is used
+    // below: `geometry.browser` is the test case's DECLARED engine, which per CONTEXT.md:442 no longer
+    // takes part in crediting. The guard still runs over it because a test case missing its declared
+    // engine is malformed, and this reader has always dropped malformed records — but the value itself
+    // is deliberately never read into an attempt.
     const geometry = browserDimensions(dimensions);
     if (geometry === undefined) return [];
+    // The MEASURED engine, off the claim itself rather than the test case (CONTEXT.md:442). Absent means
+    // DROP: the `test-result` schema requires the field, so a registered artifact always carries it, and
+    // falling back to the declared label is exactly the mis-credit this replaces.
+    const observedEngine = string(identity.observedEngine);
+    if (observedEngine === undefined) return [];
     const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
     // Phase 7 obligation (see CoverageAttempt#executionSurface in planning/coverage.ts): this hardcoded
     // "browser" literal must become a real read off the observed-execution record once test-case.coverage
     // stops being browser-only, or a non-browser batch entry will mis-credit a browser obligation.
-    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, ...geometry, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
+    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, observedEngine, viewport: geometry.viewport, accessibilityMethod: string(dimensions.accessibilityMethod), risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
   };
   const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
     .flatMap((artifact) => asAttempt(artifact.value.attemptId, artifact.value.status, artifact.value));

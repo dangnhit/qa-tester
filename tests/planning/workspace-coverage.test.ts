@@ -51,12 +51,12 @@ async function setup(overrides: {
   });
   if (overrides.omitResult !== true) {
     await workspace.registerArtifactValue({ type: "test-result", relationships: [testCase.id], provenance: overrides.resultProvenance ?? "runtime-execution", value: {
-      artifactType: "test-result", schemaVersion: "1.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
+      artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
     } });
   }
   if (overrides.batchEntries !== undefined) {
     await workspace.registerArtifactValue({ type: "test-result-batch", relationships: [testCase.id], provenance: overrides.batchProvenance ?? "runtime-observed", value: {
-      artifactType: "test-result-batch", schemaVersion: "1.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
+      artifactType: "test-result-batch", schemaVersion: "2.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
       commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
       startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", entries: overrides.batchEntries,
     } });
@@ -152,9 +152,12 @@ describe("evaluateWorkspaceCoverage", () => {
     await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/revision|reference|binding/i);
   });
 
+  // `browser` is deliberately absent from this list: since CONTEXT.md:442 the attempt's engine comes
+  // from what the runtime OBSERVED, so a mismatched declared label on the test case is not a coverage
+  // mismatch at all. That whole dimension is covered by "evaluateWorkspaceCoverage — observed engine".
   it.each([
     ["requirement", { requirementId: "REQ-OTHER" }], ["role", { role: "admin" }], ["behavior", { behavior: "delete profile" }],
-    ["browser", { browser: "webkit" }], ["viewport", { viewport: { width: 390, height: 844 } }], ["accessibility", { accessibilityMethod: "screen-reader" }],
+    ["viewport", { viewport: { width: 390, height: 844 } }], ["accessibility", { accessibilityMethod: "screen-reader" }],
     ["risk", { risk: "low" }], ["outcome", { outcome: "redirected" }],
   ])("does not satisfy on a %s dimension mismatch", async (_dimension, coverage) => {
     const fixture = await setup({ testCase: { coverage } });
@@ -182,6 +185,49 @@ describe("evaluateWorkspaceCoverage", () => {
 
     expect(JSON.stringify(await evaluateWorkspaceCoverage(fixture)))
       .toBe("{\"complete\":true,\"satisfied\":[\"COV-SAVE\"],\"missing\":[],\"qualifyingAttemptIds\":[\"ATTEMPT-SAVE\"]}");
+  });
+});
+
+/** CONTEXT.md:442 — "A Browser Matrix member is credited from the engine the QA Runtime observed,
+ *  never from the engine a test case declared." These run against a REGISTERED, schema-validated
+ *  workspace, so `test-result.observedEngine` is a real persisted field and `test-case.coverage.browser`
+ *  is a real declared one, and the two can genuinely disagree.
+ *
+ *  Before this change both readers compared the OBLIGATION's declared engine against the TEST CASE's
+ *  declared engine — two declarations agreeing with each other, with the execution never consulted.
+ *  The first two tests below are that defect from both sides: the declared label is neither sufficient
+ *  (it cannot buy a credit the run did not earn) nor necessary (it cannot veto one the run did earn). */
+describe("evaluateWorkspaceCoverage — observed engine", () => {
+  it("does not credit a chromium obligation from an attempt that observed firefox, though the test case declares chromium", async () => {
+    // obligation.browser === "chromium" === testCase.coverage.browser. Only the OBSERVED engine
+    // disagrees — and nothing in this workspace ever ran firefox.
+    const fixture = await setup({ result: { observedEngine: "firefox" } });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], satisfied: [], qualifyingAttemptIds: [] });
+  });
+
+  it("credits a firefox obligation from an attempt that observed firefox, though the test case declares chromium", async () => {
+    const fixture = await setup({ obligation: { browser: "firefox" }, result: { observedEngine: "firefox" } });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ATTEMPT-SAVE"] });
+  });
+
+  it("still credits when only the test case's declared label disagrees, because that label is no longer read", async () => {
+    const fixture = await setup({ testCase: { coverage: { browser: "webkit" } } });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).resolves.toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ATTEMPT-SAVE"] });
+  });
+
+  it("applies the same rule to a lane-2 batch entry, which carries its own observed engine", async () => {
+    const entry = {
+      entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
+      status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+    };
+    const mismatched = await setup({ omitResult: true, batchEntries: [{ ...entry, observedEngine: "firefox" }] });
+    const matching = await setup({ omitResult: true, batchEntries: [{ ...entry, observedEngine: "chromium" }] });
+
+    await expect(evaluateWorkspaceCoverage(mismatched)).resolves.toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+    await expect(evaluateWorkspaceCoverage(matching)).resolves.toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ENTRY-SAVE"] });
   });
 });
 
@@ -221,7 +267,7 @@ describe("evaluateWorkspaceCoverage — execution surfaces", () => {
 describe("evaluateWorkspaceCoverage — test-result-batch entries", () => {
   const entry = {
     entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
-    status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+    status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
   };
 
   it("credits an authoritative obligation from a runtime-observed batch entry", async () => {

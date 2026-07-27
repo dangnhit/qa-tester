@@ -76,7 +76,7 @@ const otherArtifactContracts = [
     requiredField: "failureClassification",
     valid: {
       artifactType: "test-result",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
@@ -85,6 +85,7 @@ const otherArtifactContracts = [
       testCaseInstanceId: "TC-1--INSTANCE-1",
       status: "PASSED",
       failureClassification: "NONE",
+      observedEngine: "chromium",
       steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
       startedAt: "2026-07-23T12:34:56.000Z",
       finishedAt: "2026-07-23T12:35:56.000Z",
@@ -171,7 +172,7 @@ const otherArtifactContracts = [
     requiredField: "entries",
     valid: {
       artifactType: "test-result-batch",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       executionId: "EXEC-1",
       runId: "20260723T123456Z-a1b2c3",
@@ -181,7 +182,7 @@ const otherArtifactContracts = [
       finishedAt: "2026-07-23T12:35:56.000Z",
       entries: [{
         entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
-        status: "PASSED", failureClassification: "NONE",
+        status: "PASSED", failureClassification: "NONE", observedEngine: "chromium",
         steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
       }],
     },
@@ -369,6 +370,49 @@ describe("evidence schema 2.0.0", () => {
   });
 });
 
+/** `test-result` 2.0.0 records `observedEngine`: the engine the QA Runtime actually drove, so a Browser
+ *  Matrix member is credited from what RAN and never from the engine a test case declared
+ *  (CONTEXT.md:442). Two shape decisions are pinned here.
+ *
+ *  REQUIRED, not optional: an attempt whose engine could not be determined must be unregistrable, so
+ *  the field can never be absent-and-therefore-unchecked on a checksummed audit record.
+ *
+ *  A free non-empty string, NOT an enum of the three Playwright engines: Playwright types
+ *  `BrowserType.name()` as `string` ("For example: 'chromium', 'webkit' or 'firefox'"), the
+ *  `coverage-obligation.browser` this value is compared against is itself `{type: string, minLength: 1}`,
+ *  and lane 2 (Phase 7) will report engines from an external runner's JSON that this repo does not
+ *  enumerate. An enum could not make a wrong-but-plausible engine detectable — only rejectable an
+ *  honest one, which is the single failure an audit record cannot afford. An unrecognized engine
+ *  simply matches no obligation, which is already the fail-closed outcome. */
+describe("test-result schema 2.0.0 (observed engine)", () => {
+  const result = otherArtifactContracts[4].valid;
+
+  it("rejects a test result that does not record the engine it observed", () => {
+    const missing: Record<string, unknown> = { ...result };
+    delete missing.observedEngine;
+
+    expect(validateArtifact("test-result", missing).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+    );
+  });
+
+  it("rejects a test result still declaring schemaVersion 1.0.0", () => {
+    expect(validateArtifact("test-result", { ...result, schemaVersion: "1.0.0" }).valid).toBe(false);
+  });
+
+  it("rejects an empty observed engine, which would name no engine at all", () => {
+    expect(validateArtifact("test-result", { ...result, observedEngine: "" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "minLength" })]),
+    );
+  });
+
+  it("accepts an engine name this repo does not enumerate, so an honest lane-2 observation is never rejected", () => {
+    for (const engine of ["chromium", "firefox", "webkit", "msedge", "some-external-runner-engine"]) {
+      expect(validateArtifact("test-result", { ...result, observedEngine: engine }).valid).toBe(true);
+    }
+  });
+});
+
 /** `test-result-batch` is the lane-2 artifact shape: one artifact per Runtime-Observed Execution,
  *  carrying many entries. These pin the fields that make such a batch auditable — the git anchor
  *  (`commitSha` + `specTreeSha256`, ADR-0010) that is the only reason an observed execution may credit
@@ -376,11 +420,11 @@ describe("evidence schema 2.0.0", () => {
 describe("test-result-batch schema (Runtime-Observed Execution)", () => {
   const entry = {
     entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
-    status: "PASSED", failureClassification: "NONE",
+    status: "PASSED", failureClassification: "NONE", observedEngine: "chromium",
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
   };
   const batch = {
-    artifactType: "test-result-batch", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+    artifactType: "test-result-batch", schemaVersion: "2.0.0", producerVersion: "1.0.0",
     executionId: "EXEC-1", runId: "20260723T123456Z-a1b2c3",
     commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
     startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
@@ -419,11 +463,12 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     expect(validateArtifact("test-result-batch", { ...batch, provenance: "runtime-observed" }).valid).toBe(false);
   });
 
-  it("rejects a batch declaring any schemaVersion other than 1.0.0", () => {
-    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "2.0.0" }).valid).toBe(false);
+  it("rejects a batch declaring any schemaVersion other than 2.0.0", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "1.0.0" }).valid).toBe(false);
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "3.0.0" }).valid).toBe(false);
   });
 
-  it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "steps"] as const)("rejects an entry missing %s", (field) => {
+  it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "observedEngine", "steps"] as const)("rejects an entry missing %s", (field) => {
     const invalidEntry: Record<string, unknown> = { ...entry };
     delete invalidEntry[field];
 

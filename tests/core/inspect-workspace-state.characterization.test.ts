@@ -69,7 +69,7 @@ function testCase(id: string) {
 function testResult(workspace: RunWorkspace, testCaseId: string, attemptId: string) {
   return {
     artifactType: "test-result",
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     producerVersion: "1.0.0",
     attemptId,
     runId: workspace.runId,
@@ -78,6 +78,7 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId: stri
     testCaseInstanceId: `${testCaseId}--INSTANCE-1`,
     status: "PASSED",
     failureClassification: "NONE",
+    observedEngine: "chromium",
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
     startedAt: "2026-07-23T12:34:56.000Z",
     finishedAt: "2026-07-23T12:35:56.000Z",
