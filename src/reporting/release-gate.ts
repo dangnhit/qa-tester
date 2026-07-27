@@ -107,7 +107,19 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
   // trust an id. This reader is fail-OPEN and re-validates nothing: an attestation whose checksum is
   // missing or malformed contributes no credit, which is the only direction a bad attestation can
   // move the gate. A SEMANTICALLY invalid one (wrong method, unbound obligation) cannot reach a READY
-  // gate either — it lands in `validationDiagnostics`, which fails VALID_ARTIFACTS outright.
+  // gate either — NOT because it lands in `validationDiagnostics` (that parameter defaults to `[]` and
+  // no caller in `src/` ever passes a non-empty one, so `VALID_ARTIFACTS` cannot fail on any live path
+  // today), but because every live caller's `artifacts` pool already excludes an invalid attestation
+  // before it reaches this function. `generateQaReport` and `evaluateWorkspaceCoverage` both source
+  // from `RunWorkspace.readRegisteredArtifacts`, which throws on the first diagnostic and returns only
+  // `artifact.valid` records. `releaseGateRule`'s READ stage instead derives from the cascade-sensitive
+  // valid pool built in `inspect-workspace-state.ts` (`ctx.related()`): an artifact invalidated in pass
+  // N stays visible within pass N and drops out only in pass N+1, so a forged attestation can credit
+  // transiently within one pass, but at fixpoint it is gone, the re-derived gate then reports the
+  // obligation missing, and the persisted gate mismatches it and is itself flagged `ARTIFACT_BINDING`
+  // (`releaseGateRule` in semantic-rules.ts). Neither this function nor `evaluateCoverage` is exported
+  // from the package's public surface (`package.json`'s `exports` names only `qa-tester.ts` and
+  // `cli/index.ts`), so no caller outside this repo can hand either an unvalidated set either.
   const attestedObligationChecksums = new Set(valuesOf("human-attestation").flatMap((artifact) => {
     const checksum = string(artifact.value.obligationSha256);
     return checksum === undefined ? [] : [checksum];

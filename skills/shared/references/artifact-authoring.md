@@ -293,6 +293,13 @@ refuses unless exactly one registered obligation carries that `obligationId`, an
 obligation declares the same `accessibilityMethod`. `--statement` is the substance of the claim and
 must actually say something — without it the record only shows that somebody pressed a button.
 
+**Run this before `qa-skill report generate`, never after.** A release gate is an immutable snapshot of
+every artifact registered up to the moment it is generated; registering a `human-attestation` afterward
+changes what a re-derivation of the gate would produce, so the persisted gate permanently mismatches and
+gets flagged (`ARTIFACT_BINDING`) the next time the workspace is read. `generate-qa-report` also refuses
+to run a second time in the same run (a gate and report are generated once), so there is no regenerate-
+to-fix-it path — see [recovery](./recovery.md#attestation-after-the-gate-is-generated) if this happens.
+
 ## CLI helpers
 
 - `qa-skill schema show --type <t>` — print the compiled JSON Schema for any artifact type (not just the

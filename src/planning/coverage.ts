@@ -161,6 +161,14 @@ export type ResolvedCoverageObligation = CoverageObligation & {
    * never checks it), so one attestation could credit an unrelated obligation that happens to share
    * an id. Joining in the reader keeps the byte-exact binding `obligationSha256` exists for.
    *
+   * That join is exact, but the guarantee stops at this field: `evaluateCoverage` below flattens
+   * credit onto `obligationId` in its `satisfied`/`missing` sets, so if two DIFFERENT registered
+   * `coverage-obligation` artifacts share an id, one attestation can still make both APPEAR satisfied
+   * — not through this join (which resolved the correct one), but downstream of it, the same way one
+   * matching attempt already does. Pre-existing, not introduced here, and the shipped producer
+   * (`recordHumanAttestation`) refuses to write an attestation at all when more than one registered
+   * obligation carries the target id, so the shipped path cannot construct the scenario.
+   *
    * What this field does NOT re-verify, because Task 34's semantic rule already guarantees it for
    * any attestation that validates: that it binds exactly one registered `coverage-obligation` by
    * relationship, that its checksum matches, and that its `method` equals the obligation's declared
