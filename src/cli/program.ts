@@ -229,11 +229,21 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     });
   // Lane 2 (ADR-0010). `.argument("[runnerArgs...]")` plus Commander's own `--` handling is the WHOLE
   // of the passthrough: Commander strips the first `--` and delivers the rest as operands, so the
-  // runner's flags never reach this tree's option parser. `passThroughOptions`/`allowUnknownOption` are
-  // deliberately NOT set — either one would accept unknown options here, and `enablePositionalOptions`
-  // (which `passThroughOptions` requires on the program) would change parsing for every command in the
-  // tree. `tests/cli/execute-playwright.test.ts` pins both halves: the passthrough, and that four other
-  // commands still reject `--nope`.
+  // runner's flags never reach this tree's option parser and nothing about any other command changes.
+  //
+  // `allowUnknownOption()` and `passThroughOptions()` are deliberately NOT set, and the reason is what
+  // each actually does — measured against the installed Commander 14, not assumed.
+  // `allowUnknownOption()` accepts an unknown option ANYWHERE on this command, so a typo'd
+  // `--spec-dirr` would be silently forwarded to the runner instead of reported; it is per-command and
+  // is not inherited, so the "one line widens the whole tree" hazard is really "one line per command,
+  // easy to add to the wrong one". `passThroughOptions()` (which Commander refuses without
+  // `enablePositionalOptions()` on the parent) accepts unknown options only AFTER a positional operand
+  // — measured: `validate --nope` still errors with both set, so it is not the global widening it
+  // sounds like. Neither buys anything here, because `--` already delivers the runner's arguments, and
+  // both would take a mistyped flag of OURS and hand it to the runner.
+  //
+  // `tests/cli/execute-playwright.test.ts` pins the passthrough and pins that four other commands still
+  // reject `--nope`; a mutation adding `allowUnknownOption()` to `validate` reddens that second half.
   program.command("execute").description("Run and observe an external test suite as a Runtime-Observed Execution").command("playwright")
     .description("Start a committed Playwright suite, record its result as a test-result-batch, and register its sanitized report as evidence")
     .requiredOption("--root <path>", "Project root directory: the run workspace's root, the runner's working directory, and the git repository")
