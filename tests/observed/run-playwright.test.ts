@@ -1,23 +1,39 @@
 import { execFile } from "node:child_process";
-import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QaSkillsError } from "../../src/core/errors.js";
 import { resolveGitAnchor } from "../../src/core/git-anchor.js";
 import { runObservedPlaywright } from "../../src/observed/run-playwright.js";
-import type { RunnerExecutor, RunnerExit, RunnerInvocation } from "../../src/observed/run-playwright.js";
+import type { RunnerExecutor, RunnerExit, RunnerInvocation, RunnerOutput } from "../../src/observed/run-playwright.js";
 
 const runFile = promisify(execFile);
 const roots: string[] = [];
 const repoRoot = process.cwd();
 
+/** The module deliberately leaves its output directory behind — a producer reads the traces and the
+ *  report out of it. Nothing consumes them here, so the suite sweeps whatever a test caused rather than
+ *  leaving ~20 directories in `tmpdir()` per run. Safe because `fileParallelism: false` and tests within
+ *  a file are sequential, so a directory that appeared during one test was caused by that test. */
+const observedPrefix = "qa-skills-observed-";
+let preexisting: ReadonlySet<string> = new Set();
+
+async function observedTempDirs(): Promise<string[]> {
+  return (await readdir(tmpdir()).catch((): string[] => [])).filter((entry) => entry.startsWith(observedPrefix));
+}
+
+beforeEach(async () => {
+  preexisting = new Set(await observedTempDirs());
+});
+
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  const strays = (await observedTempDirs()).filter((entry) => !preexisting.has(entry)).map((entry) => join(tmpdir(), entry));
+  await Promise.all([...roots.splice(0), ...strays].map((path) => rm(path, { recursive: true, force: true })));
 });
 
 async function git(cwd: string, ...args: readonly string[]): Promise<string> {
@@ -63,7 +79,10 @@ type Spy = { readonly calls: RunnerInvocation[]; readonly execute: RunnerExecuto
 
 /** Records every invocation so a refusal test can assert the runner was never started, rather than
  *  only that the call threw — a throw alone is also what a spawn that failed afterwards looks like. */
-function spy(outcome: (invocation: RunnerInvocation) => Promise<RunnerExit> = () => Promise.resolve({ exitCode: 0, signal: null })): Spy {
+const exited = (exitCode: number, output: Partial<RunnerOutput> = {}): RunnerExit => ({ exitCode, signal: null, stdout: "", stderr: "", ...output });
+const killed = (signal: string, output: Partial<RunnerOutput> = {}): RunnerExit => ({ exitCode: null, signal, stdout: "", stderr: "", ...output });
+
+function spy(outcome: (invocation: RunnerInvocation) => Promise<RunnerExit> = () => Promise.resolve(exited(0))): Spy {
   const calls: RunnerInvocation[] = [];
   return { calls, execute: (invocation) => { calls.push(invocation); return outcome(invocation); } };
 }
@@ -114,7 +133,7 @@ describe("runObservedPlaywright refusals", () => {
 
   it("runs in production once the read-only opt-in is recorded", async () => {
     const root = await newProject("production-allowed", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(0); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: { classification: "production", productionReadOnly: true }, execute: runner.execute });
 
@@ -152,7 +171,7 @@ describe("runObservedPlaywright refusals", () => {
 
   it("refuses a runner killed by a signal even when it left a valid report behind", async () => {
     const root = await newProject("signal", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: null, signal: "SIGKILL" }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return killed("SIGKILL"); });
 
     const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
 
@@ -171,7 +190,7 @@ describe("runObservedPlaywright refusals", () => {
 
   it("refuses an empty report", async () => {
     const root = await newProject("report-empty", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, "   \n"); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, "   \n"); return exited(0); });
 
     const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
 
@@ -180,7 +199,7 @@ describe("runObservedPlaywright refusals", () => {
 
   it.each([["not json at all"], ["[]"], ["null"], ["42"]])("refuses a report that is not a JSON object (%s)", async (contents) => {
     const root = await newProject("report-unparseable", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, contents); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, contents); return exited(0); });
 
     const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
 
@@ -210,6 +229,38 @@ describe("runObservedPlaywright refusals", () => {
     expect(runner.calls).toHaveLength(0);
   }, 60_000);
 
+  it("explains a report-less run with the runner's own stderr instead of only naming the path", async () => {
+    const root = await newProject("stderr-surfaced", passingSpec);
+    const cause = "Error: Cannot find module './does-not-exist' imported from playwright.config.ts";
+    const runner = spy(() => Promise.resolve(exited(1, { stderr: `${cause}\n` })));
+
+    const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_REPORT_MISSING");
+    expect(refusal.message).toContain(cause);
+  }, 60_000);
+
+  it("quotes the head of a long stderr, because that is where the runner puts the cause and the tail is stack frames", async () => {
+    const root = await newProject("stderr-bounded", passingSpec);
+    const cause = "Error: Cannot find module './missing.js'";
+    const frames = "\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1234:5)".repeat(1_000);
+    const runner = spy(() => Promise.resolve(exited(1, { stderr: `${cause}${frames}` })));
+
+    const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
+
+    expect(refusal.message).toContain(cause);
+    expect(refusal.message.length).toBeLessThan(5_000);
+  }, 60_000);
+
+  it("says nothing about stderr when the runner wrote none, rather than quoting an empty block", async () => {
+    const root = await newProject("stderr-silent", passingSpec);
+    const runner = spy(() => Promise.resolve(exited(1, { stderr: "  \n" })));
+
+    const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
+
+    expect(refusal.message).not.toContain("stderr");
+  }, 60_000);
+
   it("refuses when the runner could not be started at all", async () => {
     const root = await newProject("spawn-failed", passingSpec);
     const runner = spy(() => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })));
@@ -223,7 +274,7 @@ describe("runObservedPlaywright refusals", () => {
 describe("runObservedPlaywright observations", () => {
   it("returns a non-zero exit code as an observation rather than a refusal", async () => {
     const root = await newProject("failing-exit", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 1, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(1); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
 
@@ -233,7 +284,7 @@ describe("runObservedPlaywright observations", () => {
 
   it("spawns this process's node against the project's own cli.js, never a shell and never the .bin shim", async () => {
     const root = await newProject("invocation", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(0); });
 
     await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: ["--workers=1"], environment: local, execute: runner.execute });
 
@@ -249,7 +300,7 @@ describe("runObservedPlaywright observations", () => {
 
   it("forces the runner's output directory and JSON report outside the spec directory", async () => {
     const root = await newProject("output-outside", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(0); });
 
     await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
 
@@ -264,7 +315,7 @@ describe("runObservedPlaywright observations", () => {
     const root = await newProject("no-argv", passingSpec);
     const secret = "--grep=token-abcdef0123456789";
     const reportWithArgv = JSON.stringify({ config: { version: "1.61.1", argv: ["node", "cli.js", "test", secret], projects: [] }, suites: [], errors: [], stats: {} });
-    const runner = spy(async (invocation) => { await writeReport(invocation, reportWithArgv); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, reportWithArgv); return exited(0); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [secret], environment: local, execute: runner.execute });
 
@@ -274,17 +325,57 @@ describe("runObservedPlaywright observations", () => {
 
   it("returns a report that carries no config object unchanged, rather than assuming the reporter's shape", async () => {
     const root = await newProject("no-config", passingSpec);
-    const runner = spy(async (invocation) => { await writeReport(invocation, JSON.stringify({ suites: [], stats: { expected: 0 } })); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, JSON.stringify({ suites: [], stats: { expected: 0 } })); return exited(0); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
 
     expect(run.report).toEqual({ suites: [], stats: { expected: 0 } });
   }, 60_000);
 
+  it.each([
+    ["webServer.env, which is where a resolved token idiomatically lives", (secret: string) => ({ webServer: { command: "npm start", cwd: "/srv/app", env: { API_TOKEN: secret } } })],
+    ["config.metadata, an arbitrary caller-authored object", (secret: string) => ({ metadata: { deployToken: secret } })],
+    ["a caller's own @-namespaced config key", (secret: string) => ({ "@acme/creds": secret })],
+    ["config.argv, which echoes the whole process command line", (secret: string) => ({ argv: ["node", "cli.js", "test", secret] })],
+  ])("keeps a resolved secret in %s out of the return value", async (_label, carrier) => {
+    const root = await newProject("secret-config", passingSpec);
+    const secret = "sk-live-abcdef0123456789";
+    const report = JSON.stringify({ config: { version: "1.61.1", projects: [], ...carrier(secret) }, suites: [], errors: [], stats: {} });
+    const runner = spy(async (invocation) => { await writeReport(invocation, report); return exited(0); });
+
+    const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
+
+    expect(JSON.stringify(run)).not.toContain(secret);
+  }, 60_000);
+
+  it("keeps a resolved secret in a project's own metadata out of the return value", async () => {
+    const root = await newProject("secret-project", passingSpec);
+    const secret = "sk-live-fedcba9876543210";
+    const report = JSON.stringify({ config: { version: "1.61.1", projects: [{ id: "chromium", name: "chromium", outputDir: "/tmp/x", metadata: { token: secret } }] }, suites: [], errors: [], stats: {} });
+    const runner = spy(async (invocation) => { await writeReport(invocation, report); return exited(0); });
+
+    const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
+
+    expect(JSON.stringify(run)).not.toContain(secret);
+    // The allowlist keeps the fields a producer actually correlates on, so this is a projection and not a purge.
+    expect((run.report as { config: { projects: unknown[] } }).config.projects[0]).toEqual({ id: "chromium", name: "chromium", outputDir: "/tmp/x" });
+  }, 60_000);
+
+  it("keeps only the allowlisted config keys, so a key a future runner adds is dropped rather than passed through", async () => {
+    const root = await newProject("config-allowlist", passingSpec);
+    const report = JSON.stringify({ config: { version: "1.61.1", rootDir: "/srv/app", projects: [], somethingAddedLater: "unexamined" }, suites: [], errors: [], stats: { expected: 0 }, alsoAddedLater: "unexamined" });
+    const runner = spy(async (invocation) => { await writeReport(invocation, report); return exited(0); });
+
+    const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
+
+    expect(Object.keys(run.report).sort()).toEqual(["config", "errors", "stats", "suites"]);
+    expect(Object.keys((run.report as { config: object }).config).sort()).toEqual(["projects", "rootDir", "version"]);
+  }, 60_000);
+
   it("reports the runner it actually resolved and that runner's installed version", async () => {
     const root = await newProject("runner-identity", passingSpec);
     const installed = JSON.parse(await readFile(join(repoRoot, "node_modules", "@playwright", "test", "package.json"), "utf8")) as { version: string };
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(0); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
 
@@ -295,7 +386,7 @@ describe("runObservedPlaywright observations", () => {
   it("carries the anchor of the spec tree that ran and timestamps that bracket the run", async () => {
     const root = await newProject("anchor", passingSpec);
     const expected = await resolveGitAnchor({ projectRoot: root, specDir: "specs" });
-    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return { exitCode: 0, signal: null }; });
+    const runner = spy(async (invocation) => { await writeReport(invocation, validReport); return exited(0); });
 
     const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
 
@@ -338,6 +429,15 @@ describe("runObservedPlaywright against a real Playwright process", () => {
     expect(run.exitCode).toBe(0);
     await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).resolves.toEqual(before);
     await expect(readFile(join(root, "specs", "playwright-report", "index.html"))).rejects.toThrow();
+  }, 120_000);
+
+  it("explains a real project whose config fails to load, instead of only naming a path in tmpdir", async () => {
+    const root = await newProject("real-broken-config", passingSpec, { config: "import './this-module-does-not-exist.js';\nexport default { testDir: './specs' };\n" });
+
+    const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: ["--workers=1"], environment: local }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_REPORT_MISSING");
+    expect(refusal.message).toContain("this-module-does-not-exist");
   }, 120_000);
 
   it("observes a real chromium spec and reports the fields Task 39b consumes", async () => {

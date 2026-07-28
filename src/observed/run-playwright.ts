@@ -12,12 +12,37 @@ import type { SafetyEnvironment } from "../safety/side-effects.js";
 
 const runFile = promisify(execFile);
 
-/** The one runner this module starts. Deliberately a constant rather than the `name` field of the
- *  package manifest it reads: the manifest is caller-controlled, and a value read from it would let a
- *  package planted at that path rename the runner in an immutable artifact. */
+/** The one runner this module starts. A constant rather than the `name` field of the package manifest
+ *  it reads, so a package planted at that path cannot also rename the runner in an immutable artifact.
+ *  **That protection is only half of one, and saying so matters:** `readRunnerVersion` takes `version`
+ *  from that same planted-package-controlled manifest, so whoever controls the path still chooses the
+ *  version recorded next to this name. Closing the other half would mean verifying the install itself
+ *  — the git anchor covers the spec tree, never `node_modules` — which this module does not attempt. */
 const runnerName = "@playwright/test";
 const runnerCliRelativePath = join("node_modules", "@playwright", "test", "cli.js");
 const runnerManifestRelativePath = join("node_modules", "@playwright", "test", "package.json");
+
+/** Keys kept from the runner report's top level. The 1.61.1 reporter emits exactly these four as an
+ *  object literal, so nothing is lost today; an allowlist means a key a future runner adds is dropped
+ *  rather than passed through unexamined. */
+const reportKeys = ["config", "suites", "errors", "stats"] as const;
+
+/** Keys kept from `report.config`. An allowlist, never a denylist: `_serializeReport` spreads
+ *  `removePrivateFields(this.config)` — every non-`_` key of `FullConfig` — and `FullConfig` both grows
+ *  between releases and absorbs arbitrary caller keys, so a denylist is wrong the next time either
+ *  happens. See `readRunnerReport` for what this excludes and why. */
+const reportConfigKeys = ["version", "rootDir", "configFile", "projects", "workers", "shard"] as const;
+
+/** Keys kept from each entry of `report.config.projects`. The reporter already narrows a project to ten
+ *  fields, but one of them is `metadata` — an arbitrary caller-authored object. */
+const reportProjectKeys = ["id", "name", "outputDir", "testDir", "timeout", "repeatEach", "retries"] as const;
+
+/** How much of the runner's stderr a refusal message may quote. The quote is taken from the **start**,
+ *  not the end: Node and the runner both print the error headline first and stack frames after, so on
+ *  the failure this exists for — a `playwright.config` that fails to load, which emits ~3.5 KB of
+ *  "Cannot find module …" plus a require stack — the head is the diagnosis and the tail is noise.
+ *  Verified against a real broken config rather than assumed. See `runObservedPlaywright`. */
+const maxQuotedStderrChars = 2000;
 
 /** The runtime owns both of these. Refused in whole-token form, so `--reporter`, `--reporter=json`
  *  and `--output=/tmp/x` are all caught; neither has a short alias in the runner's 1.61 CLI. */
@@ -31,18 +56,24 @@ const maxRunnerOutputBytes = 64 * 1024 * 1024;
  *  seam can write a report exactly where a real runner would. */
 export type RunnerInvocation = Readonly<{ command: string; args: readonly string[]; cwd: string; env: NodeJS.ProcessEnv }>;
 
+/** The process output a Runtime-Observed Execution captures. CONTEXT.md:135-137 puts output in the
+ *  definition alongside exit status, and it is the only thing that can explain a run that produced no
+ *  report at all — the config-load failure is the most ordinary way that happens. */
+export type RunnerOutput = Readonly<{ stdout: string; stderr: string }>;
+
 /** How a started process ended. A discriminated union rather than two nullable fields, so "exited with
  *  a code" and "died by signal" are the only two states and neither caller nor implementation has an
  *  unreachable third case to guess at. */
-export type RunnerExit = Readonly<{ exitCode: number; signal: null }> | Readonly<{ exitCode: null; signal: string }>;
+export type RunnerExit = RunnerOutput & (Readonly<{ exitCode: number; signal: null }> | Readonly<{ exitCode: null; signal: string }>);
 
 /** Test seam for what a real run cannot produce on demand: a signal death, a spawn failure, and a
  *  runner that leaves no usable report. Everything else in this module is exercised for real. */
 export type RunnerExecutor = (invocation: RunnerInvocation) => Promise<RunnerExit>;
 
-/** The runner's JSON report, parsed and otherwise untouched. Deliberately unmodelled: mapping report
- *  entries onto QA test-case identity, execution surface, engine and viewport belongs to the producer,
- *  and a partial type here would read as a contract this module does not enforce. */
+/** An allowlisted projection of the runner's JSON report — see `readRunnerReport` for exactly which
+ *  keys survive and why the rest do not. Deliberately unmodelled beyond that: mapping report entries
+ *  onto QA test-case identity, execution surface, engine and viewport belongs to the producer, and a
+ *  partial type here would read as a contract this module does not enforce. */
 export type PlaywrightJsonReport = Readonly<Record<string, unknown>>;
 
 export type ObservedPlaywrightRequest = Readonly<{
@@ -73,12 +104,13 @@ export type ObservedPlaywrightRun = Readonly<{
  *  failure (`code` is a string such as `ENOENT`) is rethrown, because it produced no run to report. */
 const defaultExecutor: RunnerExecutor = async (invocation) => {
   try {
-    await runFile(invocation.command, [...invocation.args], { cwd: invocation.cwd, env: invocation.env, encoding: "utf8", maxBuffer: maxRunnerOutputBytes });
-    return { exitCode: 0, signal: null };
+    const { stdout, stderr } = await runFile(invocation.command, [...invocation.args], { cwd: invocation.cwd, env: invocation.env, encoding: "utf8", maxBuffer: maxRunnerOutputBytes });
+    return { exitCode: 0, signal: null, stdout, stderr };
   } catch (error: unknown) {
-    const failure = error as { code?: unknown; signal?: unknown };
-    if (typeof failure.signal === "string") return { exitCode: null, signal: failure.signal };
-    if (typeof failure.code === "number") return { exitCode: failure.code, signal: null };
+    const failure = error as { code?: unknown; signal?: unknown; stdout?: unknown; stderr?: unknown };
+    const output = { stdout: typeof failure.stdout === "string" ? failure.stdout : "", stderr: typeof failure.stderr === "string" ? failure.stderr : "" };
+    if (typeof failure.signal === "string") return { exitCode: null, signal: failure.signal, ...output };
+    if (typeof failure.code === "number") return { exitCode: failure.code, signal: null, ...output };
     throw error;
   }
 };
@@ -161,12 +193,35 @@ function describeFailure(error: unknown): string {
  * whole path exists to capture, and the kill would then be refused as a signal death. A hung suite is
  * the caller's to interrupt.
  *
- * **Nothing the caller typed is recorded.** No argv and no environment appear anywhere in the return
- * value, because caller-supplied arguments can carry a resolved secret (CONTEXT.md:371) and the
- * evidence contract deliberately has no `command` field. The runner's own report is the one back door:
- * 1.61.1 serializes the full process argv into `config.argv`, so that key is removed from the parsed
- * report before it is returned. Note the report *file left on disk* still contains it — a producer that
- * registers that file verbatim as evidence would reintroduce exactly what this strips.
+ * **The returned report is an allowlisted projection, and the guarantee is exactly this:** no key of
+ * the runner's `config` survives except those in `reportConfigKeys`, and no key of a serialized project
+ * survives except those in `reportProjectKeys`. That bounds three distinct ways a resolved secret
+ * (CONTEXT.md:371) would otherwise leave this module inside `config`: `argv`, which echoes the whole
+ * process command line; `webServer`, which for a single non-array declaration is copied verbatim and
+ * carries `command`, `cwd` and **`env`** (`env: { API_TOKEN: process.env.API_TOKEN }` is the idiomatic
+ * pattern); and `metadata`, both the config's and each project's, which are arbitrary caller-authored
+ * objects. An allowlist rather than a denylist because the reporter *spreads* `FullConfig`, which grows
+ * between releases and additionally absorbs every caller key beginning with `@` — a denylist would be
+ * wrong the first time either happened, and this module is the boundary.
+ *
+ * **What that guarantee does NOT cover, stated so no caller assumes wider:** `suites` is returned
+ * whole, and each result inside it carries the spec's own `stdout`, `stderr` and error text verbatim.
+ * That is the observation itself and cannot be dropped without gutting the report — a spec that prints
+ * a secret puts it in the report, and that is the spec author's to fix. Nor does it cover the report
+ * *file left on disk*, which is still exactly what the runner wrote, `config.argv` and all: a producer
+ * that registers that file verbatim as evidence reintroduces everything this projection removes.
+ *
+ * **A refusal quotes the runner's stderr, bounded.** A project whose `playwright.config.ts` fails to
+ * load exits non-zero having written no report, and that is the most ordinary failure on this path; a
+ * refusal that said only "wrote no JSON report at /var/folders/…" would discard the one thing that
+ * explains it. So the first {@link maxQuotedStderrChars} characters of stderr are quoted in the
+ * no-report refusals. **That bound is a length, not a redaction** — runner output can echo an
+ * environment, and a runner that prints a secret to stderr puts it in the refusal message. The trade is
+ * deliberate and narrow: a refusal message is operator-facing diagnostic text on the error path, not an
+ * immutable artifact, and this module writes no artifact at all. Output is deliberately *not* added to
+ * the success return value, where it would be unbounded caller-controlled text with no contract field
+ * to hold it; on a successful observation the report is the observation, and per-test output already
+ * reaches the caller through `suites[].specs[].tests[].results[].stdout`/`stderr`.
  *
  * Every failure is a `QaSkillsError`; no raw error escapes.
  */
@@ -205,12 +260,13 @@ async function observePlaywright(request: ObservedPlaywrightRequest): Promise<Ob
   if (exit.signal !== null) {
     throw new QaSkillsError(
       `The ${runnerName} run in ${cwd} was killed by ${exit.signal} and produced no trustworthy result. A signal death is refused rather than recorded: `
-      + `the observed-execution evidence contract has no field to say the run was killed, so recording it would assert a result nobody observed.`,
+      + `the observed-execution evidence contract has no field to say the run was killed, so recording it would assert a result nobody observed.`
+      + quotedStderr(exit),
       "OBSERVED_RUN_KILLED_BY_SIGNAL",
     );
   }
 
-  return { anchor, exitCode: exit.exitCode, report: await readRunnerReport(reportPath, exit.exitCode), runner: runnerName, runnerVersion, startedAt, finishedAt };
+  return { anchor, exitCode: exit.exitCode, report: await readRunnerReport(reportPath, exit), runner: runnerName, runnerVersion, startedAt, finishedAt };
 }
 
 function assertEnvironmentPermitsRun(environment: SafetyEnvironment): void {
@@ -268,27 +324,51 @@ async function startRunner(execute: RunnerExecutor, invocation: RunnerInvocation
   }
 }
 
-async function readRunnerReport(reportPath: string, exitCode: number): Promise<PlaywrightJsonReport> {
+/** Quotes the tail of the runner's stderr for a refusal message, or nothing when it said nothing. The
+ *  bound is on length only — see the guarantee stated on `runObservedPlaywright`. */
+function quotedStderr(output: RunnerOutput): string {
+  const trimmed = output.stderr.trim();
+  if (trimmed.length === 0) return "";
+  const head = trimmed.length > maxQuotedStderrChars ? `${trimmed.slice(0, maxQuotedStderrChars)}…` : trimmed;
+  return `\nThe runner's first ${maxQuotedStderrChars} characters of stderr follow, which is where the cause normally is:\n${head}`;
+}
+
+async function readRunnerReport(reportPath: string, exit: RunnerOutput & { exitCode: number }): Promise<PlaywrightJsonReport> {
   const raw = await readFile(reportPath, "utf8").catch(() => undefined);
-  const context = `The ${runnerName} run exited ${exitCode} but`;
-  if (raw === undefined) throw new QaSkillsError(`${context} wrote no JSON report at ${reportPath}. An exit code alone is not an observation, so this is refused rather than recorded.`, "OBSERVED_RUN_REPORT_MISSING");
-  if (raw.trim().length === 0) throw new QaSkillsError(`${context} its JSON report at ${reportPath} is empty. An exit code alone is not an observation, so this is refused rather than recorded.`, "OBSERVED_RUN_REPORT_EMPTY");
+  const context = `The ${runnerName} run exited ${exit.exitCode} but`;
+  const refusal = "An exit code alone is not an observation, so this is refused rather than recorded.";
+  if (raw === undefined) throw new QaSkillsError(`${context} wrote no JSON report at ${reportPath}. ${refusal}${quotedStderr(exit)}`, "OBSERVED_RUN_REPORT_MISSING");
+  if (raw.trim().length === 0) throw new QaSkillsError(`${context} its JSON report at ${reportPath} is empty. ${refusal}${quotedStderr(exit)}`, "OBSERVED_RUN_REPORT_EMPTY");
 
   const parsed: unknown = await Promise.resolve()
     .then(() => JSON.parse(raw) as unknown)
     .catch(() => undefined);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new QaSkillsError(`${context} its JSON report at ${reportPath} is not a JSON object. An exit code alone is not an observation, so this is refused rather than recorded.`, "OBSERVED_RUN_REPORT_UNPARSEABLE");
+    throw new QaSkillsError(`${context} its JSON report at ${reportPath} is not a JSON object. ${refusal}${quotedStderr(exit)}`, "OBSERVED_RUN_REPORT_UNPARSEABLE");
   }
-  return withoutCallerArgv(parsed as Record<string, unknown>);
+  return projectReport(parsed as Record<string, unknown>);
 }
 
-/** Removes the one key the runner's own report uses to echo the process argv back. 1.61.1 writes the
- *  full argv — including every caller-supplied argument — to `config.argv`, and a caller argument can
- *  carry a resolved secret, so returning it would reintroduce through the report exactly what the
- *  evidence contract omits. Nothing else in the report is altered. */
-function withoutCallerArgv(report: Record<string, unknown>): PlaywrightJsonReport {
-  const config: unknown = report.config;
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return report;
-  return { ...report, config: Object.fromEntries(Object.entries(config as Record<string, unknown>).filter(([key]) => key !== "argv")) };
+/** Keeps only what a consumer demonstrably needs, at all three levels the runner's report nests them.
+ *  Every dropped key is dropped because this module is the boundary between a process it does not
+ *  control and an artifact producer that must not carry a resolved secret — see the guarantee on
+ *  `runObservedPlaywright` for which keys that is about and why an allowlist is the only safe shape. */
+function projectReport(report: Record<string, unknown>): PlaywrightJsonReport {
+  const kept = pick(report, reportKeys);
+  const config: unknown = kept.config;
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return kept;
+
+  const keptConfig = pick(config as Record<string, unknown>, reportConfigKeys);
+  const projects: unknown = keptConfig.projects;
+  if (Array.isArray(projects)) {
+    keptConfig.projects = projects.map((project: unknown) =>
+      typeof project === "object" && project !== null && !Array.isArray(project) ? pick(project as Record<string, unknown>, reportProjectKeys) : project);
+  }
+  return { ...kept, config: keptConfig };
+}
+
+/** Copies only the named keys that are actually present, so an absent key stays absent rather than
+ *  becoming an explicit `undefined` a consumer would have to distinguish. */
+function pick(source: Readonly<Record<string, unknown>>, keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.filter((key) => key in source).map((key) => [key, source[key]]));
 }
