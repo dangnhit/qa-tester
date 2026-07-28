@@ -3,14 +3,18 @@ import { artifactProfileVersion, type ArtifactProfileName } from "./artifact-pro
 import { isRecord } from "./values.js";
 
 /**
- * What an evidence BINARY is a capture of. Kept as ONE exported type rather than re-spelled at each
- * use site: this vocabulary is coupled to `evidence.schema.json`'s `kind` enum by
- * `matchesEvidencePrimary` below, and it was previously written out as an identical literal union in
+ * What an evidence BINARY is a capture of (a descriptor record carries no `captureType`). Kept as ONE
+ * exported type rather than re-spelled at each use site: `matchesEvidencePrimary` below requires a
+ * descriptor's `kind` to EQUAL its primary binary record's `captureType`, which is what makes this
+ * union and `evidence.schema.json`'s `kind` enum one vocabulary rather than two. It was previously
+ * written out as an identical literal union in
  * three separate TypeScript declarations (`ArtifactRecord`, `registerBinaryArtifact`,
  * `registerEvidenceBundle`) that every new capture type had to be added to in lockstep. Two schema
  * copies remain by necessity (`evidence.schema.json`'s `kind`, `artifact-manifest.schema.json`'s
- * `captureType`) and are pinned against each other by a subset assertion in
- * `tests/contracts/validator.test.ts`.
+ * `captureType`), and `tests/contracts/validator.test.ts` DERIVES one from the other — the `kind` enum
+ * minus `evidence-gap` must equal the `captureType` enum — so adding a capture type to one and
+ * forgetting the other reddens. Two additional subset assertions guard the case that derived equality
+ * cannot see: a member dropped from BOTH lists at once.
  *
  * `runner-report` (evidence 3.0.0) is lane 2's: one raw JSON report for a whole Runtime-Observed
  * Execution. It is deliberately the SAME token as the evidence `kind` and the provenance

@@ -351,7 +351,8 @@ const testResultRule: SemanticRule = {
  *  A rule check here would be redundant with that boundary, not an alternative to it.
  *  Evidence EXISTENCE keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
  *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check; the
- *  subject comparison added in Phase 7 necessarily reads the valid pool, because only it carries values.
+ *  subject comparison added in Phase 7 necessarily reads the related-artifact pool instead, because a
+ *  manifest record carries no `subject` and only that pool carries values.
  *
  *  THE REVERSE DIRECTION IS RULED OUT, NOT LEFT UNDONE. This rule closes batch -> evidence. Nothing
  *  anywhere requires the converse — that every registered `observed-execution` evidence item be claimed
@@ -360,8 +361,10 @@ const testResultRule: SemanticRule = {
  *  which leaves `inspectWorkspaceState`, where every artifact is present at once. It must not live there
  *  either, for two independent reasons.
  *
- *  It would be WRONG. `readRegisteredArtifacts()` THROWS on the first diagnostic, and the read path runs
- *  continuously during a run — on every `open()` and every read — not once at the end. Between
+ *  It would be WRONG. `readRegisteredArtifacts()` THROWS whenever the inspection produced ANY diagnostic
+ *  at all (it tests `diagnostics.length > 0` and surfaces only `diagnostics[0]` in the message, so one
+ *  diagnostic anywhere fails the whole read), and the read path runs continuously during a run — on
+ *  every `open()` and every read — not once at the end. Between
  *  registering the evidence and registering the batch, an unclaimed observed-execution evidence item is
  *  the CORRECT state of a healthy workspace; a "must be claimed" rule would make the workspace
  *  unreadable in exactly that window. Since Task 37 a run may legitimately PAUSE there
@@ -378,10 +381,11 @@ const testResultRule: SemanticRule = {
  *  so it contributes `undefined` and is skipped; and `telemetryFindings`, which are reported against the
  *  evidence ARTIFACT ID with no `attemptId`, i.e. naming only themselves. `bugReportRule` cannot cite it
  *  in `evidenceIds` either — that clause requires `evidenceAttemptId(evidence)` to be one of the bug's
- *  source attempts, and an observed-execution subject yields `undefined`. And `evidenceRule` plus the
- *  two read blocks already assert positively that such an item claims NO test-result relationship, so it
- *  cannot impersonate an attempt-bound observation. An unclaimed one is a recorded fact that substantiates
- *  no claim — which is exactly what an Evidence Item is allowed to be.
+ *  source attempts, and an observed-execution subject yields `undefined`. And `evidenceRule` (write) and
+ *  `inspectWorkspaceState`'s in-fixpoint evidence block (read) already assert POSITIVELY that such an
+ *  item claims NO test-result relationship — the later, post-fixpoint read block merely exempts it from
+ *  the attempt binding — so it cannot impersonate an attempt-bound observation. An unclaimed one is a
+ *  recorded fact that substantiates no claim, which is exactly what an Evidence Item is allowed to be.
  *
  *  This rule does not touch `commitSha` or `specTreeSha256` either, though both are `required` by the
  *  schema with hex patterns: the git anchor ADR-0010 rests coverage credit on ("a human merged the spec
@@ -409,9 +413,14 @@ const testResultBatchRule: SemanticRule = {
     // Hoisted for the same reason as `cases`, and keyed on the manifest RECORD id because that is what
     // an entry's `evidenceArtifactIds` holds. Unlike the existence check below — which stays on
     // `ctx.registeredRecord` — the subject comparison needs the evidence VALUE, and only the related
-    // pool carries values. Evidence BINARIES share the `evidence` type and have no value; they are
-    // indexed here alongside descriptors and simply fail the subject read, which is correct: a batch
-    // may cite the descriptor that states what the evidence is about, never the raw bytes.
+    // pool carries values. Evidence BINARIES are already excluded from that pool UPSTREAM, on both
+    // paths: write filters `mediaType === undefined` when it reads the pool (`readRegisteredRelated`)
+    // and again when it decides which types to preload (`buildWriteContext`), and read never assigns a
+    // binary a `value` at all, so the `artifact.valid && artifact.value` filter that builds
+    // `validArtifacts` drops it. A batch that cites a binary's id therefore gets an INDEX MISS here —
+    // it resolves to nothing, rather than resolving to a valueless entry that fails the subject read —
+    // and is rejected by clause 3. That is the correct outcome either way: a batch may cite the
+    // descriptor that states what the evidence is about, never the raw bytes.
     const evidenceById = indexByKey(ctx.relatedOfType("evidence"), (candidate) => candidate.record.id);
     for (const entry of entries) {
       const matches = cases.get({ testCaseId: entry.testCaseId, testCaseRevisionId: entry.testCaseRevisionId, testCaseInstanceId: entry.testCaseInstanceId });
@@ -443,10 +452,14 @@ const testResultBatchRule: SemanticRule = {
       //      substantiation that was never about this execution.
       //
       // Clause 3 needs the evidence VALUE, which a manifest record does not carry, so it reads the
-      // hoisted related pool. On READ that pool is cascade-sensitive: an evidence item invalidated
-      // earlier in the pass resolves to no subject and the batch is invalidated with it, which is the
-      // right consequence — a batch whose substantiation is no longer readable may not keep asserting
-      // it. On WRITE the pool is the on-disk registered set, where every entry is valid by construction.
+      // hoisted related pool. On READ that pool is cascade-sensitive, but not within a pass: the read
+      // adapter serves `validArtifacts`, which `inspectWorkspaceState` snapshots ONCE per fixpoint pass,
+      // so an evidence item invalidated earlier in the SAME pass is still in the snapshot and clause 3
+      // still resolves its subject. Its invalidation set `changed`, so the fixpoint runs another pass;
+      // on THAT pass the rebuilt snapshot omits it, clause 3 gets an index miss, and the batch is
+      // invalidated. The cascade lands one pass later, and the fixpoint outcome is the right one — a
+      // batch whose substantiation is no longer readable does not stay valid. On WRITE the pool is the
+      // on-disk registered set, where every entry is valid by construction.
       //
       // The REVERSE direction — an `observed-execution` evidence item that NO batch ever claims — stays
       // unenforced, and that is a ruling, not the leftover half of this one. See the rule's block

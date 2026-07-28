@@ -120,9 +120,9 @@ function testResultBatch(workspace: RunWorkspace, entries: readonly Record<strin
  *  `matchesEvidencePrimary` requires the descriptor kind, the provenance captureType and the manifest
  *  record's captureType to be the same token — the two vocabularies are coupled by a live invariant,
  *  which is why one token serves both. */
-function runnerReportBundle(workspace: RunWorkspace, input: { evidenceId: string; executionId: string; relationships?: string[]; descriptorOverrides?: Record<string, unknown>; captureType?: string }) {
+function runnerReportBundle(workspace: RunWorkspace, input: { evidenceId: string; executionId: string; relationships?: string[]; descriptorOverrides?: Record<string, unknown> }) {
   return workspace.registerEvidenceBundle({
-    binaries: [{ filename: `${input.evidenceId}-report.json`, contents: Buffer.from('{"suites":[]}\n'), mediaType: "application/json", captureType: (input.captureType ?? "runner-report") as "runner-report" }],
+    binaries: [{ filename: `${input.evidenceId}-report.json`, contents: Buffer.from('{"suites":[]}\n'), mediaType: "application/json", captureType: "runner-report" }],
     relationships: input.relationships ?? [],
     descriptor: (binaries) => ({
       artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: input.evidenceId, runId: workspace.runId,
@@ -1093,6 +1093,11 @@ describe("RunWorkspace", () => {
     await expect(register([foreign.descriptor.id], [testcase.id, foreign.descriptor.id]))
       .rejects.toThrow("Test result batch entry evidence must be about this batch's own observed execution");
     await expect(register([attemptEvidence.descriptor.id], [testcase.id, attemptEvidence.descriptor.id]))
+      .rejects.toThrow("Test result batch entry evidence must be about this batch's own observed execution");
+    // The raw bytes are registered `evidence` too, so they clear the existence and relationship clauses.
+    // Only the descriptor states what the evidence is ABOUT, and binaries carry no value on either path,
+    // so a batch citing the binary resolves to nothing and is refused by the subject clause.
+    await expect(register([matching.binaries[0]!.id], [testcase.id, matching.binaries[0]!.id]))
       .rejects.toThrow("Test result batch entry evidence must be about this batch's own observed execution");
 
     const registered = await register([matching.descriptor.id], [testcase.id, matching.descriptor.id]);

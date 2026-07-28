@@ -386,8 +386,9 @@ describe("evidence schema 3.0.0", () => {
  *  there is no `command`/`argv` field, because lane 2's arguments come from the caller and can carry a
  *  resolved token or password, and CONTEXT.md:371 forbids resolved secret values in artifacts. An
  *  immutable, checksummed artifact is the worst possible place to discover one. There is no `signal`
- *  field either: a runner killed by a signal produced no trustworthy result, so the producer refuses
- *  outright rather than recording a half-execution, and evidence for such a run never exists.
+ *  field either, and nothing writes this branch yet: a runner killed by a signal produced no
+ *  trustworthy result, so the producer that lands in a later task must refuse such a run outright
+ *  rather than record a half-execution — which is why no field here can describe one.
  *
  *  `additionalProperties: false` is what makes both of those absences ENFORCED rather than merely
  *  conventional, and the `url`/`browser`/`build` rejections below are what prove this is a
@@ -446,26 +447,49 @@ describe("evidence schema 3.0.0 (runner-report)", () => {
     expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, exitCode: 0 } }).valid).toBe(true);
   });
 
-  /** A SUBSET assertion, not a full-equality pin: `kind` gains `runner-report` and loses nothing, so
-   *  lane 1's five capture kinds (plus `evidence-gap`) must all still be members. A full-equality pin
-   *  is a test nobody updates; this one fails only for the drift that matters — a lane-1 kind quietly
-   *  disappearing behind lane 2's addition. */
+  const evidenceKindEnum = () => (schemas.evidence as { properties: { kind: { enum: unknown[] } } }).properties.kind.enum;
+  const manifestCaptureTypeEnum = () => (schemas["artifact-manifest"] as { properties: { artifacts: { items: { properties: { captureType: { enum: unknown[] } } } } } })
+    .properties.artifacts.items.properties.captureType.enum;
+
+  /** SUBSET assertions, not full-equality pins: `kind` and `captureType` each gain `runner-report` and
+   *  lose nothing, so lane 1's five capture kinds (plus `evidence-gap`, which only `kind` has) must all
+   *  still be members. A full-equality pin against hardcoded literals is a test nobody updates; these
+   *  two fail only for the drift they name — a lane-1 member quietly disappearing behind lane 2's
+   *  addition, from either list, including from BOTH at once (which the derived cross-pin below cannot
+   *  see, because dropping the same member from both keeps the two lists equal to each other). */
   it("adds runner-report to the kind vocabulary without removing any lane-1 kind", () => {
-    const kinds = (schemas.evidence as { properties: { kind: { enum: unknown[] } } }).properties.kind.enum;
-
-    expect(kinds).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "evidence-gap", "runner-report"]));
+    expect(evidenceKindEnum()).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "evidence-gap", "runner-report"]));
   });
 
-  it("keeps the artifact-manifest captureType vocabulary a superset of every lane-1 capture type", () => {
-    const captureTypes = (schemas["artifact-manifest"] as { properties: { artifacts: { items: { properties: { captureType: { enum: unknown[] } } } } } })
-      .properties.artifacts.items.properties.captureType.enum;
-
-    expect(captureTypes).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "runner-report"]));
+  it("adds runner-report to the manifest captureType vocabulary without removing any lane-1 capture type", () => {
+    expect(manifestCaptureTypeEnum()).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "runner-report"]));
   });
 
-  // Lane 1 is unchanged by the third branch: each of the five still validates against the branch it
-  // always used. This is the other half of the subset pin above — the vocabulary keeps the members AND
-  // the shapes they name.
+  /** The CROSS-PIN, and the one assertion here that is DERIVED rather than hardcoded. The two
+   *  assertions above check each enum against its own literal list, which is exactly what the
+   *  `captureType` duplication made dangerous: a seventh capture type added to `evidence.kind` and
+   *  forgotten in `artifact-manifest.captureType` passes both of them untouched. This one relates the
+   *  two lists to each other, so it fails precisely then — and in the mirror case too.
+   *
+   *  The invariant it encodes is `matchesEvidencePrimary`'s (`src/core/artifact-record.ts`): a
+   *  descriptor's `kind`, its `provenance.captureType`, and the manifest record's `captureType` must be
+   *  the same token, so a capture kind with no manifest spelling could never be registered, and a
+   *  manifest captureType with no matching kind could never be described. Equality, not subset.
+   *
+   *  `evidence-gap` is subtracted because it is the one `kind` that names no capture at all: it marks
+   *  an evidence item standing in for an observation that could not be made, so it never labels a
+   *  binary and has no manifest `captureType` counterpart. Sorted, so a pure reordering of either enum
+   *  — which changes nothing — does not fail; a genuine divergence names the offending member. */
+  it("keeps every capture kind spellable as a manifest captureType, and vice versa", () => {
+    const kinds = evidenceKindEnum();
+
+    expect(kinds).toContain("evidence-gap");
+    expect(kinds.filter((kind) => kind !== "evidence-gap").sort()).toEqual([...manifestCaptureTypeEnum()].sort());
+  });
+
+  // Lane 1 is unchanged by the third branch: each still validates against the branch it always used.
+  // This is the other half of the subset pins above — the vocabulary keeps the members AND the shapes
+  // they name. (`screenshot` is covered by the 3.0.0 block's own geometry tests, not repeated here.)
   it.each(["trace", "console", "network", "log"] as const)("still accepts a lane-1 %s capture", (captureType) => {
     expect(validateArtifact("evidence", {
       ...runnerReport, kind: captureType,
