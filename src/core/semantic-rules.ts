@@ -323,8 +323,9 @@ const testResultRule: SemanticRule = {
  *  It enforces, in order: unique `entryId` within the batch; each entry binds to exactly one registered
  *  `test-case` on the same identity triple `testResultRule` uses; the same PASSED <-> NONE coherence
  *  check `testResultRule` applies to an attempt; evidence attached ONLY to failing entries (the plan's
- *  "evidence attached only for failing cases", made checkable); and every declared
- *  `evidenceArtifactIds` entry resolving to a registered `evidence` record.
+ *  "evidence attached only for failing cases", made checkable); and — since Phase 7 — every declared
+ *  `evidenceArtifactIds` entry resolving to a registered `evidence` record that the batch ALSO declares
+ *  as a relationship and whose `subject` is this batch's own `{kind:"observed-execution", executionId}`.
  *
  *  Two checks `testResultRule` applies are deliberately ABSENT. The ordered-canonical-steps/aggregate
  *  derivation is not applicable: an observed execution's steps come from an external suite, not from the
@@ -348,8 +349,39 @@ const testResultRule: SemanticRule = {
  *  SUBSET of the obligation's, missing exactly `manual` — a machine-written entry has no spec tree to
  *  hash for a human's manual evaluation, so the schema rejects it outright before this rule ever runs.
  *  A rule check here would be redundant with that boundary, not an alternative to it.
- *  Evidence resolution keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
- *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check.
+ *  Evidence EXISTENCE keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
+ *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check; the
+ *  subject comparison added in Phase 7 necessarily reads the valid pool, because only it carries values.
+ *
+ *  THE REVERSE DIRECTION IS RULED OUT, NOT LEFT UNDONE. This rule closes batch -> evidence. Nothing
+ *  anywhere requires the converse — that every registered `observed-execution` evidence item be claimed
+ *  by some batch entry. That check cannot live on `evidence` (registration order is evidence first, then
+ *  the batch that cites it; the reverse is circular, since clause 3 above must resolve the evidence),
+ *  which leaves `inspectWorkspaceState`, where every artifact is present at once. It must not live there
+ *  either, for two independent reasons.
+ *
+ *  It would be WRONG. `readRegisteredArtifacts()` THROWS on the first diagnostic, and the read path runs
+ *  continuously during a run — on every `open()` and every read — not once at the end. Between
+ *  registering the evidence and registering the batch, an unclaimed observed-execution evidence item is
+ *  the CORRECT state of a healthy workspace; a "must be claimed" rule would make the workspace
+ *  unreadable in exactly that window. Since Task 37 a run may legitimately PAUSE there
+ *  (AWAITING_HUMAN_INPUT), and a run may be ABORTED there — leaving a terminal, immutable workspace that
+ *  could never be read again. That converts a truthful, checksummed observation into permanent
+ *  corruption.
+ *
+ *  And it would be POINTLESS, because an unclaimed observed-execution evidence item is inert: it buys
+ *  nothing anywhere. Coverage never reads `evidence` at all (`evaluateCoverage` /
+ *  `evaluate-workspace-coverage` credit obligations from results, attestations and batches), and
+ *  `deriveReleaseGateFromWorkspaceArtifacts` reads only `evidence-gap`, so it moves neither credit nor
+ *  the gate. `generateQaReport` reads exactly two things from an evidence value: `provenance.build`,
+ *  which a `runner-report` provenance does not have by construction (it is not a field of that branch),
+ *  so it contributes `undefined` and is skipped; and `telemetryFindings`, which are reported against the
+ *  evidence ARTIFACT ID with no `attemptId`, i.e. naming only themselves. `bugReportRule` cannot cite it
+ *  in `evidenceIds` either — that clause requires `evidenceAttemptId(evidence)` to be one of the bug's
+ *  source attempts, and an observed-execution subject yields `undefined`. And `evidenceRule` plus the
+ *  two read blocks already assert positively that such an item claims NO test-result relationship, so it
+ *  cannot impersonate an attempt-bound observation. An unclaimed one is a recorded fact that substantiates
+ *  no claim — which is exactly what an Evidence Item is allowed to be.
  *
  *  This rule does not touch `commitSha` or `specTreeSha256` either, though both are `required` by the
  *  schema with hex patterns: the git anchor ADR-0010 rests coverage credit on ("a human merged the spec
@@ -374,6 +406,13 @@ const testResultBatchRule: SemanticRule = {
     // once (Task 30) is what turns the per-entry rescan into a lookup: this is the only call site in
     // this file where the index changes complexity class (O(entries x cases) -> O(cases + entries)).
     const cases = indexByTestCaseIdentity(ctx.relatedOfType("test-case"), testCaseIdentityOf);
+    // Hoisted for the same reason as `cases`, and keyed on the manifest RECORD id because that is what
+    // an entry's `evidenceArtifactIds` holds. Unlike the existence check below — which stays on
+    // `ctx.registeredRecord` — the subject comparison needs the evidence VALUE, and only the related
+    // pool carries values. Evidence BINARIES share the `evidence` type and have no value; they are
+    // indexed here alongside descriptors and simply fail the subject read, which is correct: a batch
+    // may cite the descriptor that states what the evidence is about, never the raw bytes.
+    const evidenceById = indexByKey(ctx.relatedOfType("evidence"), (candidate) => candidate.record.id);
     for (const entry of entries) {
       const matches = cases.get({ testCaseId: entry.testCaseId, testCaseRevisionId: entry.testCaseRevisionId, testCaseInstanceId: entry.testCaseInstanceId });
       if (matches.length !== 1) {
@@ -386,16 +425,44 @@ const testResultBatchRule: SemanticRule = {
       if (entry.status === "PASSED") {
         return { code: "ARTIFACT_BINDING", message: "Passed test result batch entry must not declare evidence artifacts" };
       }
-      // This resolves a declared evidence id by manifest EXISTENCE only. Nothing here (or anywhere else,
-      // on write or read) requires the resolved evidence's `subject.executionId` to equal this entry's
-      // batch's `executionId` — a batch may declare evidence whose subject is an unrelated attempt, and
-      // both paths accept it. The linkage is unenforced in both directions, and enforcing it isn't a
-      // small addition here: `ctx.relatedOfType` is relationship-scoped (it answers "what does this
-      // artifact's relationship graph reach"), and this check only has an id, not a relationship — so
-      // closing this would need Phase 7 to declare the evidence as a relationship, a design decision
-      // left to that phase.
-      if (!array(entry.evidenceArtifactIds).every((id) => typeof id === "string" && ctx.registeredRecord(id, "evidence") !== undefined)) {
+      // The FORWARD half of the batch<->evidence linkage, closed by Phase 7 (this task). Three clauses,
+      // each with its own message so that deleting one cannot stay green on another's:
+      //
+      //   1. the id names a registered `evidence` artifact. Unchanged, and still keyed on
+      //      `ctx.registeredRecord` (manifest existence, stable on both paths) rather than the
+      //      cascade-sensitive valid pool — same choice as `bugReportRule`'s evidence-provenance check.
+      //   2. the BATCH declares that id as a relationship. This is the design decision the earlier
+      //      comment deferred to this phase: an entry's `evidenceArtifactIds` is a payload field, and a
+      //      payload field alone reaches nothing the relationship graph can be audited against, so the
+      //      producer must now say it twice — in the entry and in the batch's relationships. Exactly the
+      //      shape `bugReportRule` already requires of `provenance.evidenceArtifactIds`.
+      //   3. the resolved evidence is ABOUT this batch's own Runtime-Observed Execution: its `subject`
+      //      is `{kind:"observed-execution", executionId}` and that `executionId` equals the batch's.
+      //      An ATTEMPT subject fails here, deliberately — an attempt-bound evidence item is lane 1's,
+      //      substantiating one `test-result` (CONTEXT.md:363), and a batch citing it would be claiming
+      //      substantiation that was never about this execution.
+      //
+      // Clause 3 needs the evidence VALUE, which a manifest record does not carry, so it reads the
+      // hoisted related pool. On READ that pool is cascade-sensitive: an evidence item invalidated
+      // earlier in the pass resolves to no subject and the batch is invalidated with it, which is the
+      // right consequence — a batch whose substantiation is no longer readable may not keep asserting
+      // it. On WRITE the pool is the on-disk registered set, where every entry is valid by construction.
+      //
+      // The REVERSE direction — an `observed-execution` evidence item that NO batch ever claims — stays
+      // unenforced, and that is a ruling, not the leftover half of this one. See the rule's block
+      // comment above for why such an item is inert and why enforcing it would be actively harmful.
+      const declaredEvidenceIds = array(entry.evidenceArtifactIds);
+      if (!declaredEvidenceIds.every((id): id is string => typeof id === "string" && ctx.registeredRecord(id, "evidence") !== undefined)) {
         return { code: "ARTIFACT_BINDING", message: "Test result batch entry references unregistered evidence" };
+      }
+      if (!declaredEvidenceIds.every((id) => ctx.relationships.includes(id))) {
+        return { code: "ARTIFACT_BINDING", message: "Test result batch entry evidence must be declared as a relationship of the batch" };
+      }
+      if (!declaredEvidenceIds.every((id) => {
+        const subject = evidenceSubject(evidenceById.get(id)[0]?.value);
+        return subject?.kind === "observed-execution" && subject.executionId === ctx.value.executionId;
+      })) {
+        return { code: "ARTIFACT_BINDING", message: "Test result batch entry evidence must be about this batch's own observed execution" };
       }
     }
     return undefined;

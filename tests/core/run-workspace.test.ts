@@ -1055,22 +1055,49 @@ describe("RunWorkspace", () => {
     await workspace.close();
   });
 
-  it("resolves a failing batch entry's declared evidence by manifest existence only, not by executionId linkage", async () => {
+  // The forward half of the batch<->evidence linkage, closed in Phase 7. Before this, a declared
+  // evidence id was resolved by manifest EXISTENCE alone: a batch could cite evidence about an
+  // unrelated execution, or about a lane-1 attempt, and both paths accepted it. A failing entry's
+  // evidence is the substantiation of THAT execution's failure (CONTEXT.md:363), so the id must also be
+  // a declared relationship of the batch and must resolve to evidence whose subject is this batch's own
+  // observed execution.
+  it("binds a failing batch entry's declared evidence to the batch's own observed execution", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
     const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
-    // This fixture happens to reuse "EXEC-1", `testResultBatch`'s default `executionId` (see above), so
-    // it matches the batch registered below — but nothing on write or read requires or checks that
-    // match; see the ARTIFACT_BINDING check's comment in semantic-rules.ts for why the linkage is
-    // unenforced in both directions.
-    const evidence = await runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", executionId: "EXEC-1" });
-
-    const registered = await workspace.registerArtifactValue({
-      type: "test-result-batch", relationships: [testcase.id, evidence.descriptor.id], provenance: "runtime-observed",
-      value: testResultBatch(workspace, [batchEntry({ status: "FAILED", failureClassification: "PRODUCT_DEFECT", evidenceArtifactIds: [evidence.descriptor.id] })]),
+    const matching = await runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", executionId: "EXEC-1" });
+    const foreign = await runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY1", executionId: "EXEC-OTHER" });
+    const attemptCase = await registerDocument(workspace, "test-case", "attempt-case.json", testCase("TC-ATTEMPT"));
+    const attempt = await registerDocument(workspace, "test-result", "attempt.json", testResult(workspace, "TC-ATTEMPT"), [attemptCase.id]);
+    const attemptEvidence = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: "attempt-log.json", contents: Buffer.from("attempt\n"), mediaType: "application/json", captureType: "log" }],
+      relationships: [attempt.id],
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", runId: workspace.runId,
+        subject: { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-ATTEMPT", testCaseRevisionId: "REV-TC-ATTEMPT", testCaseInstanceId: "TC-ATTEMPT--INSTANCE-1" },
+        kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
+        binaryArtifactIds: binaries.map((binary) => binary.id),
+        binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+        provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+      }),
+    });
+    const failing = (evidenceArtifactIds: string[]) => [batchEntry({ status: "FAILED", failureClassification: "PRODUCT_DEFECT", evidenceArtifactIds })];
+    const register = (evidenceArtifactIds: string[], relationships: string[]) => workspace.registerArtifactValue({
+      type: "test-result-batch", relationships, provenance: "runtime-observed",
+      value: testResultBatch(workspace, failing(evidenceArtifactIds)),
     });
 
+    // Each assertion pins the rule's own message, so deleting one check cannot stay green on another's.
+    await expect(register([matching.descriptor.id], [testcase.id]))
+      .rejects.toThrow("Test result batch entry evidence must be declared as a relationship of the batch");
+    await expect(register([foreign.descriptor.id], [testcase.id, foreign.descriptor.id]))
+      .rejects.toThrow("Test result batch entry evidence must be about this batch's own observed execution");
+    await expect(register([attemptEvidence.descriptor.id], [testcase.id, attemptEvidence.descriptor.id]))
+      .rejects.toThrow("Test result batch entry evidence must be about this batch's own observed execution");
+
+    const registered = await register([matching.descriptor.id], [testcase.id, matching.descriptor.id]);
     expect(registered.type).toBe("test-result-batch");
+    // The read path must agree with the write path: the linked batch survives reopen.
     const artifacts = await workspace.readRegisteredArtifacts();
     const batch = artifacts.find((artifact) => artifact.record.type === "test-result-batch");
     const observed = artifacts.find((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ");
