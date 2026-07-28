@@ -5,6 +5,16 @@
  * is deliberate: an uncovered surface must stay EXPLICITLY UNMET rather than absent (CONTEXT.md:445).
  *
  * Mirrors `executionSurface`'s enum in shared/schemas/coverage-obligation.schema.json.
+ *
+ * A `test-result-batch` ENTRY's own `executionSurface` enum (shared/schemas/test-result-batch.schema.
+ * json) is deliberately a SUBSET of this list, missing exactly `manual` — the two are a subset
+ * relationship, not an equality. That artifact's whole shape is a git anchor (`commitSha` +
+ * `specTreeSha256`, ADR-0010) binding the checksummed spec tree the OBSERVED execution ran against —
+ * the reason an observed execution may credit coverage at all — and a human's manual evaluation has no
+ * spec tree to hash: a machine-written entry claiming `manual` would be incoherent with the artifact
+ * carrying it. `manual` stays a member HERE because an obligation may still declare it, staying
+ * authorable and, with no executor, explicitly unmet rather than absent. Do not "fix" that asymmetry by
+ * re-adding `manual` to the entry's enum — it is the one member that must never appear there.
  */
 export const executionSurfaces = ["browser", "api", "unit", "integration", "performance", "security", "manual"] as const;
 

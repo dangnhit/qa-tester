@@ -114,8 +114,13 @@ const claimLanes = {
  * Obligation at all, so the test case's declared method buys nothing and vetoes nothing. Each field is
  * copied by name rather than spread so that re-admitting any of them would have to be a visible,
  * deliberate edit.
+ *
+ * The diagnostic label is looked up from `lane` via `claimLanes` rather than taken as a separate
+ * parameter: `lane` and its diagnostics are ONE fact, not two independently-suppliable ones, so a call
+ * site cannot ask for one lane's derivation under another lane's messages.
  */
-function dimensions(lane: ClaimLane, value: Readonly<Record<string, unknown>>, claim: Readonly<Record<string, unknown>>, field: string): CoverageDimensions {
+function dimensions(lane: ClaimLane, value: Readonly<Record<string, unknown>>, claim: Readonly<Record<string, unknown>>): CoverageDimensions {
+  const { field } = claimLanes[lane];
   const coverage = value.coverage;
   if (!isRecord(coverage)) throw new QaSkillsError("Registered test case has no immutable coverage dimensions", "ARTIFACT_BINDING");
   // `executionSurface: "browser"` here is about the TEST CASE, not the attempt: `test-case.coverage` is
@@ -200,7 +205,7 @@ export async function evaluateWorkspaceCoverage(options: { root: string; runId: 
       const instanceId = requireString(value.testCaseInstanceId, `${field} test case instance ID`);
       const matches = casesByIdentity.get({ testCaseId, testCaseRevisionId: revisionId, testCaseInstanceId: instanceId });
       if (matches.length !== 1) throw new QaSkillsError(`${subject} references an orphan or ambiguous test case revision and instance`, "ARTIFACT_BINDING");
-      return dimensions(lane, matches[0]?.value ?? {}, value, field);
+      return dimensions(lane, matches[0]?.value ?? {}, value);
     };
     const attempts: CoverageAttempt[] = artifacts
       .filter((artifact) => artifact.record.type === "test-result" && creditsCoverage(artifact.record.provenance))

@@ -450,7 +450,11 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — a batch entry's own Execut
     expect(requiredMissing("api", { ...entryIdentity, executionSurface: "api" })).toEqual([]);
   });
 
-  it("does not let an entry on one non-browser surface satisfy an obligation on another", () => {
+  /** Pins `matchesObligation`'s surface-EQUALITY check, not a non-browser-specific mis-credit guard: a
+   *  `unit` entry stamped `browser` (i.e. the feature this task adds removed) would ALSO fail to match
+   *  an `api` obligation, so this test alone does not prove the entry's surface is what is being read —
+   *  only that mismatched surfaces never match. The rows above it are what prove the read. */
+  it("requires an entry's execution surface to equal the obligation's exactly (surface-equality pin, not a mis-credit guard)", () => {
     expect(requiredMissing("api", { ...entryIdentity, executionSurface: "unit" })).toEqual(["COV-SURFACE"]);
   });
 

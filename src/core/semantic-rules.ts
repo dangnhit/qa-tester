@@ -343,10 +343,11 @@ const testResultRule: SemanticRule = {
  *  required to equal the test case's declared one: the entry reports what an external runner rendered
  *  at, so a disagreement is a FACT, and the correct consequence is the obligation going uncredited in
  *  the readers, not the observation being rejected here. Rejecting it would put a declaration back in
- *  charge of whether an observation is admissible. `manual` is likewise admitted rather than refused as
- *  unobservable, because CONTEXT.md:444 says the runtime reaches EVERY surface it does not execute
- *  through a Runtime-Observed Execution, and a rule contradicting that invariant would be the wrong
- *  place to relitigate it.
+ *  charge of whether an observation is admissible. `manual` is refused, but not by this rule: the
+ *  entry's own `executionSurface` enum (shared/schemas/test-result-batch.schema.json) is a strict
+ *  SUBSET of the obligation's, missing exactly `manual` — a machine-written entry has no spec tree to
+ *  hash for a human's manual evaluation, so the schema rejects it outright before this rule ever runs.
+ *  A rule check here would be redundant with that boundary, not an alternative to it.
  *  Evidence resolution keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
  *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check.
  *

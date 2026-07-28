@@ -519,18 +519,33 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     );
   });
 
-  /** The same drift pin `accessibilityMethod` carries below: an entry's surface and an obligation's
-   *  surface are compared for EQUALITY by both coverage readers, so a member present on one list and
-   *  absent from the other would be a surface nothing could ever credit — or, worse, one an entry could
-   *  claim that no obligation can name. Both lists are pinned to `executionSurfaces` in coverage.ts. */
-  it("declares exactly the coverage-obligation Execution Surface enum, so an entry and an obligation cannot drift", () => {
+  /** The obligation's surface enum is pinned to `executionSurfaces` in coverage.ts, exactly. The
+   *  entry's is a strict SUBSET of the same list, not an equality: `manual` is the one member missing.
+   *  A `test-result-batch` is a git anchor (`commitSha` + `specTreeSha256`, ADR-0010) binding the
+   *  checksummed spec tree an OBSERVED execution ran against, and a human's manual evaluation has no
+   *  spec tree to hash — so a machine-written entry claiming `manual` would be incoherent with the
+   *  artifact carrying it, while an obligation may still declare it and stay authorable-but-unmet
+   *  (CONTEXT.md:445). `toEqual` below names the offending member on failure if either enum drifts:
+   *  the obligation from `executionSurfaces`, or the entry from `executionSurfaces` minus `manual`. */
+  it("declares a strict SUBSET of the coverage-obligation Execution Surface enum, missing exactly manual", () => {
     const entryEnum = (schemas["test-result-batch"] as { properties: { entries: { items: { properties: { executionSurface: { enum: unknown[] } } } } } })
       .properties.entries.items.properties.executionSurface.enum;
     const obligationEnum = (schemas["coverage-obligation"] as { properties: { executionSurface: { enum: unknown[] } } })
       .properties.executionSurface.enum;
 
-    expect(entryEnum).toEqual([...executionSurfaces]);
     expect(obligationEnum).toEqual([...executionSurfaces]);
+    expect(entryEnum).toEqual(executionSurfaces.filter((surface) => surface !== "manual"));
+  });
+
+  /** The one member the entry's enum must never regain. `manual` is a valid `coverage-obligation`
+   *  surface (see below) but not a valid ENTRY surface — see the enum's own description in the schema
+   *  for why. This is the same drift pin `accessibilityMethod` carries below, applied to the narrower
+   *  direction: a member present on the obligation's list and absent from the entry's is a surface an
+   *  obligation may declare that a machine-written entry can never credit, which is the point. */
+  it("rejects an entry declaring executionSurface manual", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...surfacelessEntry, executionSurface: "manual" }] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/entries/0/executionSurface", keyword: "enum" })]),
+    );
   });
 
   /** The browser surface's two dimensions, conditioned to the same EFFECT as `coverage-obligation`'s
@@ -559,7 +574,9 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     );
   });
 
-  it.each(executionSurfaces.filter((surface) => surface !== "browser"))("accepts a %s entry that names neither an engine nor a viewport", (surface) => {
+  // `manual` excluded: it is not a member of the entry's own enum (see the subset test above), so it
+  // belongs with the rejection tests, not here.
+  it.each(executionSurfaces.filter((surface) => surface !== "browser" && surface !== "manual"))("accepts a %s entry that names neither an engine nor a viewport", (surface) => {
     expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...surfacelessEntry, executionSurface: surface }] }).valid).toBe(true);
   });
 

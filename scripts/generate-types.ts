@@ -73,6 +73,27 @@ export type QARunMetadata = {
 `;
 }
 
+/**
+ * `json-schema-to-typescript`'s handling of `allOf` is depth-dependent, and both depths degrade the
+ * emitted type rather than rejecting the schema — so a schema author gets no error, and `check:generated`
+ * gives no warning either, because it only diffs the committed `.d.ts` against a re-run of this same
+ * (broken) generator: a stable-but-degraded output stays green.
+ *
+ * At the schema ROOT — e.g. `coverage-obligation.schema.json`'s two-branch conditional — `allOf`
+ * degrades the type to an intersection with a bare `{ [k: string]: unknown | undefined }` index
+ * signature, but every named property survives alongside it (see `coverage-obligation.d.ts`, whose
+ * root-level index signature is exactly this). Cosmetic, and safe to leave as `allOf`.
+ *
+ * NESTED one level down — inside an array item, as `test-result-batch.schema.json`'s per-entry
+ * conditional needed — the same construct is destructive rather than cosmetic: the entire nested
+ * object's property set is REPLACED by the bare index signature, with nothing surviving alongside it.
+ * Discovered while adding that entry's `executionSurface`-gated `observedEngine`/`viewport` (Task 36):
+ * copying the obligation's `allOf` shape into the entry silently deleted every entry field from the
+ * generated contract. The fix for a NESTED conditional is `if`/`then`/`else` on that nested schema
+ * instead of `allOf` (verified across five variants — see `tests/contracts/validator.test.ts`'s
+ * `test-result-batch schema` describe block), which preserves every property and validates identically
+ * under Ajv strict. A ROOT-level conditional has no need to make that switch.
+ */
 async function generate(): Promise<void> {
   const schemaFiles = (await readdir(schemaDirectory)).filter((filename) => filename.endsWith(".schema.json")).sort();
   await rm(outputDirectory, { recursive: true, force: true });
