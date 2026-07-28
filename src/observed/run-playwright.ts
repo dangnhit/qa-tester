@@ -52,6 +52,15 @@ const runtimeOwnedFlags = ["--reporter", "--output"] as const;
  *  than as the observation the run produced. Matches the ceiling `src/core/git-anchor.ts:39` uses. */
 const maxRunnerOutputBytes = 64 * 1024 * 1024;
 
+/** Node's code for "the child wrote more than `maxBuffer` allows". Measured against this package's own
+ *  runtime rather than taken from the documentation, because every property of it matters here: the
+ *  rejected error carries this as a **string** `code`, carries **no** `signal` property at all, carries
+ *  the `stdout`/`stderr` collected up to the ceiling, and Node **terminates the child** at the moment
+ *  the ceiling is crossed — a child scheduled to do more work never does it. The first two are why
+ *  neither branch of {@link defaultExecutor} matches and the rejection reaches `startRunner`; the last
+ *  is why this is a refusal rather than an observation with a truncated tail. */
+const maxBufferCode = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+
 /** What the runtime hands the process starter. `env` carries the report location, which is why a test
  *  seam can write a report exactly where a real runner would. */
 export type RunnerInvocation = Readonly<{ command: string; args: readonly string[]; cwd: string; env: NodeJS.ProcessEnv }>;
@@ -100,17 +109,27 @@ export type ObservedPlaywrightRun = Readonly<{
   finishedAt: string;
 }>;
 
-/** Normalizes one real `execFile` outcome into the two states `RunnerExit` allows. A genuine spawn
- *  failure (`code` is a string such as `ENOENT`) is rethrown, because it produced no run to report. */
+/** Reads whatever output a rejected `execFile` managed to collect, defaulting each stream to empty
+ *  rather than to `undefined` so a refusal message never has to distinguish the two. */
+function capturedOutput(error: unknown): RunnerOutput {
+  const failure = error as { stdout?: unknown; stderr?: unknown };
+  return { stdout: typeof failure.stdout === "string" ? failure.stdout : "", stderr: typeof failure.stderr === "string" ? failure.stderr : "" };
+}
+
+/** Normalizes one real `execFile` outcome into the two states `RunnerExit` allows; anything else is
+ *  rethrown for `startRunner` to classify. **The two shapes that must not be conflated are
+ *  indistinguishable here**, because both arrive with a string `code` and no `signal` property at all
+ *  (both measured, not assumed): a spawn failure such as `ENOENT`, where no process ever ran, and
+ *  {@link maxBufferCode}, where one ran and Node killed it. That is why the distinction is drawn where
+ *  the refusal is written rather than at this level, which cannot see it. */
 const defaultExecutor: RunnerExecutor = async (invocation) => {
   try {
     const { stdout, stderr } = await runFile(invocation.command, [...invocation.args], { cwd: invocation.cwd, env: invocation.env, encoding: "utf8", maxBuffer: maxRunnerOutputBytes });
     return { exitCode: 0, signal: null, stdout, stderr };
   } catch (error: unknown) {
-    const failure = error as { code?: unknown; signal?: unknown; stdout?: unknown; stderr?: unknown };
-    const output = { stdout: typeof failure.stdout === "string" ? failure.stdout : "", stderr: typeof failure.stderr === "string" ? failure.stderr : "" };
-    if (typeof failure.signal === "string") return { exitCode: null, signal: failure.signal, ...output };
-    if (typeof failure.code === "number") return { exitCode: failure.code, signal: null, ...output };
+    const failure = error as { code?: unknown; signal?: unknown };
+    if (typeof failure.signal === "string") return { exitCode: null, signal: failure.signal, ...capturedOutput(error) };
+    if (typeof failure.code === "number") return { exitCode: failure.code, signal: null, ...capturedOutput(error) };
     throw error;
   }
 };
@@ -170,14 +189,22 @@ function describeFailure(error: unknown): string {
  * **The report is captured as a file, not scraped from stdout.** Verified against the installed 1.61.1
  * runner rather than taken from documentation: its `JSONReporter` resolves its destination through
  * `PLAYWRIGHT_JSON_OUTPUT_FILE` first, ahead of `PLAYWRIGHT_JSON_OUTPUT_DIR`/`_NAME` and ahead of any
- * reporter option, so setting it pins the path unconditionally. stdout and stderr are still captured
- * with a large `maxBuffer` so a noisy runner does not surface as a spawn error.
+ * reporter option, so setting it pins the path unconditionally. stdout and stderr are still captured,
+ * with {@link maxRunnerOutputBytes} of headroom so an ordinarily noisy runner is simply captured, and
+ * with crossing that ceiling classified as its own refusal so a run that outgrows it is not reported as
+ * a runner that could not be started.
  *
  * **What is a refusal and what is an observation:**
  * - A non-zero exit with a valid report is an **observation**. Test failures are what lane 2 exists to
  *   record, and refusing them would discard the result.
  * - **Death by signal is a refusal.** A killed runner produced no trustworthy result, and the evidence
  *   contract for a `runner-report` has no `signal` field precisely because this refuses here.
+ * - **Outgrowing {@link maxRunnerOutputBytes} is a refusal**, and it is a refusal of the *run*, not of
+ *   the spawn. Node kills the child at the moment the ceiling is crossed, so this ends in a part-way
+ *   process for the same reason a signal death does, and is refused for the same reason: nothing in the
+ *   evidence contract can say the process was cut short. It is called out separately because the
+ *   rejection it arrives in is indistinguishable from `ENOENT` at the executor — a string `code`, no
+ *   `signal` — and calling it a spawn failure would name the one thing that certainly did happen.
  * - A **missing, empty or unparseable report is a refusal.** An exit code alone is not an observation.
  *
  * **Production gating mirrors `src/safety/side-effects.ts:12-15`**: a `production` classification
@@ -189,9 +216,12 @@ function describeFailure(error: unknown): string {
  * interpreting its steps, and that suite may write to anything its own code reaches. The gate is the
  * human's recorded decision that this suite may run against production, not a proof that it is safe.
  *
- * **No timeout.** The runner owns its own timeouts; a QA-imposed kill would destroy the report this
- * whole path exists to capture, and the kill would then be refused as a signal death. A hung suite is
- * the caller's to interrupt.
+ * **No timeout, and one ceiling that is not a timeout.** The runner owns its own timeouts; a QA-imposed
+ * kill would destroy the report this whole path exists to capture, and the kill would then be refused
+ * as a signal death. A hung suite is the caller's to interrupt. The one bound the runtime does impose
+ * is {@link maxRunnerOutputBytes} on captured output, which Node enforces by killing the child — set
+ * far above what any ordinary run prints, but a bound, and disclosed as one rather than described as
+ * "no limits".
  *
  * **The returned report is an allowlisted projection, and the guarantee is exactly this:** no key of
  * the runner's `config` survives except those in `reportConfigKeys`, and no key of a serialized project
@@ -215,9 +245,11 @@ function describeFailure(error: unknown): string {
  * load exits non-zero having written no report, and that is the most ordinary failure on this path; a
  * refusal that said only "wrote no JSON report at /var/folders/…" would discard the one thing that
  * explains it. So the first {@link maxQuotedStderrChars} characters of stderr are quoted in **every
- * refusal raised after the process ran** — the three no-report refusals and the signal death, which
- * fires before the report is read and fires even when a valid report exists. This sentence discloses
- * where a secret can surface, so it names every such place rather than the common one.
+ * refusal raised after the process ran**, and this sentence discloses where a secret can surface, so it
+ * names every such place rather than the common one: the three no-report refusals; the signal death,
+ * which fires before the report is read and fires even when a valid report exists; and the output
+ * ceiling being crossed, the only one taken from the executor's rejection rather than from a
+ * `RunnerExit`, whose stderr is whatever Node had collected when it killed the child.
  * **That bound is a length, not a redaction** — runner output can echo an
  * environment, and a runner that prints a secret to stderr puts it in the refusal message. The trade is
  * deliberate and narrow: a refusal message is operator-facing diagnostic text on the error path, not an
@@ -319,11 +351,29 @@ async function readRunnerVersion(projectRoot: string): Promise<string> {
   return version;
 }
 
+/** Turns an executor rejection into a refusal, and the whole job here is telling two of them apart.
+ *  {@link maxBufferCode} means a process WAS started, wrote past {@link maxRunnerOutputBytes} and was
+ *  killed by Node at that point; calling that "unable to start the runner" would name the one thing
+ *  that demonstrably did happen as the thing that failed, and would quote none of the output that says
+ *  what the run was doing. Everything `defaultExecutor` rethrows other than that is a spawn failure
+ *  that produced no process; an injected executor may of course reject with anything, and lands there
+ *  too, which is why that message reports what it was handed rather than diagnosing it. */
 async function startRunner(execute: RunnerExecutor, invocation: RunnerInvocation): Promise<RunnerExit> {
   try {
     return await execute(invocation);
   } catch (error: unknown) {
-    throw new QaSkillsError(`Unable to start the ${runnerName} runner in ${invocation.cwd}: ${describeFailure(error)}`, "OBSERVED_RUN_SPAWN_FAILED");
+    if ((error as { code?: unknown }).code !== maxBufferCode) {
+      throw new QaSkillsError(`Unable to start the ${runnerName} runner in ${invocation.cwd}: ${describeFailure(error)}`, "OBSERVED_RUN_SPAWN_FAILED");
+    }
+    throw new QaSkillsError(
+      `The ${runnerName} run in ${invocation.cwd} wrote past the QA Runtime's ${maxRunnerOutputBytes}-byte capture ceiling on one of its output streams, and Node killed it `
+      + `at that point (${describeFailure(error)}). The runner did start, so this is not a spawn failure — but it did not finish on its own terms, and a run stopped `
+      + `part-way is refused for the same reason a signal death is: the observed-execution evidence contract has no field to say the process was cut short, so recording `
+      + `it would assert a result nobody observed. Check what the runner was told to print before suspecting the suite — DEBUG=pw:api, inherited through the environment, `
+      + `makes it narrate every API call.`
+      + quotedStderr(capturedOutput(error)),
+      "OBSERVED_RUN_OUTPUT_TOO_LARGE",
+    );
   }
 }
 

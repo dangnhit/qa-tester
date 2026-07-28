@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -278,6 +278,27 @@ describe("runObservedPlaywright refusals", () => {
     const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
 
     expect(refusal.code).toBe("OBSERVED_RUN_SPAWN_FAILED");
+  }, 60_000);
+
+  it("refuses a run that outgrew the output ceiling as its own thing, not as a runner that could not start", async () => {
+    const root = await newProject("maxbuffer", passingSpec);
+    const cause = "pw:api => browserContext.newPage started";
+    // Node's own shape when `maxBuffer` is crossed, measured against this package's runtime rather than
+    // taken from the documentation: `code` is the STRING below, there is no `signal` property at all,
+    // and `stdout`/`stderr` carry what was collected up to the ceiling. Neither branch of
+    // `defaultExecutor` matches it, which is exactly why it reaches `startRunner` as a rejection.
+    const runner = spy(() => Promise.reject(Object.assign(new Error("stdout maxBuffer length exceeded"), {
+      code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", stdout: "x".repeat(64), stderr: `${cause}\n`,
+    })));
+
+    const refusal = await refusalOf(runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_OUTPUT_TOO_LARGE");
+    // The module's stderr guarantee covers every refusal raised after the process ran, and this is one.
+    expect(refusal.message).toContain(cause);
+    // Named because the operator has to find the run: `cwd` is the realpath, not the requested path.
+    expect(refusal.message).toContain(await realpath(root));
+    expect(refusal.message).not.toContain("Unable to start");
   }, 60_000);
 });
 
