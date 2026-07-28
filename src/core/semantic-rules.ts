@@ -457,9 +457,17 @@ const testResultBatchRule: SemanticRule = {
       // so an evidence item invalidated earlier in the SAME pass is still in the snapshot and clause 3
       // still resolves its subject. Its invalidation set `changed`, so the fixpoint runs another pass;
       // on THAT pass the rebuilt snapshot omits it, clause 3 gets an index miss, and the batch is
-      // invalidated. The cascade lands one pass later, and the fixpoint outcome is the right one — a
-      // batch whose substantiation is no longer readable does not stay valid. On WRITE the pool is the
-      // on-disk registered set, where every entry is valid by construction.
+      // invalidated. The cascade lands one pass later, and the outcome is the right one for anything
+      // the fixpoint invalidates. On WRITE the pool is the on-disk registered set, where every entry is
+      // valid by construction.
+      //
+      // The generalization stops there, and one path is named rather than swept under it: evidence
+      // invalidated by `inspectWorkspaceState`'s descriptor<->binary block does NOT cascade, because
+      // that block runs after the fixpoint has settled and sets no further pass, so a batch citing it
+      // is still marked `valid`. That is a gap in the flag, not in the outcome — the block invalidates
+      // by writing a diagnostic, and a non-empty diagnostics list already fails both
+      // `readRegisteredArtifacts` and `validate` whatever any individual artifact's flag says. Reachable
+      // only by tampering with a registered workspace on disk, and inert when it is.
       //
       // The REVERSE direction — an `observed-execution` evidence item that NO batch ever claims — stays
       // unenforced, and that is a ruling, not the leftover half of this one. See the rule's block
