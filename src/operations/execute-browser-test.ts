@@ -14,6 +14,7 @@ import { QaSkillsError } from "../core/errors.js";
 import type { ExecutionProvenance } from "../core/provenance.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
+import { resolvePlanApproval } from "../planning/approval.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { navigationPolicyFromProfile, type LaneSafetyContext } from "../safety/navigation.js";
 import { authorizeStep } from "../safety/side-effects.js";
@@ -24,14 +25,12 @@ let executionTail: Promise<void> = Promise.resolve();
 function loadCanonicalTestCase(artifacts: readonly RegisteredWorkspaceArtifact[], testCaseArtifactId: string): CanonicalBrowserTestCase {
   const artifact = artifacts.find((candidate) => candidate.record.id === testCaseArtifactId && candidate.record.type === "test-case");
   if (!artifact) throw new QaSkillsError("Execution requires an approved registered test case artifact", "ARTIFACT_BINDING");
-  const plan = artifacts.find((candidate) => candidate.record.type === "test-plan" && artifact.record.relationships.includes(candidate.record.id));
-  const autoApproved = plan && isRecord(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true;
-  const humanApproved = plan && artifacts.some((candidate) => candidate.record.type === "approval-decision"
-    && candidate.record.relationships.filter((id) => id === plan.record.id).length === 1
-    && candidate.value.planArtifactId === plan.record.id
-    && candidate.value.planSha256 === plan.record.sha256
-    && candidate.value.decision === "APPROVED");
-  if (!plan || (!autoApproved && !humanApproved)) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
+  // The last line of defence, deliberately retained. `runQaTesterWithAdapters` now pauses the run with
+  // `AWAITING_HUMAN_INPUT` before reaching here when the SAME predicate says a human-review plan is
+  // still pending — but a caller that bypasses the workflow (or a plan no command can resolve) must
+  // still be refused rather than executed. Both sites read `resolvePlanApproval` so they cannot drift.
+  const { plan, approved } = resolvePlanApproval(artifacts, artifact);
+  if (!plan || !approved) throw new QaSkillsError("Test case plan binding is not approved", "ARTIFACT_BINDING");
   const cases: unknown = plan.value.testCases;
   const planCases: readonly unknown[] = Array.isArray(cases) ? cases as unknown[] : [];
   const planCase = planCases.find((candidate) => isRecord(candidate)

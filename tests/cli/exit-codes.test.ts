@@ -15,6 +15,7 @@ describe("workflowExitCode", () => {
     ["ABORTED outcome", result({ outcome: "ABORTED" }), ExitCode.ABORTED_OR_INTERNAL],
     ["BLOCKED outcome", result({ outcome: "BLOCKED" }), ExitCode.BLOCKED],
     ["AWAITING_RUNTIME outcome (nothing executed)", result({ outcome: "AWAITING_RUNTIME" }), ExitCode.BLOCKED],
+    ["AWAITING_HUMAN_INPUT outcome (paused for a person)", result({ outcome: "AWAITING_HUMAN_INPUT" }), ExitCode.BLOCKED],
     ["invalid workspace validation", result({ validation: { valid: false, diagnostics: [{ code: "REQUIRED_ARTIFACT_MISSING", message: "missing" }] } }), ExitCode.UNMET_OBLIGATIONS],
     ["NOT_READY release recommendation", result({ releaseRecommendation: "NOT_READY" }), ExitCode.UNMET_OBLIGATIONS],
     ["COMPLETED_WITH_FAILURES outcome with no gate", result({ outcome: "COMPLETED_WITH_FAILURES" }), ExitCode.UNMET_OBLIGATIONS],
@@ -38,6 +39,16 @@ describe("workflowExitCode", () => {
       outcome: "BLOCKED",
       validation: { valid: false, diagnostics: [{ code: "REQUIRED_ARTIFACT_MISSING", message: "x" }] },
       releaseRecommendation: "NOT_READY",
+    }))).toBe(ExitCode.BLOCKED);
+  });
+
+  it("resolves AWAITING_HUMAN_INPUT ahead of the invalid validation a paused run always reports", () => {
+    // A run paused before `execute-browser-test` has no `test-result` and no `qa-execution-report`,
+    // so its `full`-profile validation is legitimately invalid. That must not collapse the pause into
+    // `UNMET_OBLIGATIONS` — waiting for a person is `BLOCKED`, not an unmet obligation.
+    expect(workflowExitCode(result({
+      outcome: "AWAITING_HUMAN_INPUT",
+      validation: { valid: false, diagnostics: [{ code: "REQUIRED_ARTIFACT_MISSING", message: "Profile full requires test-result" }] },
     }))).toBe(ExitCode.BLOCKED);
   });
 

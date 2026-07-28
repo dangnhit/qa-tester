@@ -293,53 +293,58 @@ refuses unless exactly one registered obligation carries that `obligationId`, an
 obligation declares the same `accessibilityMethod`. `--statement` is the substance of the claim and
 must actually say something — without it the record only shows that somebody pressed a button.
 
-### There is no run position where this command both binds and counts
+### Where in a run this command belongs
 
-This is a real gap in the shipped release, stated here rather than papered over.
+`qa-skill workflow run` stops and waits for you. When a run reaches `generate-qa-report` — the operation
+that writes the `release-gate` and the `qa-execution-report`, in `full` and `regression` modes — and a
+**required** Coverage Obligation still declares a manual `accessibilityMethod` with no Human Attestation
+bound to it, the workflow returns `outcome: "AWAITING_HUMAN_INPUT"` **without** generating the gate and
+**without** finalizing the run. The workspace stays writable; exit code is `2` (`BLOCKED`).
 
-**There is no `qa-skill report generate`.** The whole command set is `init`, `run create`, `skills
-list|install|verify|update|uninstall`, `workflow run|scaffold|bootstrap`, `runtime verify`,
-`schema show`, `draft init`, `fingerprint`, `artifact ingest`, `approval record`, `attestation record`,
-and `validate` (`src/cli/program.ts`). The release gate and the QA report are written by the
-`generate-qa-report` **operation**, which runs only inside `qa-skill workflow run`, and only in `full`
-and `regression` modes (`src/core/modes.ts`).
+The result body names the artifact:
 
-That operation leaves no gap to step into:
+```json
+{
+  "runId": "…",
+  "outcome": "AWAITING_HUMAN_INPUT",
+  "pendingHumanInput": {
+    "kind": "attestation",
+    "operation": "generate-qa-report",
+    "command": "attestation record",
+    "subjects": [{ "artifactId": "ART-…", "sha256": "…", "reference": "COV-A11Y", "method": "keyboard" }]
+  }
+}
+```
 
-- `qa-skill workflow run` registers the coverage obligations, runs every operation for the mode,
-  generates the gate, and finalizes the run — all in one process invocation, with no pause anywhere in
-  between (`runQaTesterWithAdapters`, `src/operations/run-workflow.ts`). **Before** that invocation the
-  obligation does not exist in the run, so `attestation record` refuses it ("Human attestation requires
-  exactly one registered coverage obligation carrying that obligation ID"). **After** it the run is
-  terminal and every write is refused with `TERMINAL_WORKSPACE` ("Terminal workspace is immutable",
-  `src/core/run-workspace.ts`).
-- Staging one earlier does not work. `qa-skill workflow bootstrap` finalizes its `plan` run too, and
-  `human-attestation` is not one of the four canonical planning types (`requirement-analysis`,
-  `test-plan`, `test-case`, `coverage-obligation`), so it is neither carried into a later run by a
-  bundle import nor tolerated by `workflow scaffold`, which rejects any source run holding a
-  non-planning artifact.
-- `qa-skill run create` **does** give you a non-terminal run that will accept an ingested
-  `coverage-obligation` and then an attestation against it. But nothing in the package generates a gate
-  for a run built that way — `generate-qa-report` only ever runs from `workflow run` — so the
-  attestation is recorded and never read by a gate.
+Record it against that `runId`, then re-run `qa-skill workflow run` with the same input file plus
+`"resumeRunId": "<runId>"`. The run reopens, skips every completed operation from its
+`workflow-checkpoint`, re-checks the same condition, and — now that the attestation is registered —
+generates a gate that credits it. `qa-skill approval record` has the same shape one operation earlier;
+the full procedure for both is in
+[recovery](./recovery.md#awaiting_human_input).
 
-**The consequence, plainly:** a coverage obligation with `required: true` and a manual
-`accessibilityMethod` cannot be satisfied by any shipped command sequence today. It reports as required
-coverage missing, and every `full` run carrying one gates `NOT_READY`. Authoring it with
-`required: false` instead reports it as an optional gap, letting the run reach `READY_WITH_RISKS` — that
-is an honest "this was not covered", not a pass, and it is the only other option this release offers.
+**Why the pause sits exactly there.** A release gate is an immutable snapshot of every artifact
+registered up to the moment it is generated; registering a `human-attestation` afterward changes what a
+re-derivation of the gate would produce, so the persisted gate permanently mismatches and gets flagged
+(`ARTIFACT_BINDING`) the next time the workspace is read. `generate-qa-report` also refuses to run a
+second time in the same run, so there is no regenerate-to-fix-it path. Immediately before the gate is
+the last position at which the attestation can still count.
 
-The **human checkpoint** that would make the command reachable — a workflow pause after the obligations
-are registered and before the gate is generated — is Phase 7 work
-(`docs/superpowers/plans/2026-07-24-production-readiness.md`). It is deliberately not in this release.
+**What still will not work, and must not:**
 
-**When a checkpoint does land, it must still register the attestation before the gate exists.** A
-release gate is an immutable snapshot of every artifact registered up to the moment it is generated;
-registering a `human-attestation` afterward changes what a re-derivation of the gate would produce, so
-the persisted gate permanently mismatches and gets flagged (`ARTIFACT_BINDING`) the next time the
-workspace is read. `generate-qa-report` also refuses to run a second time in the same run (a gate and
-report are generated once), so there is no regenerate-to-fix-it path — see
-[recovery](./recovery.md#attestation-and-the-gate-there-is-no-position-between-them).
+- Staging one in a bootstrap run does not carry it forward. `qa-skill workflow bootstrap` finalizes its
+  `plan` run, and `human-attestation` is not one of the four canonical planning types
+  (`requirement-analysis`, `test-plan`, `test-case`, `coverage-obligation`), so a bundle import will not
+  bring it across and `workflow scaffold` rejects a source run holding one. Record it at the pause, in
+  the run that produces the gate.
+- `qa-skill run create` gives a non-terminal run that accepts an ingested `coverage-obligation` and an
+  attestation against it, but nothing generates a gate for a run built that way.
+- An obligation nobody can attest to does **not** pause the run — it reaches the gate as `NOT_READY`.
+  That covers `accessibilityMethod: "automated-analysis"` (no scanner ships here), an Execution Surface
+  no executor covers, an obligation whose requirement is not `AUTHORITATIVE` (coverage credit requires
+  one, so an attestation could not clear it), and an `obligationId` that two registered obligations
+  share (the command refuses an ambiguous id). Authoring such an obligation with `required: false`
+  reports it as an optional gap (`READY_WITH_RISKS`) — an honest "this was not covered", not a pass.
 
 ## CLI helpers
 

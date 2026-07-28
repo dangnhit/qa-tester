@@ -41,6 +41,56 @@ export function evaluateApproval(
     : { approved: false, mode: "HUMAN_REVIEW", reasons };
 }
 
+/**
+ * The minimum an approval binding needs from a registered artifact: the manifest identity the binding
+ * is checked against, plus the payload. Structural — like `GateWorkspaceArtifact` in
+ * `src/reporting/release-gate.ts` — so this module stays a pure planning module with no workspace
+ * import, and `RegisteredWorkspaceArtifact` is assignable to it without a mapping step.
+ */
+export type ApprovalArtifactView = Readonly<{
+  record: Readonly<{ id: string; type: string; sha256: string; relationships: readonly string[] }>;
+  value: Readonly<Record<string, unknown>>;
+}>;
+
+/**
+ * What a registered test case's plan binding says about approval.
+ *
+ * `approved` is byte-for-byte the predicate `loadCanonicalTestCase` refuses on
+ * (`src/operations/execute-browser-test.ts`): an AUTO_APPROVED derived decision on the bound plan, or
+ * a registered `approval-decision` naming that plan's exact immutable bytes.
+ *
+ * `awaitsHumanReview` is byte-for-byte the precondition `recordHumanApproval` accepts
+ * (`src/operations/record-human-approval.ts`) — the ONLY state `qa-skill approval record` can resolve.
+ * The two are deliberately separate booleans rather than one tri-state, because their negations differ:
+ * an `auto-approve-safe` plan that derived `approved: false` for a safety reason (open questions, an
+ * unsafe side effect, a production target) is NOT approved and is ALSO not awaiting a human — no
+ * command can resolve it, so it must keep reaching the existing throw rather than pausing the run
+ * forever.
+ */
+export type PlanApprovalState = Readonly<{ plan?: ApprovalArtifactView; approved: boolean; awaitsHumanReview: boolean }>;
+
+/** Resolves the approval state of the one plan a registered test case is bound to. */
+export function resolvePlanApproval(artifacts: readonly ApprovalArtifactView[], testCase: ApprovalArtifactView): PlanApprovalState {
+  const plan = artifacts.find((candidate) => candidate.record.type === "test-plan" && testCase.record.relationships.includes(candidate.record.id));
+  if (!plan) return { approved: false, awaitsHumanReview: false };
+  const autoApproved = isRecord(plan.value.approvalDecision) && plan.value.approvalDecision.approved === true;
+  const humanApproved = artifacts.some((candidate) => candidate.record.type === "approval-decision"
+    && candidate.record.relationships.filter((id) => id === plan.record.id).length === 1
+    && candidate.value.planArtifactId === plan.record.id
+    && candidate.value.planSha256 === plan.record.sha256
+    && candidate.value.decision === "APPROVED");
+  const approved = autoApproved || humanApproved;
+  const policy = plan.value.approvalPolicy;
+  const decision = plan.value.approvalDecision;
+  return {
+    plan,
+    approved,
+    awaitsHumanReview: !approved
+      && isRecord(policy) && policy.mode === "human-review"
+      && isRecord(decision) && decision.approved === false && decision.mode === "HUMAN_REVIEW",
+  };
+}
+
 export function deriveTestPlanApproval(input: {
   plan: Readonly<Record<string, unknown>>;
   requirementAnalyses: readonly Readonly<Record<string, unknown>>[];

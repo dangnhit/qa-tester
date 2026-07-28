@@ -123,19 +123,35 @@ export function deriveReleaseGateFromArtifacts(input: Readonly<{
 }
 
 /**
- * The complete, immutable workspace is the sole source for a gate.  This is
- * deliberately shared by generation, registration, and workspace opening so
- * a caller cannot omit a troublesome fact from a hand-built rule snapshot.
+ * The non-derived pool a gate is computed from: everything except the gate and report it produces, and
+ * the workflow checkpoints that are operational resumability metadata rather than QA facts (including
+ * later checkpoint revisions would retroactively invalidate an immutable gate).
+ *
+ * Exported so a caller that needs the gate's own view of the workspace BEFORE the gate exists — the
+ * `AWAITING_HUMAN_INPUT` pause in `src/operations/run-workflow.ts` — filters by exactly this rule
+ * rather than by an argument that the three excluded types happen not to matter.
  */
-export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly GateWorkspaceArtifact[], validationDiagnostics: readonly string[] = []): WorkspaceDerivedReleaseGate {
-  // Workflow checkpoints are operational resumability metadata, not QA facts.
-  // Including later revisions would retroactively invalidate an immutable gate.
-  const source = artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report" && artifact.record.type !== "workflow-checkpoint");
+export function gateSourceArtifacts(artifacts: readonly GateWorkspaceArtifact[]): readonly GateWorkspaceArtifact[] {
+  return artifacts.filter((artifact) => artifact.record.type !== "release-gate" && artifact.record.type !== "qa-execution-report" && artifact.record.type !== "workflow-checkpoint");
+}
+
+/** One registered `coverage-obligation` resolved exactly as the gate resolves it, paired with the
+ *  immutable record it came from — the record is what carries the artifact id and checksum a caller
+ *  needs to name the obligation, and what `humanAttested` was joined on. */
+export type ResolvedGateObligation = Readonly<{ record: GateWorkspaceArtifact["record"]; obligation: ResolvedCoverageObligation }>;
+
+/**
+ * Resolves every registered `coverage-obligation` against its requirement analysis and the run's Human
+ * Attestations. Extracted from `deriveReleaseGateFromWorkspaceArtifacts` — which is still its only
+ * caller for gate purposes — so the runtime pause can ask the SAME reader whether an obligation is
+ * still open and whether an attestation could close it. A second, independently-written copy of this
+ * resolution is exactly the "two readers of the same obligation disagree" hazard the fail-OPEN notes
+ * below are about.
+ *
+ * `source` must be `gateSourceArtifacts(...)`, not the raw pool.
+ */
+export function resolveGateObligations(source: readonly GateWorkspaceArtifact[]): readonly ResolvedGateObligation[] {
   const valuesOf = (type: string) => source.filter((artifact) => artifact.record.type === type);
-  // One index over the registered test cases, consulted once per claim below. `artifacts` is a
-  // parameter and this function registers nothing, so the pool is invariant for the whole call: the
-  // index built here serves exactly the array `valuesOf("test-case")` returned, in that order.
-  const casesByIdentity = indexByTestCaseIdentity(valuesOf("test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
   // The obligation BYTES every registered Human Attestation attests to (CONTEXT.md:438). The join key
   // is the checksum, not `obligationId`, because obligation ids are not unique across a workspace —
   // `obligationSha256` is the byte-exact binding the artifact carries precisely so a reader need not
@@ -165,7 +181,7 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     const checksum = string(artifact.value.obligationSha256);
     return checksum === undefined ? [] : [checksum];
   }));
-  const obligations: ResolvedCoverageObligation[] = valuesOf("coverage-obligation").flatMap((artifact) => {
+  return valuesOf("coverage-obligation").flatMap((artifact): ResolvedGateObligation[] => {
     const value = artifact.value;
     const analysis = source.find((candidate) => candidate.record.id === value.requirementAnalysisArtifactId && candidate.record.type === "requirement-analysis");
     const authoritative = array(analysis?.value.statements).some((statement) => isRecord(statement) && statement.requirementId === value.requirementId && statement.authority === "AUTHORITATIVE");
@@ -188,8 +204,23 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     // obligation must not disagree about what an empty label means, and the safe reading of an
     // unrecognised label is "still an Accessibility Obligation", never "not one at all".
     const accessibilityMethod = typeof value.accessibilityMethod === "string" ? value.accessibilityMethod : undefined;
-    return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod, risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) }];
+    return [{ record: artifact.record, obligation: { obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod, risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) } }];
   });
+}
+
+/**
+ * The complete, immutable workspace is the sole source for a gate.  This is
+ * deliberately shared by generation, registration, and workspace opening so
+ * a caller cannot omit a troublesome fact from a hand-built rule snapshot.
+ */
+export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly GateWorkspaceArtifact[], validationDiagnostics: readonly string[] = []): WorkspaceDerivedReleaseGate {
+  const source = gateSourceArtifacts(artifacts);
+  const valuesOf = (type: string) => source.filter((artifact) => artifact.record.type === type);
+  // One index over the registered test cases, consulted once per claim below. `artifacts` is a
+  // parameter and this function registers nothing, so the pool is invariant for the whole call: the
+  // index built here serves exactly the array `valuesOf("test-case")` returned, in that order.
+  const casesByIdentity = indexByTestCaseIdentity(valuesOf("test-case"), (candidate) => ({ testCaseId: candidate.value.testCaseId, testCaseRevisionId: candidate.value.revisionId, testCaseInstanceId: candidate.value.instanceId }));
+  const obligations: readonly ResolvedCoverageObligation[] = resolveGateObligations(source).map((resolved) => resolved.obligation);
   /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
    *  entry) into a CoverageAttempt. WHAT was covered comes from the single matching registered test
    *  case; HOW it ran comes from `attemptSurface` per `lane`. Unresolvable claims are dropped, exactly

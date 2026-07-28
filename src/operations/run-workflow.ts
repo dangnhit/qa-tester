@@ -12,6 +12,7 @@ import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName 
 import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
 import { executeTestInstance } from "./execute-browser-test.js";
+import { pendingHumanInput, type PendingHumanInput } from "./human-input.js";
 import { attachEvidence, captureEvidence, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
 import { normalizeGeometry } from "../evidence/geometry.js";
@@ -78,7 +79,15 @@ export type WorkflowInput = Readonly<{
   retest?: Readonly<{ sourceBugArtifactId: string; reproductionAttemptIds: readonly string[]; regressionOutcome?: RegressionOutcome }>;
 }>;
 export type WorkflowTerminalStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
-export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation }>;
+/**
+ * `AWAITING_RUNTIME` and `AWAITING_HUMAN_INPUT` are the two non-terminal outcomes: neither finalizes
+ * the run, both leave a resumable checkpoint and a writable workspace. They differ in whose action
+ * unblocks them — a caller-side runtime registry, or an identified person recording an artifact — and
+ * only the second needs to say what that artifact is, which is what `pendingHumanInput` carries.
+ */
+export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | "AWAITING_HUMAN_INPUT" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation; pendingHumanInput?: PendingHumanInput }>;
+
+export type { PendingHumanInput, PendingHumanInputSubject } from "./human-input.js";
 
 /** A checksum-bound immutable source record.  Public workflows never accept a raw draft. */
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
@@ -971,6 +980,21 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
         await hydrateCheckpointOutput(state, name);
         await adapter.assertPostcondition(workspace, state.outputs[name] as never);
         continue;
+      }
+      // The human checkpoint. It sits INSIDE the loop — unlike `AWAITING_RUNTIME`, which is decided
+      // once before it — because the two artifacts a person supplies are needed at different points,
+      // and each is evaluated against what is registered at that moment rather than at entry.
+      //
+      // Its position is load-bearing in both directions. AFTER the already-completed branch: an
+      // operation whose checkpoint says it ran is rehydrated and never re-guarded, so a resume can
+      // neither re-execute nor double-register it. BEFORE `adapter.execute`: pausing registers
+      // nothing, advances no checkpoint, and returns without `finalizeWorkflowOutcome`, so the run
+      // stays non-terminal and the workspace stays writable for the command that resolves it. A later
+      // resume re-enters at this same operation, re-evaluates the same condition against the now-
+      // larger artifact pool, and either proceeds or pauses again identically.
+      const pending = await pendingHumanInput(workspace, name, state.executionCaseIds);
+      if (pending !== undefined) {
+        return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_HUMAN_INPUT", operationOrder: order, outputs, validation: await workspace.validate(input.mode), pendingHumanInput: pending };
       }
       const output = await adapter.execute(state);
       await adapter.assertPostcondition(workspace, output as never);

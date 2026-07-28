@@ -21,10 +21,15 @@ wins:
 1. `outcome === "ABORTED"` → `5` (`ABORTED_OR_INTERNAL`)
 2. `outcome === "BLOCKED"` → `2` (`BLOCKED`)
 3. `outcome === "AWAITING_RUNTIME"` (nothing executed) → `2` (`BLOCKED`)
-4. `validation.valid === false` → `1` (`UNMET_OBLIGATIONS`)
-5. `releaseRecommendation === "NOT_READY"` → `1` (`UNMET_OBLIGATIONS`)
-6. `outcome === "COMPLETED_WITH_FAILURES"` → `1` (`UNMET_OBLIGATIONS`)
-7. otherwise → `0` (`SUCCESS`)
+4. `outcome === "AWAITING_HUMAN_INPUT"` (waiting on a person) → `2` (`BLOCKED`)
+5. `validation.valid === false` → `1` (`UNMET_OBLIGATIONS`)
+6. `releaseRecommendation === "NOT_READY"` → `1` (`UNMET_OBLIGATIONS`)
+7. `outcome === "COMPLETED_WITH_FAILURES"` → `1` (`UNMET_OBLIGATIONS`)
+8. otherwise → `0` (`SUCCESS`)
+
+Both non-terminal outcomes resolve **ahead of** `validation.valid`, and that ordering is load-bearing: a
+paused run legitimately has not yet registered the artifacts its profile requires, so collapsing it into
+`UNMET_OBLIGATIONS` would report an unmet obligation where the truth is "not finished yet".
 
 `READY_WITH_RISKS` and "no gate registered" (`plan`, `execute`, `exploratory`, and `retest` modes) both
 fall through to `0` — a risk-flagged go verdict is still success at the process boundary; read
@@ -48,6 +53,90 @@ workflow continues from where it stopped. Exit code `2` (`BLOCKED`).
 
 Do not treat `AWAITING_RUNTIME` as a failed run to discard. Fix the caller's runtime registry and resume
 the same run.
+
+## `AWAITING_HUMAN_INPUT`
+
+`outcome: "AWAITING_HUMAN_INPUT"` means the workflow ran every operation it could and then **stopped in
+front of one that needs an artifact only a person can write**. Two exist, and the run stops immediately
+before the operation each one gates:
+
+| What is missing | Command | The run stops before | Modes |
+| --- | --- | --- | --- |
+| An approval for a `human-review` test plan | `qa-skill approval record` | `execute-browser-test` | `full`, `execute`, `regression`, `retest` |
+| A Human Attestation for a required manual Accessibility Obligation | `qa-skill attestation record` | `generate-qa-report` | `full`, `regression` |
+
+Like `AWAITING_RUNTIME` this is **not a failure and not a terminal run**. Nothing was finalized, no
+`release-gate` was written, the process lock is released, and — the point of the whole mechanism — the
+workspace is still **writable**, which is what lets the command below register into it. Exit code `2`
+(`BLOCKED`).
+
+The result body tells you what to do. Alongside `outcome` it carries `pendingHumanInput`:
+
+```json
+{
+  "kind": "attestation",
+  "operation": "generate-qa-report",
+  "command": "attestation record",
+  "reason": "The release gate requires a Human Attestation for a required manual accessibility obligation.",
+  "subjects": [
+    { "artifactId": "ART-…", "sha256": "…", "reference": "COV-A11Y", "method": "keyboard" }
+  ]
+}
+```
+
+`subjects[].reference` is the value the command names the artifact by — `--plan-artifact-id` for an
+approval (where it is the artifact id itself), `--obligation-id` for an attestation. `method` is the
+`--method` that attestation must carry; any other is refused.
+
+**The recovery procedure is three steps:**
+
+1. Read `runId` and `pendingHumanInput` from the JSON body.
+2. Have the identified person run the named command against that `runId` — for example
+   `qa-skill attestation record --root <path> --run-id <runId> --obligation-id COV-A11Y --method keyboard --attested-by <identity> --statement "<what you actually did and observed>"`.
+3. Re-run `qa-skill workflow run` with the **same** input file plus `"resumeRunId": "<runId>"`. The
+   workflow reopens the same run, skips every completed operation from its `workflow-checkpoint`, and
+   re-evaluates the same condition at the operation it stopped at.
+
+Resuming without recording anything is safe and does nothing: the run pauses again with the identical
+`pendingHumanInput`, registers no new artifact, and re-executes no operation. Resuming after recording
+continues to the end. There is no separate resume path — this is the same `resumeRunId` machinery
+`AWAITING_RUNTIME` uses.
+
+### What does *not* pause — and must not
+
+A pause says "a person can fix this right now". It is deliberately **narrower** than "something is
+unsatisfied", because pausing on something nobody can resolve would turn an honest verdict into an
+indefinite hang. None of the following pauses; each reaches the gate and is reported there:
+
+- **An Execution Surface no executor covers** (`api`, `unit`, `integration`, `performance`, `security`,
+  and `manual` without an accessibility method). No producer exists, so it stays explicitly unmet →
+  `NOT_READY`.
+- **`accessibilityMethod: "automated-analysis"`.** Only a machine-produced analysis could satisfy it and
+  no scanner ships here; a person attesting to it is a category error the command itself refuses →
+  `NOT_READY`.
+- **An obligation whose requirement is not `AUTHORITATIVE`.** Coverage credit requires an authoritative
+  requirement, so an attestation would be recorded and still not clear it → `NOT_READY`.
+- **An optional obligation** (`required: false`). It is reported as an optional gap →
+  `READY_WITH_RISKS`, which is an honest "not covered".
+- **Two registered obligations sharing one `obligationId`.** `attestation record` refuses an ambiguous
+  id, so pausing would name a command that cannot run → `NOT_READY`.
+- **A plan no approval can rescue.** `qa-skill approval record` resolves only a plan whose
+  `approvalPolicy.mode` is `human-review` and whose derived decision is a pending `HUMAN_REVIEW`. A test
+  case bound to no plan at all is refused by `execute-browser-test` as before
+  ("Test case plan binding is not approved"), which is retained as the last line of defence for callers
+  that bypass the workflow.
+
+If you see `NOT_READY` for one of these, there is nothing to recover: the runtime is refusing to credit
+an obligation nobody witnessed. Either supply the missing capability, or author the obligation with
+`required: false` so it records "not covered" honestly instead of blocking.
+
+### One known gap
+
+`retest` mode runs `reproduce-bug` **before** `execute-browser-test`, and `reproduce-bug` drives the
+browser too. The approval pause guards `execute-browser-test` only, so a `human-review` plan in a
+`retest` bundle still throws at `reproduce-bug` ("Test case plan binding is not approved") rather than
+pausing. That is unchanged from before this mechanism landed, not a regression it introduced — but it
+means a retest bundle should carry an `auto-approve-safe` plan.
 
 ## Live lock (`LIVE_LOCK`)
 
@@ -140,7 +229,7 @@ and `qa-skill schema show --type <t>` prints the contract itself. Do not raise a
 an already-registered artifact: those are read-only history, and the checksum in the manifest will no
 longer match.
 
-## Attestation and the gate: there is no position between them
+## Attestation, approval, and the gate: where the run stops
 
 **There is no `qa-skill report generate` command.** Earlier revisions of this reference and of
 [artifact-authoring](./artifact-authoring.md) named one; it never existed. The commands this CLI
@@ -151,69 +240,61 @@ actually has are `init`, `run create`, `skills list|install|verify|update|uninst
 which runs only inside `qa-skill workflow run`, and only in `full` and `regression` modes
 (`src/core/modes.ts`).
 
-So the honest statement is stronger than an ordering rule: **`qa-skill attestation record` has no
-reachable position in a shipped workflow today.**
+An earlier revision of this section said `qa-skill attestation record` had **no reachable position in a
+shipped workflow**, and that the human checkpoint was deferred Phase 7 work. That was true when it was
+written and is now false: the checkpoint landed, and the same mechanism also gave
+`qa-skill approval record` the position it had silently been missing since it shipped. See
+[`AWAITING_HUMAN_INPUT`](#awaiting_human_input) above for the full procedure. The one-paragraph version:
 
-- `qa-skill workflow run` registers the coverage obligations, runs every operation for the mode,
-  generates the gate, and finalizes the run in a **single process invocation**
-  (`runQaTesterWithAdapters`, `src/operations/run-workflow.ts`) — there is no pause to step into.
-  Before it, the obligation is not in the run, and `attestation record` refuses ("Human attestation
-  requires exactly one registered coverage obligation carrying that obligation ID"). After it, the run
-  is terminal and refuses every write with `TERMINAL_WORKSPACE` ("Terminal workspace is immutable",
-  `src/core/run-workspace.ts`).
-- The one non-terminal early return, `AWAITING_RUNTIME` (see above), returns **before** the operation
-  loop runs `ingest-coverage-obligation`, so at that point there is still no obligation to attest to.
-  (It is also not reachable from the CLI at all: `qa-skill workflow run` always supplies the local
-  browser manager, and for `full` mode the local test-data registry, so `missingRuntimeLabel` never
-  fires — `AWAITING_RUNTIME` is a programmatic-`createQaTester` outcome.)
-- Staging an attestation in a bootstrap run does not carry it forward. `qa-skill workflow bootstrap`
-  finalizes its `plan` run too, and `human-attestation` is not one of the four canonical planning types,
-  so a bundle import will not bring it across and `workflow scaffold` rejects a source run that holds
-  one.
-- `qa-skill run create` gives a non-terminal run that accepts an ingested `coverage-obligation` and then
-  an attestation against it — but no command generates a gate for such a run, so nothing ever reads it.
+- `qa-skill workflow run` no longer finalizes in a single invocation whenever a human record is due. It
+  stops **immediately before** the operation the missing record gates — `execute-browser-test` for an
+  approval, `generate-qa-report` for an attestation — and returns `AWAITING_HUMAN_INPUT` without
+  writing a gate and without finalizing, leaving the run non-terminal and the workspace writable.
+- The person records the artifact against that `runId`, and the same input file plus
+  `"resumeRunId": "<runId>"` continues the run from its `workflow-checkpoint`.
+- **Ordering is why the stop is where it is.** A release gate is an immutable snapshot: it is
+  re-derived from, and checked against, every non-gate/non-report artifact registered in the run at
+  read time (`releaseGateRule` in `src/core/semantic-rules.ts`). Registering a `human-attestation`
+  *after* the gate exists changes what that re-derivation produces, so the persisted gate no longer
+  equals its own re-derivation and the next read invalidates it with `ARTIFACT_BINDING`. There is no
+  regenerate-in-place fix — `generateQaReport` refuses to run a second time in one run, by design — so
+  the pause has to sit in front of `generate-qa-report`, and it does.
 
-**What this costs:** a coverage obligation with `required: true` and a manual `accessibilityMethod` is
-not satisfiable by any shipped command sequence. It stays in `requiredMissing`, `REQUIRED_COVERAGE_COMPLETE`
-fails, and the run gates `NOT_READY` — permanently, for that run and every later one authored the same
-way. There is no recovery procedure for it, because there is nothing broken to recover: the runtime is
-refusing to credit an obligation nobody witnessed. Authoring the obligation with `required: false`
-instead reports it as an optional gap (`READY_WITH_RISKS`), which records "not covered" honestly rather
-than manufacturing a pass.
+What has **not** changed:
 
-The **human checkpoint** that would give the command a position — a workflow pause after the obligations
-are registered and before the gate is generated — is Phase 7 work
-(`docs/superpowers/plans/2026-07-24-production-readiness.md`), and is deliberately not in this release.
-
-**The ordering rule still stands for whatever lands next.** A release gate is an immutable snapshot: it
-is re-derived from, and checked against, every non-gate/non-report artifact registered in the run at read
-time (`releaseGateRule` in `src/core/semantic-rules.ts`). Registering a `human-attestation` after the
-gate exists changes what that re-derivation produces — `sourceArtifacts` gains the attestation, and
-`ruleInputs` changes if it clears an otherwise-unmet Accessibility Obligation — so the persisted gate no
-longer equals its own re-derivation, and the next read invalidates it with `ARTIFACT_BINDING`. There is
-no regenerate-in-place fix: `generateQaReport` (`src/operations/generate-qa-report.ts`) refuses to run a
-second time once a `release-gate` or `qa-execution-report` is registered, by design. Like the
-"artifacts from a run written by an older version" case above, nothing is repairable in place, because
-the artifact that would need to change is immutable by contract.
+- Staging an attestation in a bootstrap run still does not carry it forward. `qa-skill workflow
+  bootstrap` finalizes its `plan` run, and `human-attestation` is not one of the four canonical planning
+  types, so a bundle import will not bring it across and `workflow scaffold` rejects a source run that
+  holds one. Record it in the run that will produce the gate, at the pause.
+- `qa-skill run create` still gives a non-terminal run that accepts an ingested `coverage-obligation`
+  and an attestation against it, and nothing generates a gate for a run built that way. Use
+  `qa-skill workflow run`.
+- An obligation that no command can satisfy still reaches the gate as `NOT_READY` rather than pausing.
+  The list is under
+  [What does *not* pause](#what-does-not-pause--and-must-not).
 
 ## Check the JSON body, not just the exit code
 
 `WorkflowResult` (returned by `qaTester()` / `createQaTester()`, and printed as JSON by
-`qa-skill workflow run`) carries three fields that matter more than the exit code:
+`qa-skill workflow run`) carries four fields that matter more than the exit code:
 
-- `outcome`: `"AWAITING_RUNTIME" | "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED"`
+- `outcome`: `"AWAITING_RUNTIME" | "AWAITING_HUMAN_INPUT" | "COMPLETED" | "COMPLETED_WITH_FAILURES" |
+  "BLOCKED" | "ABORTED"`
 - `validation`: `{ valid: boolean, diagnostics: [...] }`
 - `releaseRecommendation` (registered when the `generate-qa-report` operation runs — `full` and
   `regression` modes; not `plan`, `execute`, `exploratory`, or `retest`): `"READY" | "READY_WITH_RISKS" |
   "NOT_READY"`
+- `pendingHumanInput` (present only with `outcome: "AWAITING_HUMAN_INPUT"`): what to record, and for
+  which artifact — see [`AWAITING_HUMAN_INPUT`](#awaiting_human_input)
 
 The process exit code **collapses distinct situations together**. Exit code `1` alone does not tell you
 whether the gate said "not ready" (`releaseRecommendation === "NOT_READY"`, with `validation.valid ===
 true` — every structural obligation was met, and the *content* of the run does not clear the release
 bar) or whether validation itself failed (`validation.valid === false` — a structural obligation is
 unmet, and no release verdict was even reached). Exit code `2` alone does not tell you whether the
-workflow is genuinely `BLOCKED`, or is `AWAITING_RUNTIME` and simply needs a runtime registry and a
-resume.
+workflow is genuinely `BLOCKED`, is `AWAITING_RUNTIME` and simply needs a runtime registry and a
+resume, or is `AWAITING_HUMAN_INPUT` and needs a named person to record one artifact before the same
+resume finishes it.
 
 Before reporting success or failure to the user, read `outcome`, `validation.valid` (and its
 `diagnostics` when invalid), and `releaseRecommendation` from the JSON body. Do not infer the situation
