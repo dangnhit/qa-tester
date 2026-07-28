@@ -6,10 +6,16 @@ import { array, isRecord } from "../core/values.js";
 export const runnerReportSanitizationPolicy = "qa-skills/observed-runner-report/v1" as const;
 
 /**
- * Every field this projection removes, in the payload's own path notation, and the list the payload
- * discloses. Each row is exercised by `tests/observed/sanitize-report.test.ts`, which plants a resolved
- * secret at that exact path and asserts it does not survive — so the disclosure is a tested claim, not
- * a sentence next to the code.
+ * Every field the 1.61 reporter emits that this projection removes, in the payload's own path notation,
+ * and the list the payload discloses. It is not — and under an allowlist cannot be — a list of
+ * everything removed: a key a future runner adds is dropped too and will not appear here, which is the
+ * point of an allowlist and the reason this list is scoped to a reporter version.
+ *
+ * Each row is exercised by `tests/observed/sanitize-report.test.ts`, which builds a report carrying a
+ * planted secret in every field a secret can reach and asserts per row that the field does not survive.
+ * `config.projects[].outputDir` is the one row where the planted value is a path rather than a secret:
+ * it is dropped because it names a temporary directory, not because it can leak. So the disclosure is a
+ * tested claim rather than a sentence next to the code.
  *
  * The line these rows draw is **committed spec-tree content versus run-time output**. A spec's `title`
  * survives, because it carries the identity tag, is covered by the batch's own `specTreeSha256`, and was

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { QaSkillsError } from "../../src/core/errors.js";
-import { mapObservedReport, observedEntrySurfaces, type RegisteredCase } from "../../src/observed/report-mapping.js";
+import { mapObservedReport, observedEntrySurfaces, observedSpecFiles, type RegisteredCase } from "../../src/observed/report-mapping.js";
 
 /**
  * The lane-2 producer's identity and status mapping (Task 39b), tested as a pure function over a
@@ -113,6 +113,14 @@ describe("mapObservedReport identity", () => {
     expect(refusal.code).toBe("OBSERVED_SPEC_TAG_INVALID");
   });
 
+  it("refuses a broken tag sitting BESIDE a valid one, rather than mapping on the valid one", () => {
+    // The surplus `[qa:` marker is a tag this parser could not read; reading past it would silently
+    // honour whichever tag happened to parse, which is the ruling the refusal above exists to make.
+    const refusal = refusalOf(() => mapObservedReport(report([spec(`checks [qa:TC-1/REV-1] and ${tagged("api")}`, [{ status: "passed" }])]), registered));
+
+    expect(refusal.code).toBe("OBSERVED_SPEC_TAG_INVALID");
+  });
+
   it("refuses a surface the batch contract does not carry, naming the one that was written", () => {
     const refusal = refusalOf(() => mapObservedReport(report([spec(tagged("mobile"), [{ status: "passed" }])]), registered));
 
@@ -196,5 +204,22 @@ describe("mapObservedReport status", () => {
 
   it("treats a report with no suites as a clean empty mapping rather than an error", () => {
     expect(mapObservedReport({ config: {}, stats: {} }, registered)).toEqual({ entries: [], excluded: [] });
+  });
+});
+
+describe("observedSpecFiles", () => {
+  it("reports every executed spec file once, tagged or not, across nested suites", () => {
+    const nested = {
+      suites: [{
+        title: "a.spec.js", specs: [spec(tagged("api"), [{ status: "passed" }], { file: "specs/a.spec.js" })],
+        suites: [{ title: "inner", specs: [spec("untagged", [{ status: "passed" }], { file: "specs/b.spec.js" })] }],
+      }],
+    };
+
+    expect(observedSpecFiles(nested)).toEqual(["specs/b.spec.js", "specs/a.spec.js"]);
+  });
+
+  it("is empty for a report with no suites, so nothing to place is not something outside", () => {
+    expect(observedSpecFiles({ config: {}, stats: {} })).toEqual([]);
   });
 });

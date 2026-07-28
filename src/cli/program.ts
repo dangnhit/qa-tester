@@ -284,8 +284,12 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       // shape as `LIVE_LOCK`. `OBSERVED_RUN_PRODUCTION_DENIED` is SAFETY_DENIED for the reason the
       // other three on that line are: a safety rule refused an operation the caller asked for
       // (CONTEXT.md:370, ADR-0004), rather than the caller mistyping one.
+      // `OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR` joins that line as a containment denial of the same class as
+      // `PATH_ESCAPE`/`SYMLINK_ESCAPE`: something executed outside the boundary the run is bounded by,
+      // and its adversarial path is unreviewed code earning coverage credit.
       if (error.code === "LIVE_LOCK" || error.code === "SPEC_TREE_DIRTY") exitCode = ExitCode.BLOCKED;
-      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY" || error.code === "OBSERVED_RUN_PRODUCTION_DENIED") exitCode = ExitCode.SAFETY_DENIED;
+      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY"
+        || error.code === "OBSERVED_RUN_PRODUCTION_DENIED" || error.code === "OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError && error.code === "commander.version") {
       exitCode = ExitCode.SUCCESS;

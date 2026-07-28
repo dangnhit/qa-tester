@@ -29,8 +29,9 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   const cleanupLeaks = artifacts.filter((artifact) => artifact.record.type === "cleanup-run").flatMap((artifact) => array(artifact.value.resources).filter((resource) => isRecord(resource) && resource.status === "failed") as Values[]);
   // Both projections below read BOTH lanes (Phase 7, ADR-0010). A `test-result` is one Test Attempt the
   // runtime drove; a `test-result-batch` entry is one case a Runtime-Observed Execution reported, and
-  // `evaluateCoverage`, `deriveReleaseGateFromWorkspaceArtifacts` and `evaluateWorkspaceCoverage` all
-  // already flatten an entry into the same `CoverageAttempt` shape an attempt produces. Filtering
+  // `deriveReleaseGateFromWorkspaceArtifacts` and `evaluateWorkspaceCoverage` already flatten an entry
+  // into the same `CoverageAttempt` shape an attempt produces before handing it to `evaluateCoverage`,
+  // which consumes already-flattened claims and flattens nothing itself. Filtering
   // `test-result` alone here — which is what this file did until the producer landed — made a run
   // credited entirely by a batch report "0 registered attempts evaluated" beside a READY gate, and hid
   // a skipped observed spec from `excludedNotRun` while `NOT_RUN` was exactly what its entry said.

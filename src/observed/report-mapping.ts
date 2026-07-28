@@ -102,6 +102,19 @@ function specViews(node: unknown): SpecView[] {
   ];
 }
 
+/**
+ * Every distinct spec file the runner reported executing, exactly as the reporter spelled it —
+ * `path.relative(config.rootDir, …)` in POSIX form, so a caller resolves it against `config.rootDir`.
+ *
+ * Separate from `mapObservedReport` because it answers a question that must be settled BEFORE any
+ * entry is interpreted: whether what ran is what the git anchor describes. It therefore reports EVERY
+ * executed spec, tagged or not — an untagged spec outside the anchored directory credits nothing by
+ * itself, but its execution still falsifies the batch's `specTreeSha256` as a description of the run.
+ */
+export function observedSpecFiles(report: Readonly<Record<string, unknown>>): readonly string[] {
+  return [...new Set(array(report.suites).flatMap(specViews).map((view) => view.file))];
+}
+
 function parseIdentityTag(view: SpecView): ParsedTag | undefined {
   const matches = [...view.title.matchAll(identityTagPattern)];
   if (matches.length > 1) {
@@ -111,9 +124,12 @@ function parseIdentityTag(view: SpecView): ParsedTag | undefined {
       "OBSERVED_SPEC_TAG_INVALID",
     );
   }
-  const match = matches[0];
-  if (match === undefined) {
-    if (!view.title.includes(identityTagMarker)) return undefined;
+  // Counted, not merely "is there one when nothing matched". A well-formed tag contains exactly one
+  // `[qa:` marker, so any surplus marker is a tag this parser could not read — INCLUDING one sitting
+  // beside a tag it could. Keying only on `matches.length === 0` would let
+  // `"a [qa:BROKEN] b [qa:TC/REV/INST@api]"` map silently, which contradicts the ruling below.
+  const markers = view.title.split(identityTagMarker).length - 1;
+  if (markers !== matches.length) {
     throw new QaSkillsError(
       `The spec ${JSON.stringify(view.title)} in ${view.file} starts an identity tag it does not complete. `
       + `The form is [qa:<testCaseId>/<revisionId>/<instanceId>@<surface>], and a broken tag is refused rather than read as an untagged spec: `
@@ -121,6 +137,8 @@ function parseIdentityTag(view: SpecView): ParsedTag | undefined {
       "OBSERVED_SPEC_TAG_INVALID",
     );
   }
+  const match = matches[0];
+  if (match === undefined) return undefined;
   return { testCaseId: match[1] ?? "", testCaseRevisionId: match[2] ?? "", testCaseInstanceId: match[3] ?? "", surface: match[4] ?? "" };
 }
 

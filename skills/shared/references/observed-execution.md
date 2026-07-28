@@ -17,7 +17,7 @@ Everything after `--` reaches the runner verbatim. `--reporter` and `--output` a
 
 `--root` is the project root: the Run Workspace's root, the runner's working directory, and the directory the git repository is discovered from. The command targets an existing run, so create one first (`qa-skill run create --root . --mode execute --environment-file environment.json`) and register the test cases and coverage obligations the suite is meant to satisfy. Production gating is read from the run's registered `environment-profile`, not from a flag: a `production` classification refuses unless the profile sets `productionReadOnly`.
 
-On success it prints one JSON line with the `executionId`, the registered batch and evidence artifact IDs, the `commitSha` and `specTreeSha256` that were anchored, the runner's `exitCode`, how many entries were carried, and every spec that was **excluded**.
+On success it prints one JSON line with the `executionId`, the registered batch and evidence artifact IDs, the `commitSha` and `specTreeSha256` that were anchored, the runner's `exitCode`, how many entries were carried, every spec that was **excluded**, and `runnerWorkingDir` — the temporary directory holding the runner's verbatim `report.json` and its `artifacts/` (omitted in the rare case that the report declared no project at all) (traces, screenshots, whatever `attachments[].path` pointed at). That directory is the only place a failure message survives, so keep the line if you may need to diagnose a failing entry.
 
 ## Tagging a spec so it earns coverage credit
 
@@ -59,6 +59,12 @@ Refused, each naming the offending paths:
 - **A submodule or a tracked symlink** inside the spec directory — its contents are not covered by the digest, and following one out of the repository would fold in content no commit can reproduce.
 - **No tracked files** under the spec directory, no git repository, or no commit at `HEAD`.
 
+### The runner must stay inside `--spec-dir`
+
+**Every spec file the runner executed is checked against the anchored directory, and one outside refuses the whole run.** The anchor covers `--spec-dir` and nothing else, but the runner is not otherwise confined to it: `--config` reaches the runner verbatim like every other argument after `--`, and an ordinary `playwright.config` may simply declare a `testDir` broader than `--spec-dir`. Without the check, specs the spec-tree checksum never hashed — including files no human reviewed — would earn coverage credit under an anchor that claims to describe them.
+
+The offending files are named. The usual cause is a `testDir` broader than `--spec-dir`, and the fix is to narrow the suite (a narrower `testDir`, or positional filters after `--`) or to point `--spec-dir` at the directory that really runs. Containment is judged on physical paths, so `specs2/` does not satisfy `specs/` and a symlink out of the tree does not either. The offending entries are not merely dropped: the anchor is a statement about the execution as a unit, so one unanchored spec falsifies it for every entry. Nothing is registered when this refuses.
+
 Two consequences worth planning for. Your spec directory must hold spec sources only: anything a run leaves under it — `test-results/`, `playwright-report/`, an `.auth/` storage state — makes every later run refuse. The runtime forces the runner's own artifact directory and JSON report outside the repository so its output cannot do that, but it cannot move a path your own config or `globalSetup` writes to; point those outside the spec directory yourself. And the anchor covers files, not the import graph: a tracked spec that imports a helper from outside the spec directory still executes code the digest does not cover.
 
 ## What the run records
@@ -70,7 +76,7 @@ Two consequences worth planning for. Your spec directory must hold spec sources 
 
 The payload discloses its own removals in a `sanitization` block, and they are: `config.argv`, `config.metadata`, `config.webServer`, each project's `metadata` and `outputDir`; the top-level `errors`; a spec's `tags`; a test's `annotations`; and each result's `error`, `errors`, `errorLocation`, `stdout`, `stderr`, `annotations`, `attachments` and `steps`. What survives is the identity and shape of the run: the config's version, paths and worker settings; the run stats; and each suite, spec, test and result with its title, location, project, status, duration, retry and start time.
 
-**So the artifact records which spec ran and how it ended, but not why it failed.** That is a deliberate cost, not an oversight: redaction needs the resolved secret values to scrub and this producer never learns them — they belong to the external suite's own process — so the dropped fields are the ones carrying run-time output or caller-authored configuration rather than reviewed spec-tree content. The runner's verbatim report is still on disk in the runtime's temporary working directory if you need to read it; it is simply never registered.
+**So the artifact records which spec ran and how it ended, but not why it failed.** That is a deliberate cost, not an oversight: redaction needs the resolved secret values to scrub and this producer never learns them — they belong to the external suite's own process — so the dropped fields are the ones carrying run-time output or caller-authored configuration rather than reviewed spec-tree content. The runner's verbatim report is still on disk, in the `runnerWorkingDir` the command prints, if you need to read it; it is simply never registered.
 
 ## Reporting
 

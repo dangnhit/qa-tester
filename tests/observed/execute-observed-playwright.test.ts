@@ -60,9 +60,12 @@ const testCase = {
 
 const taggedTitle = `the ledger balances [qa:${testCase.testCaseId}/${testCase.revisionId}/${testCase.instanceId}@api]`;
 
-function runnerReport(specs: readonly Record<string, unknown>[]): string {
+/** `rootDir` is the fixture's own repository, and `spec.file` is relative to it exactly as
+ *  `JSONReporter._relativeLocation` emits it, so the seam exercises the same anchored-spec containment
+ *  check a real run does rather than routing around it. */
+function runnerReport(specs: readonly Record<string, unknown>[], rootDir: string, outputDir = "/tmp/qa-skills-observed-seam/artifacts"): string {
   return JSON.stringify({
-    config: { version: "1.61.1", rootDir: "/srv", argv: ["node", "cli.js", "--grep=sk-live-planted"], projects: [] },
+    config: { version: "1.61.1", rootDir, argv: ["node", "cli.js", "--grep=sk-live-planted"], projects: [{ id: "", name: "", outputDir }] },
     suites: [{ title: "observed.spec.js", file: "specs/observed.spec.js", line: 0, column: 0, specs }],
     errors: [], stats: { expected: 1, unexpected: 0 },
   });
@@ -154,7 +157,7 @@ describe("executeObservedPlaywright registration", () => {
   it("registers one batch anchored to the commit and spec tree that ran", async () => {
     const built = await fixture();
     const anchor = await resolveGitAnchor({ projectRoot: built.root, specDir: "specs" });
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -167,7 +170,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("credits the coverage obligation the entry's own surface names", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -178,7 +181,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("registers the SANITIZED payload as the evidence, never the runner's own report file", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -198,7 +201,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("binds the evidence to this execution and to no attempt", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -214,7 +217,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("attaches the evidence to failing entries only, and declares it as a relationship of the batch", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([failingSpec(), passingSpec()]), 1);
+    const runner = spy(runnerReport([failingSpec(), passingSpec()], built.root), 1);
 
     const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -228,7 +231,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("declares every matched test case as a relationship of the batch", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -237,7 +240,7 @@ describe("executeObservedPlaywright registration", () => {
 
   it("reports every excluded spec instead of registering it", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec(), passingSpec("an untagged neighbour", "eeee-ffff")]));
+    const runner = spy(runnerReport([passingSpec(), passingSpec("an untagged neighbour", "eeee-ffff")], built.root));
 
     const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -245,12 +248,107 @@ describe("executeObservedPlaywright registration", () => {
     expect(execution.excluded).toEqual([{ entryId: "eeee-ffff-0", title: "an untagged neighbour", file: "specs/observed.spec.js", reason: expect.stringContaining("no [qa:") }]);
     expect((await registeredOfType(built, "test-result-batch"))[0]?.value.entries).toHaveLength(1);
   }, 60_000);
+
+  it("prints where the runner's own output was left, so the report the evidence omits is findable", async () => {
+    const built = await fixture();
+    const runner = spy(runnerReport([passingSpec()], built.root, "/tmp/qa-skills-observed-abc123/artifacts"));
+
+    const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
+
+    // The parent of the runner's forced artifact directory: `runObservedPlaywright` passes
+    // `--output=<workDir>/artifacts`, and Playwright's CLI `--output` overrides every project's
+    // `outputDir`. The e2e suite pins the same derivation against a real run's files on disk.
+    expect(execution.runnerWorkingDir).toBe("/tmp/qa-skills-observed-abc123");
+  }, 60_000);
+
+  it("omits the working directory rather than inventing one when the report named no project output", async () => {
+    const built = await fixture();
+    const runner = spy(JSON.stringify({
+      config: { version: "1.61.1", rootDir: built.root, projects: [] },
+      suites: [{ title: "observed.spec.js", specs: [passingSpec()] }], errors: [], stats: {},
+    }));
+
+    const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
+
+    expect(execution.runnerWorkingDir).toBeUndefined();
+    expect(Object.keys(execution)).not.toContain("runnerWorkingDir");
+  }, 60_000);
+});
+
+describe("executeObservedPlaywright anchored-spec containment", () => {
+  it("refuses a run whose specs resolve outside the anchored directory, naming them, and registers nothing", async () => {
+    const built = await fixture();
+    await writeFile(join(built.root, "elsewhere.spec.js"), "// not under specs/\n");
+    const strayed = passingSpec();
+    strayed.file = "elsewhere.spec.js";
+    const runner = spy(runnerReport([strayed], built.root));
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR");
+    expect(refusal.message).toContain("elsewhere.spec.js");
+    expect(refusal.message).toContain("crediting unreviewed code");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+    expect(await registeredOfType(built, "evidence")).toHaveLength(0);
+  }, 60_000);
+
+  it("judges containment on physical paths, so a sibling directory sharing a prefix does not pass", async () => {
+    const built = await fixture();
+    // `specs2` is a string-prefix match for `specs` and must still be refused.
+    await mkdir(join(built.root, "specs2"), { recursive: true });
+    await writeFile(join(built.root, "specs2", "observed.spec.js"), "// a sibling, not a child\n");
+    const sibling = passingSpec();
+    sibling.file = "specs2/observed.spec.js";
+    const runner = spy(runnerReport([sibling], built.root));
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR");
+    expect(refusal.message).toContain("specs2");
+  }, 60_000);
+
+  it("refuses a report that names no rootDir, since it cannot place what ran", async () => {
+    const built = await fixture();
+    const runner = spy(JSON.stringify({
+      config: { version: "1.61.1", projects: [] },
+      suites: [{ title: "observed.spec.js", specs: [passingSpec()] }], errors: [], stats: {},
+    }));
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_SPEC_LOCATION_UNKNOWN");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+  }, 60_000);
+
+  it("refuses a spec file the runner named but that cannot be resolved on disk", async () => {
+    const built = await fixture();
+    const vanished = passingSpec();
+    vanished.file = "specs/deleted-mid-run.spec.js";
+    const runner = spy(runnerReport([vanished], built.root));
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR");
+    expect(refusal.message).toContain("deleted-mid-run.spec.js");
+  }, 60_000);
+
+  it("refuses a spec the runner reported with no file at all", async () => {
+    const built = await fixture();
+    const unnamed = passingSpec();
+    unnamed.file = "";
+    const runner = spy(runnerReport([unnamed], built.root));
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR");
+    expect(refusal.message).toContain("no file");
+  }, 60_000);
 });
 
 describe("executeObservedPlaywright refusals", () => {
   it("refuses a run whose specs all resolve to nothing, naming them, and registers no artifact", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec("an untagged neighbour")]));
+    const runner = spy(runnerReport([passingSpec("an untagged neighbour")], built.root));
 
     const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
 
@@ -262,7 +360,7 @@ describe("executeObservedPlaywright refusals", () => {
 
   it("refuses a production run without the read-only opt-in, without starting the runner", async () => {
     const built = await fixture({ classification: "production", productionReadOnly: false });
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
 
@@ -272,7 +370,7 @@ describe("executeObservedPlaywright refusals", () => {
 
   it("reads the read-only opt-in from the registered profile rather than from a flag", async () => {
     const built = await fixture({ classification: "production", productionReadOnly: true });
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
@@ -282,7 +380,7 @@ describe("executeObservedPlaywright refusals", () => {
   it("refuses a spec tree that differs from its commit, without starting the runner", async () => {
     const built = await fixture();
     await writeFile(join(built.root, "specs", "observed.spec.js"), "// edited after the commit\n");
-    const runner = spy(runnerReport([passingSpec()]));
+    const runner = spy(runnerReport([passingSpec()], built.root));
 
     const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
 
@@ -292,7 +390,7 @@ describe("executeObservedPlaywright refusals", () => {
 
   it("refuses a browser-tagged spec after the run, registering nothing", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([passingSpec(`the ledger balances [qa:${testCase.testCaseId}/${testCase.revisionId}/${testCase.instanceId}@browser]`)]));
+    const runner = spy(runnerReport([passingSpec(`the ledger balances [qa:${testCase.testCaseId}/${testCase.revisionId}/${testCase.instanceId}@browser]`)], built.root));
 
     const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
 
@@ -302,7 +400,7 @@ describe("executeObservedPlaywright refusals", () => {
 
   it("leaves the workspace readable, so the batch<->evidence linkage rule is satisfied by construction", async () => {
     const built = await fixture();
-    const runner = spy(runnerReport([failingSpec()]), 1);
+    const runner = spy(runnerReport([failingSpec()], built.root), 1);
 
     await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
 
