@@ -11,7 +11,8 @@ describe("artifact profiles", () => {
   it("requires artifacts specific to execute mode", () => {
     const result = evaluateArtifactProfile("execute", ["run-metadata", "environment-profile"]);
     expect(result.valid).toBe(false);
-    expect(result.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "REQUIRED_ARTIFACT_MISSING", artifactType: "test-result" })]));
+    // Either lane satisfies it, and the diagnostic says so rather than naming only lane 1's artifact.
+    expect(result.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "REQUIRED_ARTIFACT_MISSING", artifactType: "test-result or test-result-batch" })]));
   });
 
   it("accepts an evidence gap as a structural substitute for required evidence", () => {
@@ -23,6 +24,19 @@ describe("artifact profiles", () => {
     const result = evaluateArtifactProfile("full", ["run-metadata", "environment-profile", "test-case", "test-result", "qa-execution-report"]);
     expect(result.valid).toBe(false);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain("REQUIRED_ARTIFACT_MISSING");
+  });
+
+  it.each([["execute"], ["full"]] as const)("accepts a %s run credited entirely by an observed batch", (profile) => {
+    const lane2 = ["run-metadata", "environment-profile", "test-case", "test-result-batch", "qa-execution-report", "evidence"];
+
+    expect(evaluateArtifactProfile(profile, lane2).valid).toBe(true);
+    expect(evaluatePublicTerminalProfile(profile, [...lane2, "requirement-analysis", "test-plan", "coverage-obligation", "release-gate"]).valid).toBe(true);
+  });
+
+  it.each([["retest"], ["regression"]] as const)("still requires a lane-1 attempt in %s mode, which Phase 8 owns", (profile) => {
+    const lane2 = ["run-metadata", "environment-profile", "test-case", "test-result-batch", "retest-result", "regression-selection"];
+
+    expect(evaluateArtifactProfile(profile, lane2).diagnostics).toEqual([expect.objectContaining({ artifactType: "test-result" })]);
   });
 
   it("rejects unknown unaudited profile names", () => {

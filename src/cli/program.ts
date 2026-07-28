@@ -10,6 +10,7 @@ import { artifactProfileNames, type ArtifactProfileName } from "../core/artifact
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { createRun } from "../operations/create-run.js";
+import { executeObservedPlaywright } from "../operations/execute-observed-playwright.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { recordHumanApproval } from "../operations/record-human-approval.js";
 import { recordHumanAttestation } from "../operations/record-human-attestation.js";
@@ -226,6 +227,26 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .action(async (commandOptions: { root: string; runId: string; obligationId: string; method: string; attestedBy: string; statement: string }) => {
       stdout += `${JSON.stringify(await recordHumanAttestation(commandOptions))}\n`;
     });
+  // Lane 2 (ADR-0010). `.argument("[runnerArgs...]")` plus Commander's own `--` handling is the WHOLE
+  // of the passthrough: Commander strips the first `--` and delivers the rest as operands, so the
+  // runner's flags never reach this tree's option parser. `passThroughOptions`/`allowUnknownOption` are
+  // deliberately NOT set — either one would accept unknown options here, and `enablePositionalOptions`
+  // (which `passThroughOptions` requires on the program) would change parsing for every command in the
+  // tree. `tests/cli/execute-playwright.test.ts` pins both halves: the passthrough, and that four other
+  // commands still reject `--nope`.
+  program.command("execute").description("Run and observe an external test suite as a Runtime-Observed Execution").command("playwright")
+    .description("Start a committed Playwright suite, record its result as a test-result-batch, and register its sanitized report as evidence")
+    .requiredOption("--root <path>", "Project root directory: the run workspace's root, the runner's working directory, and the git repository")
+    .requiredOption("--run-id <id>", "Run workspace ID")
+    .requiredOption("--spec-dir <path>", "Reviewed Test Suite directory, absolute or relative to --root")
+    .argument("[runnerArgs...]", "Arguments after `--`, passed to the runner verbatim (--reporter and --output are runtime-owned and refused)")
+    .action(async (runnerArgs: string[], commandOptions: { root: string; runId: string; specDir: string }) => {
+      const execution = await executeObservedPlaywright({ root: commandOptions.root, runId: commandOptions.runId, specDir: commandOptions.specDir, args: runnerArgs });
+      // Excluded specs are reported here rather than swallowed: an entry that resolves to no registered
+      // test case cannot be carried by the batch at all, and dropping it silently would leave the
+      // operator believing a spec earned coverage credit it never earned.
+      stdout += `${JSON.stringify(execution)}\n`;
+    });
   program.command("validate")
     .description("Validate a run workspace's artifacts against its profile")
     .requiredOption("--root <path>", "Project root directory")
@@ -247,8 +268,14 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
   } catch (error: unknown) {
     if (error instanceof QaSkillsError) {
       stderr += `${error.message}\n`;
-      if (error.code === "LIVE_LOCK") exitCode = ExitCode.BLOCKED;
-      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY") exitCode = ExitCode.SAFETY_DENIED;
+      // First match wins. `SPEC_TREE_DIRTY` is BLOCKED rather than INVALID_INPUT because nothing about
+      // the invocation is wrong: the command is correct and the workspace is healthy, and the run is
+      // stopped by a condition outside it that a person clears by committing or reverting — the same
+      // shape as `LIVE_LOCK`. `OBSERVED_RUN_PRODUCTION_DENIED` is SAFETY_DENIED for the reason the
+      // other three on that line are: a safety rule refused an operation the caller asked for
+      // (CONTEXT.md:370, ADR-0004), rather than the caller mistyping one.
+      if (error.code === "LIVE_LOCK" || error.code === "SPEC_TREE_DIRTY") exitCode = ExitCode.BLOCKED;
+      else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY" || error.code === "OBSERVED_RUN_PRODUCTION_DENIED") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError && error.code === "commander.version") {
       exitCode = ExitCode.SUCCESS;

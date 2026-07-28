@@ -61,6 +61,30 @@ describe("report generation operations", () => {
     await workspace.close();
   });
 
+  /**
+   * Lane 2 (ADR-0010). Before Phase 7 both of these projections filtered `test-result` alone, so a run
+   * credited entirely by a `test-result-batch` reported "0 registered attempts evaluated" beside a gate
+   * that had already credited every entry — and a skipped observed spec vanished from `excludedNotRun`
+   * while `NOT_RUN` was exactly what the entry said.
+   */
+  it("counts observed batch entries in the summary and lists a NOT_RUN entry as excluded", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-report-batch-")); roots.push(root);
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+    const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
+    const entry = (entryId: string, status: "PASSED" | "NOT_RUN") => ({ entryId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status, failureClassification: status === "PASSED" ? "NONE" : "UNDETERMINED", executionSurface: "api", steps: [{ stepId: "result-0", status, durationMs: 1 }] });
+    await workspace.registerArtifactValue({
+      type: "test-result-batch", provenance: "runtime-observed", relationships: [registeredCase.id],
+      value: { artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "0.1.0", executionId: "EXEC-1", runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64), startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z", entries: [entry("E-1", "PASSED"), entry("E-2", "NOT_RUN")] },
+    });
+
+    const report = await generateQaReport({ workspace });
+
+    const model = JSON.parse(report.json) as { summary: string; excludedNotRun: string[] };
+    expect(model.summary).toContain("2 registered attempts evaluated");
+    expect(model.excludedNotRun).toEqual([testCase.testCaseId]);
+    await workspace.close();
+  });
+
   it("does not let callers turn a non-product registered attempt into a bug", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-report-")); roots.push(root);
     const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
