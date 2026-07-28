@@ -334,6 +334,36 @@ describe("git anchor", { timeout: 30_000 }, () => {
       });
     });
 
+    // `git status` deliberately suppresses entries carrying these index bits, so a modified spec
+    // passes the dirty check while specTreeLine still reads its modified working-tree bytes into
+    // the digest: commitSha then names a commit whose tree the digest does not describe. They are
+    // two separate index bits, so each needs its own case.
+    it("refuses a spec file hidden from the dirty check by --skip-worktree", async () => {
+      const root = await newRepo("skip-worktree");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await commitAll(root, "add specs");
+      await git(root, "update-index", "--skip-worktree", "specs/a.spec.ts");
+      await writeFileAt(root, "specs/a.spec.ts", "unreviewed edit\n");
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({
+        code: "SPEC_TREE_INDEX_FLAGGED",
+        message: expect.stringContaining("specs/a.spec.ts"),
+      });
+    });
+
+    it("refuses a spec file hidden from the dirty check by --assume-unchanged", async () => {
+      const root = await newRepo("assume-unchanged");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await commitAll(root, "add specs");
+      await git(root, "update-index", "--assume-unchanged", "specs/a.spec.ts");
+      await writeFileAt(root, "specs/a.spec.ts", "unreviewed edit\n");
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({
+        code: "SPEC_TREE_INDEX_FLAGGED",
+        message: expect.stringContaining("specs/a.spec.ts"),
+      });
+    });
+
     it("refuses a tracked submodule under the spec directory instead of crashing on it", async () => {
       const root = await newRepo("gitlink");
       await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
@@ -382,9 +412,12 @@ describe("git anchor", { timeout: 30_000 }, () => {
       const root = await newRepo("structural-typing");
       await writeFileAt(root, "specs/nested/b.spec.ts", "beta\n");
       await commitAll(root, "add specs");
-      // A regular-file entry naming a directory: readFile raises EISDIR, which src/cli/program.ts
-      // would turn into ABORTED_OR_INTERNAL rather than a refusal.
-      const fabricated: GitExecutor = (args, cwd) => (args[0] === "ls-files" ? Promise.resolve(`100644 ${"0".repeat(40)} 0\tspecs/nested\0`) : realGit(args, cwd));
+      // A well-formed, unflagged, regular-file record that names a DIRECTORY: it has to survive
+      // every typed check so that readFile is what fails, with EISDIR — which src/cli/program.ts
+      // would turn into ABORTED_OR_INTERNAL rather than a refusal. The leading "H " tag matters:
+      // without it the record fails to parse and this test passes on the parse guard instead,
+      // proving nothing about the catch-all.
+      const fabricated: GitExecutor = (args, cwd) => (args[0] === "ls-files" ? Promise.resolve(`H 100644 ${"0".repeat(40)} 0\tspecs/nested\0`) : realGit(args, cwd));
 
       await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs", execute: fabricated })).rejects.toBeInstanceOf(QaSkillsError);
     });
