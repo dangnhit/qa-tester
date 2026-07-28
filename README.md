@@ -174,6 +174,7 @@ Every canonical descriptor and binary is registered in the manifest with a check
 - **Chromium executable missing:** run `npx playwright install chromium` during setup. QA execution itself will not download it.
 - **Runtime missing/incompatible:** install the pinned package locally and run `qa-skill runtime verify`; do not use a remote fallback.
 - **`AWAITING_RUNTIME`:** provide the configured browser/test-data service IDs and resume the same nonterminal run.
+- **`AWAITING_HUMAN_INPUT`:** have the named person run the command `pendingHumanInput` identifies (`qa-skill approval record` or `qa-skill attestation record`) against the paused `runId`, then resume the same nonterminal run — see [recovery](skills/shared/references/recovery.md#awaiting_human_input).
 - **Live lock:** confirm no active process owns the run; do not delete lock files blindly.
 - **Artifact validation failure:** inspect normalized diagnostics, fix the canonical JSON or source draft, and generate a new artifact. Do not edit Markdown projections.
 - **Evidence Gap:** repair the capture/redaction policy or selector and create a new attempt; never substitute an unregistered file.

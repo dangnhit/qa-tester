@@ -132,6 +132,93 @@ function fullInput(root: string, bundle: CanonicalPlanBundleRef, resumeRunId?: s
   };
 }
 
+/**
+ * A terminal `plan` run for `regression` mode: two independent plans sharing one requirement, each
+ * holding one canonical test case. `PLAN-REG-INCLUDED` is `auto-approve-safe`; its case declares no
+ * `regressionIndex`, so its index falls back to the requirement its `coverage` names (matching the one
+ * declared change) and a regression selection keeps it. `PLAN-REG-EXCLUDED` is `human-review` and
+ * unapproved; its case declares an explicit `regressionIndex` that maps to nothing declared, so the
+ * same selection excludes it even though both cases cover the same requirement.
+ *
+ * `regression` is the only mode where `executionCaseIds` is narrowed by an in-loop operation
+ * (`select-regression`) rather than being fixed before the loop by `ensureCanonicalBundle` — see
+ * `pendingHumanInput`'s docblock. This bundle exercises exactly that: the approval guard must evaluate
+ * over the SELECTED set at `execute-browser-test`, never over the superset of every imported case.
+ */
+async function regressionBundleWithExcludedHumanReviewPlan(root: string): Promise<CanonicalPlanBundleRef> {
+  const source = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment });
+  const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
+    artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-REG",
+    statements: [
+      { requirementId: "REQ-REG", sourceProvenance: { kind: "user", reference: "task-37-finding-5" }, normalizedText: "Member must be able to save an email.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] },
+    ],
+  } });
+  const execution = dsl();
+  const includedPlan = await source.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: {
+    artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-REG-INCLUDED",
+    approvalPolicy: { mode: "auto-approve-safe" },
+    testCases: [{
+      testCaseId: "TC-REG-INCLUDED", title: "Save email (selected by regression)",
+      expectedResults: [{ id: "ER-REG-INCLUDED", requirementId: "REQ-REG", authority: "AUTHORITATIVE", text: "Saved" }],
+      steps: [{ id: "plan-open-included", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [],
+      browserExecution: { revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED", browserDsl: execution, browserDslFingerprint: sha256Fingerprint(execution) },
+    }],
+  } });
+  const excludedPlan = await source.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: {
+    artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-REG-EXCLUDED",
+    approvalPolicy: { mode: "human-review" },
+    testCases: [{
+      testCaseId: "TC-REG-EXCLUDED", title: "Save email (excluded by regression)",
+      expectedResults: [{ id: "ER-REG-EXCLUDED", requirementId: "REQ-REG", authority: "AUTHORITATIVE", text: "Saved" }],
+      steps: [{ id: "plan-open-excluded", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [],
+      browserExecution: { revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED", browserDsl: execution, browserDslFingerprint: sha256Fingerprint(execution) },
+    }],
+  } });
+  const includedCase = await source.registerArtifactValue({ type: "test-case", relationships: [includedPlan.id], value: {
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
+    title: "Save email (selected by regression)", steps: [{ id: "plan-open-included", action: "navigate", sideEffect: "none" }],
+    coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
+  } });
+  const excludedCase = await source.registerArtifactValue({ type: "test-case", relationships: [excludedPlan.id], value: {
+    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
+    title: "Save email (excluded by regression)", steps: [{ id: "plan-open-excluded", action: "navigate", sideEffect: "none" }],
+    coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email, excluded", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
+    // Explicit and empty/unmatched, so the default requirement-fallback in `regressionCaseFromCanonical`
+    // does not apply: this instance shares `REQ-REG` with the included case (one obligation covers both)
+    // but maps to no declared change, so `selectRegressionCases` excludes it regardless. It is never
+    // added to `executionCaseIds`, and the approval guard must never see its pending plan.
+    regressionIndex: { requirementIds: [], codeSurfaces: ["excluded-surface"], declaredDependencies: [], gitPaths: [], userScope: [] },
+  } });
+  const obligation = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
+    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
+    role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
+    accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
+  } });
+  await source.finalize("plan");
+  const records = await Promise.all([requirement, includedPlan, excludedPlan, includedCase, excludedCase, obligation].map((artifact) => source.readArtifactRecord(artifact.id)));
+  await source.close();
+  return { sourceRunId: source.runId, artifacts: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
+}
+
+function regressionTester() {
+  return createQaTester({
+    browserManagers: { chromium: { browser } },
+    evidencePolicies: { required: { safety: { screenshot: "required", console: "required", network: "off", logs: "required" } } },
+    changeScopeSources: { trusted: {
+      changes: [{ id: "CHANGE-REG-INCLUDED", requirementIds: ["REQ-REG"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }],
+      provenance: { kind: "git-diff", reference: "task-37-finding-5" },
+    } },
+  });
+}
+
+function regressionInput(root: string, bundle: CanonicalPlanBundleRef) {
+  return {
+    root, mode: "regression" as const, environmentProfile: environment, bundle,
+    runtime: { browserManagerId: "chromium", evidencePolicyId: "required", changeScopeSourceId: "trusted" },
+  };
+}
+
 async function registeredArtifacts(root: string, runId: string) {
   const workspace = await RunWorkspace.open(root, runId);
   try { return await workspace.readRegisteredArtifacts(); } finally { await workspace.close(); }
@@ -333,5 +420,30 @@ describe("the common case", () => {
     expect(result.releaseRecommendation).toBe("READY");
     const runIds = await readdir(join(root, "qa-results"));
     expect(runIds).toHaveLength(2);
+  }, 120_000);
+});
+
+describe("regression: the approval guard sees only what the selection kept", () => {
+  it("does not pause for a human-review plan on a case the regression selection excludes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-human-regression-excluded-")); roots.push(root);
+    const bundle = await regressionBundleWithExcludedHumanReviewPlan(root);
+
+    const result = await regressionTester()(regressionInput(root, bundle));
+
+    // The load-bearing assertion: an unapproved `human-review` plan is registered in this workspace,
+    // but it never pauses the run, because `select-regression` excluded its case before the approval
+    // guard runs at `execute-browser-test`.
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.pendingHumanInput).toBeUndefined();
+    expect(result.releaseRecommendation).toBe("READY");
+    const artifacts = await registeredArtifacts(root, result.runId);
+    const selection = artifacts.find((artifact) => artifact.record.type === "regression-selection");
+    expect(selection?.value).toMatchObject({
+      selected: [{ testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED" }],
+      excluded: [{ testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED" }],
+    });
+    // Only the selected, auto-approved case ever reached `execute-browser-test`. If the excluded
+    // case's plan had been considered, it would have paused (or, run directly, thrown) instead.
+    expect(artifacts.filter((artifact) => artifact.record.type === "test-result")).toHaveLength(1);
   }, 120_000);
 });

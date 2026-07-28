@@ -120,8 +120,20 @@ export async function pendingHumanInput(
   // Asked of the SAME reader the gate itself uses, so "the gate would report this required obligation
   // missing" and "the pause thinks it is open" cannot drift apart.
   const resolved = resolveGateObligations(gateSourceArtifacts(artifacts));
-  const carriers = new Map<string, number>();
-  for (const { obligation } of resolved) carriers.set(obligation.obligationId, (carriers.get(obligation.obligationId) ?? 0) + 1);
+  // Counted from the RAW registered pool — the same pool, and the same `value.obligationId` field,
+  // that `recordHumanAttestation` (src/operations/record-human-attestation.ts) itself counts against —
+  // rather than from `resolved` above. Today the two pools agree by construction anyway: every field
+  // `resolveGateObligations` can drop a `coverage-obligation` record on (`obligationId`, `requirementId`,
+  // `role`, `behavior`, `risk`, `outcome`, `executionSurface`, and browser/viewport when the surface is
+  // `browser`) is schema-constrained, so no registered obligation ever fails its guards. Counting from
+  // the raw pool means the ambiguity check stays correct even if that ever stops being true, instead of
+  // relying on the schema to keep two independently-filtered counts in sync — the same "two readers must
+  // not disagree" hazard this module's other comments call out.
+  const carriers = new Map<unknown, number>();
+  for (const artifact of artifacts) {
+    if (artifact.record.type !== "coverage-obligation") continue;
+    carriers.set(artifact.value.obligationId, (carriers.get(artifact.value.obligationId) ?? 0) + 1);
+  }
   const subjects = resolved.flatMap(({ record, obligation }): PendingHumanInputSubject[] => {
     // `required`: an optional obligation is reported as an optional gap (READY_WITH_RISKS), which is an
     // honest "not covered" — stopping the run for one would be a pause nothing forces anyone to clear.

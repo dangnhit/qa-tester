@@ -62,8 +62,13 @@ before the operation each one gates:
 
 | What is missing | Command | The run stops before | Modes |
 | --- | --- | --- | --- |
-| An approval for a `human-review` test plan | `qa-skill approval record` | `execute-browser-test` | `full`, `execute`, `regression`, `retest` |
+| An approval for a `human-review` test plan | `qa-skill approval record` | `execute-browser-test` | `full`, `execute`, `regression` |
 | A Human Attestation for a required manual Accessibility Obligation | `qa-skill attestation record` | `generate-qa-report` | `full`, `regression` |
+
+`retest` is deliberately absent from the first row. Its bundle's own reproduction scenarios run through
+`reproduce-bug`, which drives the browser **before** `execute-browser-test` and is not guarded by this
+pause at all — a `human-review` plan on one of them still throws, exactly as before this mechanism
+landed. See [One known gap](#one-known-gap) below.
 
 Like `AWAITING_RUNTIME` this is **not a failure and not a terminal run**. Nothing was finalized, no
 `release-gate` was written, the process lock is released, and — the point of the whole mechanism — the
@@ -101,6 +106,13 @@ Resuming without recording anything is safe and does nothing: the run pauses aga
 `pendingHumanInput`, registers no new artifact, and re-executes no operation. Resuming after recording
 continues to the end. There is no separate resume path — this is the same `resumeRunId` machinery
 `AWAITING_RUNTIME` uses.
+
+A `full` run that needs **both** kinds of record does not surface them together: `pendingHumanInput` is a
+single object, and the attestation pause is only reachable after a resume has carried the run past
+`execute-browser-test` (obligations are read at `generate-qa-report`, the second guarded operation). So
+recording the approval and resuming can itself return a second, different `AWAITING_HUMAN_INPUT` — this
+time for the attestation — rather than finishing; repeat the same three-step procedure for it before the
+run completes.
 
 ### What does *not* pause — and must not
 
