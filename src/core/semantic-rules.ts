@@ -330,6 +330,23 @@ const testResultRule: SemanticRule = {
  *  derivation is not applicable: an observed execution's steps come from an external suite, not from the
  *  approved Test DSL, so there is no canonical step list to equal. And there is no relationship binding
  *  requirement on the matched test cases — a batch covers many cases and Phase 7 owns what it declares.
+ *
+ *  Schema 3.0.0's per-entry `executionSurface` and `viewport` add NO check here, which is a decision
+ *  rather than an omission. Their structure — a surface from the obligation enum, a viewport required
+ *  on `browser` and forbidden off it, an engine on the same conditional — is fully expressed by the
+ *  schema, and every cross-artifact check they suggest would be the very defect the fields exist to
+ *  remove. An entry's surface cannot be checked against its bound test case's, because a test case
+ *  DECLARES no surface and deliberately never will (`CoverageAttempt#executionSurface`): adding one to
+ *  compare against would recreate the drift surface, and a test case is browser-shaped in its coverage
+ *  block regardless, so an api entry binding one is coherent, not contradictory — that is exactly the
+ *  case the coverage readers must be free to decline. Nor may a browser entry's reported viewport be
+ *  required to equal the test case's declared one: the entry reports what an external runner rendered
+ *  at, so a disagreement is a FACT, and the correct consequence is the obligation going uncredited in
+ *  the readers, not the observation being rejected here. Rejecting it would put a declaration back in
+ *  charge of whether an observation is admissible. `manual` is likewise admitted rather than refused as
+ *  unobservable, because CONTEXT.md:444 says the runtime reaches EVERY surface it does not execute
+ *  through a Runtime-Observed Execution, and a rule contradicting that invariant would be the wrong
+ *  place to relitigate it.
  *  Evidence resolution keys on `ctx.registeredRecord` (manifest existence, stable on both paths) rather
  *  than the cascade-sensitive valid pool, matching `bugReportRule`'s evidence-provenance check.
  *

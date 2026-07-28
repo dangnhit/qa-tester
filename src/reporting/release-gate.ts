@@ -3,7 +3,7 @@ import { indexByTestCaseIdentity } from "../core/artifact-index.js";
 import { creditsAttestation, creditsCoverage } from "../core/provenance.js";
 import { isRecord } from "../core/values.js";
 import { profileDeclaresProtectedEnvironment } from "../evidence/protection.js";
-import { asExecutionSurface, evaluateCoverage, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
+import { asExecutionSurface, evaluateCoverage, type ClaimLane, type CoverageAttempt, type ResolvedCoverageObligation } from "../planning/coverage.js";
 
 export type GateBug = Readonly<{ bugId: string; triageStatus: "NEEDS_TRIAGE" | "TRIAGED"; severity?: DefectSeverity; open: boolean }>;
 export type ReleaseGateInput = Readonly<{
@@ -32,6 +32,12 @@ export type GateWorkspaceArtifact = Readonly<{
 
 function string(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value : []; }
+/** A `{ width, height }` pair, or `undefined` when the value is not one. Byte-for-byte the check
+ *  `browserDimensions` has always applied, factored out so an ATTEMPT's own reported viewport is read
+ *  by exactly the same rule as an obligation's declared one. */
+function viewportOf(value: unknown): { width: number; height: number } | undefined {
+  return isRecord(value) && typeof value.width === "number" && typeof value.height === "number" ? { width: value.width, height: value.height } : undefined;
+}
 /**
  * The two dimensions only the `browser` surface owns, or `undefined` when they are malformed. Kept
  * exactly as strict as before for browser-surface records — a broken viewport still drops the record,
@@ -39,9 +45,38 @@ function array(value: unknown): readonly unknown[] { return Array.isArray(value)
  * which is what lets a non-browser obligation (which legitimately has neither) resolve at all.
  */
 function browserDimensions(value: Readonly<Record<string, unknown>>): Readonly<{ browser: string; viewport: { width: number; height: number } }> | undefined {
-  const viewport = value.viewport; const browser = string(value.browser);
-  if (browser === undefined || !isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") return undefined;
-  return { browser, viewport: { width: viewport.width, height: viewport.height } };
+  const viewport = viewportOf(value.viewport); const browser = string(value.browser);
+  if (browser === undefined || viewport === undefined) return undefined;
+  return { browser, viewport };
+}
+/**
+ * The surface a claim ran on and, on the browser surface only, the engine and viewport it ran at —
+ * the whole of what `ClaimLane` decides. `undefined` means DROP, this reader's answer to every
+ * unresolvable record.
+ *
+ * `driven-attempt` derives `browser` and pairs the claim's observed engine with the viewport the
+ * runtime SET from the test case's declaration; `observed-entry` reads all three off the entry and
+ * falls back to nothing, so a batch entry that names no surface is dropped rather than promoted to
+ * `browser`. The `??` that would collapse those two branches into one is exactly the accident this
+ * shape exists to prevent.
+ */
+function attemptSurface(lane: ClaimLane, claim: Readonly<Record<string, unknown>>, declaredViewport: { width: number; height: number }): Pick<CoverageAttempt, "executionSurface" | "observedEngine" | "viewport"> | undefined {
+  const observedEngine = string(claim.observedEngine);
+  if (lane === "driven-attempt") {
+    // The MEASURED engine, off the claim itself rather than the test case (CONTEXT.md:442). Absent means
+    // DROP: the `test-result` schema requires the field, so a registered artifact always carries it, and
+    // falling back to the declared label is exactly the mis-credit this replaces.
+    return observedEngine === undefined ? undefined : { executionSurface: "browser", observedEngine, viewport: declaredViewport };
+  }
+  const surface = asExecutionSurface(claim.executionSurface);
+  if (surface === undefined) return undefined;
+  // Off the browser surface the entry's schema FORBIDS both, so neither is read and neither is compared
+  // (`matchesBrowserDimensions` only consults them for a browser obligation). A stray value on such an
+  // entry is therefore inert here, exactly as a stray `browser`/`viewport` on a non-browser obligation
+  // already is above — the schema is what rejects it, not this reader.
+  if (surface !== "browser") return { executionSurface: surface };
+  const viewport = viewportOf(claim.viewport);
+  return observedEngine === undefined || viewport === undefined ? undefined : { executionSurface: surface, observedEngine, viewport };
 }
 function canonical<T>(items: readonly T[], key: (item: T) => string): readonly T[] { return [...items].sort((left, right) => key(left).localeCompare(key(right))); }
 
@@ -156,42 +191,37 @@ export function deriveReleaseGateFromWorkspaceArtifacts(artifacts: readonly Gate
     return [{ obligationId: value.obligationId as string, requirementId: value.requirementId as string, executionSurface: surface, role: value.role as string, behavior: value.behavior as string, ...geometry, accessibilityMethod, risk: value.risk as string, required: value.required === true, outcome: value.outcome as string, authoritativeRequirement: authoritative, humanAttested: attestedObligationChecksums.has(artifact.record.sha256) }];
   });
   /** Flattens one identity-carrying claim (a per-attempt `test-result`, or one `test-result-batch`
-   *  entry) into a CoverageAttempt, resolving its dimensions from the single matching registered test
-   *  case. Unresolvable claims are dropped, exactly as the per-attempt path has always dropped them. */
-  const asAttempt = (attemptId: unknown, status: unknown, identity: Readonly<Record<string, unknown>>): CoverageAttempt[] => {
+   *  entry) into a CoverageAttempt. WHAT was covered comes from the single matching registered test
+   *  case; HOW it ran comes from `attemptSurface` per `lane`. Unresolvable claims are dropped, exactly
+   *  as the per-attempt path has always dropped them. */
+  const asAttempt = (lane: ClaimLane, attemptId: unknown, status: unknown, identity: Readonly<Record<string, unknown>>): CoverageAttempt[] => {
     const testCase = casesByIdentity.get({ testCaseId: identity.testCaseId, testCaseRevisionId: identity.testCaseRevisionId, testCaseInstanceId: identity.testCaseInstanceId })[0];
     const dimensions = testCase?.value.coverage;
     if (!isRecord(dimensions)) return [];
-    // Both lanes DERIVE the browser surface (see CoverageAttempt#executionSurface): these dimensions
-    // come from `test-case.coverage`, which is browser-shaped by schema. So the browser-geometry guard
-    // stays mandatory here and every attempt-drop path is unchanged. Only `geometry.viewport` is used
-    // below: `geometry.browser` is the test case's DECLARED engine, which per CONTEXT.md:442 no longer
-    // takes part in crediting. The guard still runs over it because a test case missing its declared
-    // engine is malformed, and this reader has always dropped malformed records — but the value itself
-    // is deliberately never read into an attempt.
+    // `test-case.coverage` is browser-shaped by schema, so this guard runs for BOTH lanes and every
+    // attempt-drop path is unchanged: a test case missing its declared engine or viewport is malformed,
+    // and this reader has always dropped malformed records. What the guard's output is used FOR has
+    // narrowed. `geometry.browser` is the test case's DECLARED engine, which per CONTEXT.md:442 no
+    // longer takes part in crediting at all; `geometry.viewport` now reaches only lane 1, where the
+    // runtime SET the live context from it — a lane-2 entry reports its own and never borrows this one.
     const geometry = browserDimensions(dimensions);
     if (geometry === undefined) return [];
-    // The MEASURED engine, off the claim itself rather than the test case (CONTEXT.md:442). Absent means
-    // DROP: the `test-result` schema requires the field, so a registered artifact always carries it, and
-    // falling back to the declared label is exactly the mis-credit this replaces.
-    const observedEngine = string(identity.observedEngine);
-    if (observedEngine === undefined) return [];
+    const surface = attemptSurface(lane, identity, geometry.viewport);
+    if (surface === undefined) return [];
     const fields = [attemptId, status, dimensions.requirementId, dimensions.role, dimensions.behavior, dimensions.risk, dimensions.outcome];
     if (!fields.every((field) => string(field) !== undefined)) return [];
-    // Phase 7 obligation (see CoverageAttempt#executionSurface in planning/coverage.ts): this hardcoded
-    // "browser" literal must become a real read off the observed-execution record once test-case.coverage
-    // stops being browser-only, or a non-browser batch entry will mis-credit a browser obligation.
-    // `dimensions.accessibilityMethod` is the SECOND declared label this reader now drops on the floor
+    // `dimensions.accessibilityMethod` is the SECOND declared label this reader drops on the floor
     // (after `geometry.browser`): an attempt cannot address an Accessibility Obligation at all, so the
     // test case's own label is neither necessary nor sufficient for any credit (CONTEXT.md:439).
-    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, executionSurface: "browser", role: dimensions.role as string, behavior: dimensions.behavior as string, observedEngine, viewport: geometry.viewport, risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
+    return [{ attemptId: attemptId as string, status: status as string, requirementId: dimensions.requirementId as string, ...surface, role: dimensions.role as string, behavior: dimensions.behavior as string, risk: dimensions.risk as string, outcome: dimensions.outcome as string }];
   };
   const attempts: CoverageAttempt[] = valuesOf("test-result").filter((artifact) => creditsCoverage(artifact.record.provenance))
-    .flatMap((artifact) => asAttempt(artifact.value.attemptId, artifact.value.status, artifact.value));
+    .flatMap((artifact) => asAttempt("driven-attempt", artifact.value.attemptId, artifact.value.status, artifact.value));
   // Lane 2 (ADR-0010): each `test-result-batch` entry is one observed case, keyed by `entryId` because
   // no runtime-driven attempt exists. Same provenance gate, so an agent-draft batch credits nothing.
+  // The lane is fixed HERE, from the manifest record's type, and never sniffed off an entry's fields.
   const batchAttempts: CoverageAttempt[] = valuesOf("test-result-batch").filter((artifact) => creditsCoverage(artifact.record.provenance))
-    .flatMap((artifact) => array(artifact.value.entries).filter(isRecord).flatMap((entry) => asAttempt(entry.entryId, entry.status, entry)));
+    .flatMap((artifact) => array(artifact.value.entries).filter(isRecord).flatMap((entry) => asAttempt("observed-entry", entry.entryId, entry.status, entry)));
   const evaluation = evaluateCoverage(obligations, [...attempts, ...batchAttempts]);
   const passed = new Set(evaluation.satisfied);
   const highRisk = canonical(obligations.filter((obligation) => obligation.required && (obligation.risk === "high" || obligation.risk === "critical")).map((obligation) => ({ obligationId: obligation.obligationId, passed: passed.has(obligation.obligationId) })), (item) => item.obligationId);

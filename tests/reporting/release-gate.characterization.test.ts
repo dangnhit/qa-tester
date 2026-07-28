@@ -302,7 +302,10 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
     }, "BATCH-CREDIT", provenance);
   }
 
-  const passingEntry = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT", observedEngine: dimensions.browser };
+  /** Since `test-result-batch` 3.0.0 an entry declares the surface it ran on and the geometry it ran
+   *  at; this one reports exactly what the obligation requires, so these Task 29 pins keep asserting
+   *  what they were written to assert (provenance and binding decide credit here, not dimensions). */
+  const passingEntry = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-CREDIT", testCaseRevisionId: "REV-CREDIT", testCaseInstanceId: "INST-CREDIT", executionSurface: "browser", observedEngine: dimensions.browser, viewport: dimensions.viewport };
 
   it("credits coverage from a runtime-observed (lane 2) batch entry", () => {
     const result = deriveReleaseGateFromWorkspaceArtifacts([...planning(), batch("runtime-observed", [passingEntry])]);
@@ -379,6 +382,120 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
     ]);
 
     expect(JSON.stringify(noBatch)).toBe("{\"recommendation\":\"READY\",\"ruleInputs\":{\"artifactsValid\":true,\"coverage\":{\"requiredMissing\":[],\"optionalGaps\":[],\"requiredHighRisk\":[{\"obligationId\":\"COV-SAVE\",\"passed\":true}]},\"bugs\":[],\"sharedBlockers\":[],\"incidents\":[],\"evidenceGaps\":[],\"cleanupLeaks\":[],\"unmappedChangeRisks\":[],\"validationDiagnostics\":[]},\"verdicts\":[{\"rule\":\"VALID_ARTIFACTS\",\"passed\":true,\"reason\":\"All registered artifacts are valid.\"},{\"rule\":\"NO_SHARED_BLOCKERS\",\"passed\":true,\"reason\":\"No shared blockers are present.\"},{\"rule\":\"NO_OPEN_BLOCKER_OR_CRITICAL\",\"passed\":true,\"reason\":\"No open Blocker or Critical product bug.\"},{\"rule\":\"NO_UNTRIAGED_PRODUCT_BUG\",\"passed\":true,\"reason\":\"No open untriaged product bug.\"},{\"rule\":\"REQUIRED_HIGH_RISK_PASSED\",\"passed\":true,\"reason\":\"All required high-risk obligations passed.\"},{\"rule\":\"REQUIRED_COVERAGE_COMPLETE\",\"passed\":true,\"reason\":\"All required coverage obligations are satisfied.\"},{\"rule\":\"NO_OPEN_PRODUCT_DEFECT_FOR_READY\",\"passed\":true,\"reason\":\"No open product defect remains.\"}],\"protectedEnvironment\":false,\"sourceArtifacts\":[{\"id\":\"OBL-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"coverage-obligation\"},{\"id\":\"RA-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"requirement-analysis\"},{\"id\":\"RES-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"test-result\"},{\"id\":\"TC-1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"test-case\"}]}");
+  });
+});
+
+/**
+ * Task 36 — a batch entry's Execution Surface and viewport come from the ENTRY.
+ *
+ * This is the fail-OPEN reader, and unlike `evaluateWorkspaceCoverage`'s tests it is fed hand-built
+ * records that no schema ever sees. That is exactly what is needed here: the pre-3.0.0 batch shape —
+ * an entry with an `observedEngine` and NO surface and NO viewport of its own — is unregisterable now,
+ * but it is still the shape that proves what the reader used to do with it. Every entry below is the
+ * literal record a lane-2 producer would have written, and the obligation matches the bound test
+ * case's DECLARED browser dimensions on every axis, so nothing but the entry's own surface and
+ * viewport can decide the verdict.
+ */
+describe("deriveReleaseGateFromWorkspaceArtifacts — a batch entry's own Execution Surface and viewport (Task 36)", () => {
+  /** The full browser coverage block the bound test case declares — on EVERY fixture here, including
+   *  the non-browser ones, because `test-case.coverage` is browser-shaped by schema and that is
+   *  precisely the declaration an entry must no longer be able to borrow. */
+  const declared = {
+    requirementId: "REQ-SURFACE", role: "member", behavior: "save profile", browser: "chromium",
+    viewport: { width: 1440, height: 900 }, risk: "high", outcome: "confirmation shown",
+  };
+  /** The same block minus the two dimensions only the browser surface owns, for the non-browser rows. */
+  const surfaceless = { requirementId: declared.requirementId, role: declared.role, behavior: declared.behavior, risk: declared.risk, outcome: declared.outcome };
+
+  function planning(surface: string): GateWorkspaceArtifact[] {
+    return [
+      artifact("requirement-analysis", { statements: [{ requirementId: declared.requirementId, authority: "AUTHORITATIVE" }] }, "RA-SURFACE"),
+      artifact("coverage-obligation", { obligationId: "COV-SURFACE", requirementAnalysisArtifactId: "RA-SURFACE", required: true, executionSurface: surface, ...(surface === "browser" ? declared : surfaceless) }, "OBL-SURFACE"),
+      artifact("test-case", { testCaseId: "TC-SURFACE", revisionId: "REV-SURFACE", instanceId: "INST-SURFACE", coverage: declared }, "TC-ART-SURFACE"),
+    ];
+  }
+
+  const entryIdentity = { entryId: "ENTRY-1", status: "PASSED", testCaseId: "TC-SURFACE", testCaseRevisionId: "REV-SURFACE", testCaseInstanceId: "INST-SURFACE" };
+  const browserEntry = { ...entryIdentity, executionSurface: "browser", observedEngine: declared.browser, viewport: declared.viewport };
+
+  /** The required obligations left unsatisfied when one runtime-observed entry is read against an
+   *  obligation on `surface`. `[]` means the entry credited it; `["COV-SURFACE"]` means it did not. */
+  function requiredMissing(surface: string, entry: Record<string, unknown>): readonly string[] {
+    return deriveReleaseGateFromWorkspaceArtifacts([
+      ...planning(surface),
+      artifact("test-result-batch", { executionId: "EXEC-SURFACE", commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64), entries: [entry] }, "BATCH-SURFACE", "runtime-observed"),
+    ]).ruleInputs.coverage.requiredMissing;
+  }
+
+  /** THE test this task exists for. The entry says, in its own bytes, that an api suite ran — and it
+   *  still carries the engine the 2.0.0 shape demanded of every entry, so nothing but the surface can
+   *  be doing the work. Before this change the reader ignored that field, stamped the entry `browser`,
+   *  handed it the test case's declared 1440x900, and credited a browser obligation no browser met. */
+  it("does not let an api entry satisfy the browser obligation its bound test case declares dimensions for", () => {
+    const gate = deriveReleaseGateFromWorkspaceArtifacts([
+      ...planning("browser"),
+      artifact("test-result-batch", { executionId: "EXEC-SURFACE", entries: [{ ...entryIdentity, executionSurface: "api", observedEngine: "chromium" }] }, "BATCH-SURFACE", "runtime-observed"),
+    ]);
+
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SURFACE"]);
+    expect(gate.ruleInputs.coverage.requiredHighRisk).toEqual([{ obligationId: "COV-SURFACE", passed: false }]);
+    expect(gate.recommendation).toBe("NOT_READY");
+  });
+
+  it("credits the same obligation from the same entry once it declares the browser surface it ran on", () => {
+    expect(requiredMissing("browser", browserEntry)).toEqual([]);
+  });
+
+  it("credits a non-browser obligation from an entry that ran that same non-browser surface", () => {
+    expect(requiredMissing("api", { ...entryIdentity, executionSurface: "api" })).toEqual([]);
+  });
+
+  it("does not let an entry on one non-browser surface satisfy an obligation on another", () => {
+    expect(requiredMissing("api", { ...entryIdentity, executionSurface: "unit" })).toEqual(["COV-SURFACE"]);
+  });
+
+  it("does not credit a browser entry whose own viewport differs from the obligation's", () => {
+    expect(requiredMissing("browser", { ...browserEntry, viewport: { width: 390, height: 844 } })).toEqual(["COV-SURFACE"]);
+  });
+
+  /** Fail-OPEN, unchanged in kind: a record this reader cannot resolve is DROPPED, which can only ever
+   *  withhold credit. The first row is the pre-3.0.0 shape verbatim — the exact bytes that used to be
+   *  stamped `browser` — and the point is that a reader with no surface to read now credits nothing
+   *  rather than inventing one. */
+  it.each([
+    ["no Execution Surface at all (the pre-3.0.0 shape)", { ...entryIdentity, observedEngine: "chromium" }],
+    ["a surface outside the enum", { ...browserEntry, executionSurface: "e2e" }],
+    ["a browser surface with no viewport of its own", { ...entryIdentity, executionSurface: "browser", observedEngine: "chromium" }],
+    ["a browser surface with no observed engine", { ...entryIdentity, executionSurface: "browser", viewport: declared.viewport }],
+    ["a browser surface with a malformed viewport", { ...browserEntry, viewport: { width: 1440 } }],
+  ] as const)("drops a batch entry declaring %s", (_label, entry) => {
+    expect(requiredMissing("browser", entry)).toEqual(["COV-SURFACE"]);
+  });
+
+  /** Lane 1, unchanged: a `test-result` carries no surface and no viewport of its own and still credits
+   *  a browser obligation matching the declaration, because `createBrowserAttemptSession` SET the live
+   *  viewport from that declaration before the attempt ran. Both rows come off the same planning
+   *  fixtures as the batch rows above, so a reader that started deriving lane 1 from the claim — or
+   *  reading lane 2 from the test case — would break one of them. */
+  it("still derives lane 1's surface and viewport from the declaration the runtime applied", () => {
+    const result = (obligationViewport: { width: number; height: number }) => deriveReleaseGateFromWorkspaceArtifacts([
+      artifact("requirement-analysis", { statements: [{ requirementId: declared.requirementId, authority: "AUTHORITATIVE" }] }, "RA-SURFACE"),
+      artifact("coverage-obligation", { obligationId: "COV-SURFACE", requirementAnalysisArtifactId: "RA-SURFACE", required: true, executionSurface: "browser", ...declared, viewport: obligationViewport }, "OBL-SURFACE"),
+      artifact("test-case", { testCaseId: "TC-SURFACE", revisionId: "REV-SURFACE", instanceId: "INST-SURFACE", coverage: declared }, "TC-ART-SURFACE"),
+      artifact("test-result", { ...entryIdentity, entryId: undefined, attemptId: "ATT-SURFACE", observedEngine: declared.browser }, "RES-SURFACE", "runtime-execution"),
+    ]).ruleInputs.coverage.requiredMissing;
+
+    expect(result(declared.viewport)).toEqual([]);
+    expect(result({ width: 390, height: 844 })).toEqual(["COV-SURFACE"]);
+  });
+
+  it("still refuses lane 1 credit for any non-browser obligation, because the runtime drove a browser", () => {
+    const gate = deriveReleaseGateFromWorkspaceArtifacts([
+      ...planning("api"),
+      artifact("test-result", { ...entryIdentity, entryId: undefined, attemptId: "ATT-SURFACE", observedEngine: declared.browser }, "RES-SURFACE", "runtime-execution"),
+    ]);
+
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SURFACE"]);
   });
 });
 

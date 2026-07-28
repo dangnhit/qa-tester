@@ -73,7 +73,7 @@ async function setup(overrides: {
   }
   if (overrides.batchEntries !== undefined) {
     await workspace.registerArtifactValue({ type: "test-result-batch", relationships: [testCase.id], provenance: overrides.batchProvenance ?? "runtime-observed", value: {
-      artifactType: "test-result-batch", schemaVersion: "2.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
+      artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
       commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
       startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", entries: overrides.batchEntries,
     } });
@@ -243,7 +243,8 @@ describe("evaluateWorkspaceCoverage — observed engine", () => {
   it("applies the same rule to a lane-2 batch entry, which carries its own observed engine", async () => {
     const entry = {
       entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
-      status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+      status: "PASSED", failureClassification: "NONE", executionSurface: "browser", viewport: dimensions.viewport,
+      steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
     };
     const mismatched = await setup({ omitResult: true, batchEntries: [{ ...entry, observedEngine: "firefox" }] });
     const matching = await setup({ omitResult: true, batchEntries: [{ ...entry, observedEngine: "chromium" }] });
@@ -411,10 +412,15 @@ describe("evaluateWorkspaceCoverage — accessibility obligations", () => {
  *  entries. Each entry flattens into a CoverageAttempt keyed by its `entryId`, credited under exactly
  *  the same provenance predicate as a per-attempt `test-result`. */
 describe("evaluateWorkspaceCoverage — test-result-batch entries", () => {
-  const entry = {
+  /** Everything an entry carries no matter which Execution Surface it ran on. */
+  const surfacelessEntry = {
     entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
-    status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+    status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
   };
+  /** A browser entry that OBSERVED exactly what the bound test case DECLARED. The two agreeing is what
+   *  makes this fixture credit COV-SAVE; the tests below that break the agreement prove the entry's own
+   *  values are what is compared, not the test case's. */
+  const entry = { ...surfacelessEntry, executionSurface: "browser", observedEngine: dimensions.browser, viewport: dimensions.viewport };
 
   it("credits an authoritative obligation from a runtime-observed batch entry", async () => {
     const fixture = await setup({ omitResult: true, batchEntries: [entry] });
@@ -449,5 +455,156 @@ describe("evaluateWorkspaceCoverage — test-result-batch entries", () => {
     });
 
     await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/orphan|reference|binding|workspace/i);
+  });
+});
+
+/**
+ * Task 36 — a batch entry's Execution Surface and viewport come from the ENTRY, never from the test
+ * case it binds.
+ *
+ * Until schema 3.0.0 both readers flattened every batch entry with a hardcoded
+ * `executionSurface: "browser"` and a viewport lifted from `test-case.coverage` — the geometry the
+ * plan DECLARED. Nothing measured sat between those two labels, so a unit or api suite's entry could
+ * satisfy a browser obligation it never ran, and any entry could satisfy a geometry nothing rendered
+ * at. That is the shape CONTEXT.md:441 forbids ("never satisfied by another engine OR VIEWPORT") and
+ * the one Phase 6 already removed for the engine.
+ *
+ * Lane 1 keeps deriving both, and correctly: `createBrowserAttemptSession` SETS the live context's
+ * viewport from `test-case.coverage.viewport` before the attempt runs, and the DSL action union has no
+ * resize or emulation action, so there the declaration is causally UPSTREAM of the geometry rather
+ * than an independent claim about it. The last two tests pin that lane 1 is untouched.
+ *
+ * Every test here asserts BOTH readers off the ONE registered, schema-validated workspace. They keep
+ * their different failure philosophies (`evaluateWorkspaceCoverage` throws, the release gate drops)
+ * and must still reach the same verdict; only a shared fixture proves that.
+ */
+describe("evaluateWorkspaceCoverage — a batch entry's own Execution Surface and viewport", () => {
+  const surfacelessEntry = {
+    entryId: "ENTRY-SAVE", testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1",
+    status: "PASSED", failureClassification: "NONE", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }],
+  };
+  const browserEntry = { ...surfacelessEntry, executionSurface: "browser", observedEngine: dimensions.browser, viewport: dimensions.viewport };
+
+  /** The verdict of both readers over one workspace: what the fail-CLOSED reader resolved, and what
+   *  the fail-OPEN release-gate reader made of the very same registered artifacts. */
+  async function bothReaders(fixture: { root: string; runId: string }) {
+    const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
+    const gate = deriveReleaseGateFromWorkspaceArtifacts(await workspace.readRegisteredArtifacts());
+    await workspace.close();
+    return { coverage: await evaluateWorkspaceCoverage(fixture), gate };
+  }
+
+  /** THE test this task exists for. The entry ran an api suite. Its bound test case declares a full
+   *  browser coverage block — engine, viewport, the lot — and the obligation matches that declaration
+   *  on every single dimension. Before this change the entry was stamped `browser` and handed the test
+   *  case's declared viewport, so it credited a browser obligation no browser ever satisfied. */
+  it("does not let an api entry satisfy the browser obligation its bound test case declares dimensions for", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [{ ...surfacelessEntry, executionSurface: "api" }] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: false, missing: ["COV-SAVE"], satisfied: [], qualifyingAttemptIds: [] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+    expect(gate.recommendation).toBe("NOT_READY");
+  });
+
+  /** The control for the test above: the SAME workspace with the SAME entry on the browser surface
+   *  credits, so the only reason the api entry did not is the surface it declared. */
+  it("credits the same obligation from the same entry once it declares the browser surface it ran on", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [browserEntry] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ENTRY-SAVE"] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual([]);
+  });
+
+  /** The capability the read unlocks: a surface the QA Runtime cannot execute is reached through a
+   *  Runtime-Observed Execution (CONTEXT.md:444) and stops being permanently unmet. */
+  it("credits a non-browser obligation from an entry that ran that same non-browser surface", async () => {
+    const fixture = await setup({ obligationSurface: "api", omitResult: true, batchEntries: [{ ...surfacelessEntry, executionSurface: "api" }] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ENTRY-SAVE"] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual([]);
+  });
+
+  it("does not let an entry on one non-browser surface satisfy an obligation on another", async () => {
+    const fixture = await setup({ obligationSurface: "api", omitResult: true, batchEntries: [{ ...surfacelessEntry, executionSurface: "unit" }] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+  });
+
+  /** The viewport half. The obligation and the test case both declare 1440x900; the entry reports the
+   *  geometry it actually rendered at. Before this change the entry's own value was never read, so the
+   *  declared 1440x900 was compared to itself and this credited. */
+  it("does not credit a browser entry whose own viewport differs from the obligation's", async () => {
+    const fixture = await setup({ omitResult: true, batchEntries: [{ ...browserEntry, viewport: { width: 390, height: 844 } }] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+  });
+
+  /** The mirror: the entry's viewport is what is compared, so an obligation asking for the geometry the
+   *  entry REPORTED is credited even though the test case declares a different one. */
+  it("credits an obligation matching the entry's reported viewport though the test case declares another", async () => {
+    const mobile = { width: 390, height: 844 };
+    const fixture = await setup({ obligation: { viewport: mobile }, omitResult: true, batchEntries: [{ ...browserEntry, viewport: mobile }] });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ENTRY-SAVE"] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual([]);
+  });
+
+  /** Lane 1, unchanged: a `test-result` still derives `browser` and still takes its viewport from the
+   *  test case's declaration — which is why moving the DECLARED viewport away from the obligation's
+   *  stops lane 1 crediting. A `test-result` carries no surface and no viewport of its own; if either
+   *  reader ever started reading one off the claim, this pair would flip. */
+  it("still derives lane 1's surface and viewport from the declaration, not from the test result", async () => {
+    const declared = await setup({ obligation: { viewport: { width: 390, height: 844 } } });
+    const matching = await setup();
+
+    await expect(bothReaders(declared)).resolves.toMatchObject({
+      coverage: { complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] },
+      gate: { ruleInputs: { coverage: { requiredMissing: ["COV-SAVE"] } } },
+    });
+    await expect(bothReaders(matching)).resolves.toMatchObject({
+      coverage: { complete: true, satisfied: ["COV-SAVE"], qualifyingAttemptIds: ["ATTEMPT-SAVE"] },
+      gate: { ruleInputs: { coverage: { requiredMissing: [] } } },
+    });
+  });
+
+  it("still refuses lane 1 credit for any non-browser obligation, because the runtime drove a browser", async () => {
+    const fixture = await setup({ obligationSurface: "api" });
+
+    const { coverage, gate } = await bothReaders(fixture);
+
+    expect(coverage).toMatchObject({ complete: false, missing: ["COV-SAVE"], qualifyingAttemptIds: [] });
+    expect(gate.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);
+  });
+
+  /** Fail-CLOSED, end to end: an entry's surface cannot be quietly edited into one that credits more.
+   *  The rejection comes from the contract gate `readRegisteredArtifacts` applies before either reader
+   *  sees the record — `executionSurface` is an enum and a browser entry's viewport is required — so
+   *  the surface read in `dimensions()` is defence in depth behind it, exactly like the identical
+   *  unreachable throw `asObligation` already carries for an obligation's surface. */
+  it.each([
+    ["a surface outside the enum", (entry: Record<string, unknown>) => { entry.executionSurface = "e2e"; }],
+    ["a browser entry stripped of its viewport", (entry: Record<string, unknown>) => { delete entry.viewport; }],
+    ["a viewport smuggled onto an api entry", (entry: Record<string, unknown>) => { entry.executionSurface = "api"; delete entry.observedEngine; }],
+  ] as const)("rejects a checksum-rewritten batch declaring %s", async (_label, tamper) => {
+    const fixture = await setup({ omitResult: true, batchEntries: [browserEntry] });
+    await rewriteRegisteredArtifact(fixture.workspacePath, "test-result-batch", (batch) => {
+      tamper((batch.entries as Record<string, unknown>[])[0]!);
+    });
+
+    await expect(evaluateWorkspaceCoverage(fixture)).rejects.toThrow(/contract|surface|viewport|binding|workspace/i);
   });
 });

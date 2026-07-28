@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { schemas } from "../../src/contracts/catalog.js";
 import { formatValidationErrors, validateArtifact } from "../../src/contracts/validator.js";
 import type { ArtifactType, NormalizedValidationError } from "../../src/contracts/types.js";
-import { accessibilityMethods, manualAccessibilityMethods } from "../../src/planning/coverage.js";
+import { accessibilityMethods, executionSurfaces, manualAccessibilityMethods } from "../../src/planning/coverage.js";
 
 const validRun = {
   artifactType: "run-metadata",
@@ -174,7 +174,7 @@ const otherArtifactContracts = [
     requiredField: "entries",
     valid: {
       artifactType: "test-result-batch",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       executionId: "EXEC-1",
       runId: "20260723T123456Z-a1b2c3",
@@ -184,7 +184,8 @@ const otherArtifactContracts = [
       finishedAt: "2026-07-23T12:35:56.000Z",
       entries: [{
         entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
-        status: "PASSED", failureClassification: "NONE", observedEngine: "chromium",
+        status: "PASSED", failureClassification: "NONE", executionSurface: "browser",
+        observedEngine: "chromium", viewport: { width: 1440, height: 900 },
         steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
       }],
     },
@@ -418,15 +419,23 @@ describe("test-result schema 2.0.0 (observed engine)", () => {
 /** `test-result-batch` is the lane-2 artifact shape: one artifact per Runtime-Observed Execution,
  *  carrying many entries. These pin the fields that make such a batch auditable — the git anchor
  *  (`commitSha` + `specTreeSha256`, ADR-0010) that is the only reason an observed execution may credit
- *  coverage, and the per-entry identity + status shape the coverage readers flatten. */
+ *  coverage, and the per-entry identity + status shape the coverage readers flatten.
+ *
+ *  Since 3.0.0 an entry also declares the Execution Surface it actually ran on, plus (on the browser
+ *  surface only) the engine and viewport it ran at. Before that the readers stamped every entry
+ *  `browser` and inherited the viewport from the bound test case's DECLARATION — two labels agreeing
+ *  with nothing measured between them, the shape CONTEXT.md:441-442 exists to kill. */
 describe("test-result-batch schema (Runtime-Observed Execution)", () => {
-  const entry = {
+  /** Everything an entry carries no matter which Execution Surface it observed. */
+  const surfacelessEntry = {
     entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
-    status: "PASSED", failureClassification: "NONE", observedEngine: "chromium",
+    status: "PASSED", failureClassification: "NONE",
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
   };
+  /** Plus the two only the browser surface owns — the same pair `coverage-obligation` conditions on. */
+  const entry = { ...surfacelessEntry, executionSurface: "browser", observedEngine: "chromium", viewport: { width: 1440, height: 900 } };
   const batch = {
-    artifactType: "test-result-batch", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     executionId: "EXEC-1", runId: "20260723T123456Z-a1b2c3",
     commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
     startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
@@ -465,12 +474,15 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     expect(validateArtifact("test-result-batch", { ...batch, provenance: "runtime-observed" }).valid).toBe(false);
   });
 
-  it("rejects a batch declaring any schemaVersion other than 2.0.0", () => {
+  it("rejects a batch declaring any schemaVersion other than 3.0.0", () => {
     expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "1.0.0" }).valid).toBe(false);
-    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "3.0.0" }).valid).toBe(false);
+    // 2.0.0 is the shape whose entries carried no Execution Surface at all, so both readers stamped
+    // them `browser`. A hard break with no migration layer: that shape must stop validating outright.
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "2.0.0" }).valid).toBe(false);
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "4.0.0" }).valid).toBe(false);
   });
 
-  it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "observedEngine", "steps"] as const)("rejects an entry missing %s", (field) => {
+  it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "executionSurface", "steps"] as const)("rejects an entry missing %s", (field) => {
     const invalidEntry: Record<string, unknown> = { ...entry };
     delete invalidEntry[field];
 
@@ -499,6 +511,69 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     const failing = { ...entry, status: "FAILED", failureClassification: "PRODUCT_DEFECT" };
     expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...failing, evidenceArtifactIds: ["EVIDENCE-1"] }] }).valid).toBe(true);
     expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...failing, evidenceArtifactIds: [] }] }).valid).toBe(false);
+  });
+
+  it("rejects an entry declaring a surface the Execution Surface enum does not name", () => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, executionSurface: "e2e" }] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "enum" })]),
+    );
+  });
+
+  /** The same drift pin `accessibilityMethod` carries below: an entry's surface and an obligation's
+   *  surface are compared for EQUALITY by both coverage readers, so a member present on one list and
+   *  absent from the other would be a surface nothing could ever credit — or, worse, one an entry could
+   *  claim that no obligation can name. Both lists are pinned to `executionSurfaces` in coverage.ts. */
+  it("declares exactly the coverage-obligation Execution Surface enum, so an entry and an obligation cannot drift", () => {
+    const entryEnum = (schemas["test-result-batch"] as { properties: { entries: { items: { properties: { executionSurface: { enum: unknown[] } } } } } })
+      .properties.entries.items.properties.executionSurface.enum;
+    const obligationEnum = (schemas["coverage-obligation"] as { properties: { executionSurface: { enum: unknown[] } } })
+      .properties.executionSurface.enum;
+
+    expect(entryEnum).toEqual([...executionSurfaces]);
+    expect(obligationEnum).toEqual([...executionSurfaces]);
+  });
+
+  /** The browser surface's two dimensions, conditioned to the same EFFECT as `coverage-obligation`'s
+   *  `browser` + `viewport`: REQUIRED on the browser surface, FORBIDDEN on every other one.
+   *
+   *  Spelled `if`/`then`/`else` on the entry schema rather than as that schema's two-branch `allOf`,
+   *  and deliberately: `json-schema-to-typescript` collapses a NESTED schema carrying `allOf` to a bare
+   *  `{ [k: string]: unknown }` index signature, so copying the obligation's shape here silently
+   *  deleted every entry field from `src/contracts/generated/test-result-batch.d.ts` while
+   *  `check:generated` stayed green. `coverage-obligation` does not pay that cost because its
+   *  conditional sits at the schema ROOT. The `else` branch is also strictly tighter than the
+   *  obligation's negative `if`: it fires when `executionSurface` is absent as well as when it is
+   *  non-browser, which only matters for a record the `required` list already rejects.
+   *
+   *  `observedEngine` was unconditionally required until 3.0.0, which was defensible only while every
+   *  entry was assumed to be a browser entry. An `api` or `unit` suite has no browser engine, so
+   *  requiring one would force a producer to write a value it did not observe — the same fabrication
+   *  Phase 5 removed from evidence geometry, in a checksummed audit record. Forbidding it is what makes
+   *  "this entry names no engine" the only thing a non-browser entry can say. */
+  it.each(["observedEngine", "viewport"] as const)("requires %s on a browser entry", (field) => {
+    const incomplete: Record<string, unknown> = { ...entry };
+    delete incomplete[field];
+
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [incomplete] }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ keyword: "required" })]),
+    );
+  });
+
+  it.each(executionSurfaces.filter((surface) => surface !== "browser"))("accepts a %s entry that names neither an engine nor a viewport", (surface) => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...surfacelessEntry, executionSurface: surface }] }).valid).toBe(true);
+  });
+
+  it.each([
+    ["an observed engine", { observedEngine: "chromium" }],
+    ["a viewport", { viewport: { width: 1440, height: 900 } }],
+  ] as const)("forbids %s on a non-browser entry", (_label, override) => {
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...surfacelessEntry, executionSurface: "api", ...override }] }).valid).toBe(false);
+  });
+
+  it("rejects a browser entry whose viewport is not a positive integer geometry", () => {
+    for (const viewport of [{ width: 1440 }, { width: 1440, height: 0 }, { width: 1440.5, height: 900 }, { width: 1440, height: 900, dpr: 2 }]) {
+      expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, viewport }] }).valid).toBe(false);
+    }
   });
 });
 

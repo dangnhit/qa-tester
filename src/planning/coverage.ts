@@ -16,6 +16,30 @@ export function asExecutionSurface(value: unknown): ExecutionSurface | undefined
 }
 
 /**
+ * Which lane produced a coverage claim. Both readers flatten lane-1 `test-result` artifacts and lane-2
+ * `test-result-batch` entries through ONE function, and since the two lanes source their Execution
+ * Surface and viewport from different places (see `CoverageAttempt#executionSurface`), that function
+ * has to be told which it is looking at.
+ *
+ * It is a parameter rather than a sniff at the claim's own fields on purpose. Both readers select the
+ * lane at the call site from `record.type` on the artifact MANIFEST — `"test-result"` vs
+ * `"test-result-batch"` — which is checksum-bound metadata the payload cannot influence. Deciding by
+ * `claim.executionSurface !== undefined` instead would hand the choice to the payload: a `test-result`
+ * that somehow carried the field would silently become lane 2, and a batch entry that lost it would
+ * silently fall back to lane 1's derived `browser`, which is precisely the mis-credit being closed.
+ * With the lane fixed from outside, an entry with no readable surface has no lane to fall back to —
+ * the fail-OPEN reader drops it, the fail-CLOSED one throws.
+ *
+ * Deliberately NOT the artifact's `provenance`, which looks similar and is not: a `test-result` may
+ * legitimately carry `runtime-observed` provenance while still being a lane-1 per-attempt claim.
+ */
+export type ClaimLane =
+  /** One `test-result`: an attempt the QA Runtime drove itself, so its surface is `browser` by construction. */
+  | "driven-attempt"
+  /** One `test-result-batch` entry: an execution the runtime only OBSERVED, which reports its own surface. */
+  | "observed-entry";
+
+/**
  * The accessibility evaluation methods an Accessibility Obligation may name. These are exactly
  * CONTEXT.md:437's four categories — "automated analysis, keyboard evaluation, screen-reader
  * evaluation, and cognitive/manual review" — and nothing else: a free-form label in a checksummed
@@ -86,20 +110,21 @@ export type CoverageAttempt = {
   status: string;
   requirementId: string;
   /**
-   * DERIVED, never declared. Both readers set this from how the claim was produced, not from a label
-   * on the test case: per CONTEXT.md:444 the runtime executes the browser surface itself, so a lane-1
-   * `test-result` is `browser` by construction. A lane-2 `test-result-batch` entry derives the same
-   * value, because the only dimensions any attempt can carry come from `test-case.coverage`, which is
-   * browser-shaped by schema (`browser` + `viewport` are both required there). Deliberately NOT added
-   * to `test-case.schema.json`: a second declared label would only create a drift surface.
+   * Never taken from a label on the test case — `test-case.coverage` declares no surface at all, and
+   * deliberately never will: a second declared label would only create a drift surface. Where the value
+   * comes from instead depends on the `ClaimLane` the reader was called with:
    *
-   * Phase 7 obligation: `test-result-batch` is the Runtime-Observed Execution artifact (CONTEXT.md:444)
-   * — precisely how a non-browser surface is meant to be reached. If `test-case.coverage` is ever
-   * relaxed to allow non-browser cases, this field must stop being derived from it: the surface signal
-   * has to come from the observed-execution record itself. Until that change lands, the two hardcoded
-   * `"browser"` literals at the derivation sites (`release-gate.ts`'s `asAttempt`, `evaluate-workspace-
-   * coverage.ts`'s `dimensions()`) would become live mis-credit sites — a non-browser batch entry
-   * stamped `browser` could satisfy a browser obligation it never ran.
+   * - `driven-attempt` DERIVES `browser`, by construction. Per CONTEXT.md:444 the QA Runtime executes
+   *   the browser surface itself, so a `test-result` exists only because a browser ran.
+   * - `observed-entry` READS `test-result-batch`'s per-entry `executionSurface`. A Runtime-Observed
+   *   Execution is how the runtime reaches every surface it does not execute (CONTEXT.md:444), so the
+   *   entry is the only thing that can say which one it was. There is no fallback: an entry whose
+   *   surface is missing or unrecognised is dropped by the fail-OPEN reader and rejected by the
+   *   fail-CLOSED one, never quietly promoted to `browser`.
+   *
+   * Until schema 3.0.0 the second case did not exist — both derivation sites wrote a `"browser"`
+   * literal — which was safe only while no producer emitted a batch. The entry now carries the value,
+   * and a unit or api suite can no longer satisfy a browser obligation it never ran.
    */
   executionSurface: ExecutionSurface;
   role: string;
@@ -114,25 +139,27 @@ export type CoverageAttempt = {
    * rather than falling back to `test-case.coverage.browser`.
    *
    * Browser-surface only, like `viewport`: `undefined` on every other surface, where it is not compared.
+   * Since `test-result-batch` 3.0.0 that is enforced at the contract rather than merely respected by the
+   * readers — an entry off the browser surface may not carry an engine at all, so a producer observing
+   * an api or unit suite cannot invent one to satisfy a required field.
    */
   observedEngine?: string | undefined;
   /**
-   * DECLARED, still: unlike the engine, the runtime does not measure the viewport it ends up with — it
-   * SETS it from `test-case.coverage.viewport` (`createBrowserAttemptSession`), so the declaration is
-   * causally upstream of the geometry rather than an independent claim about it. That makes it a weaker
-   * check than `observedEngine`, not a vacuous one, and closing the gap (reading `page.viewportSize()`)
-   * is deliberately out of this task's scope. Until then this half of CONTEXT.md:441 rests on the
-   * runtime applying what it was told.
+   * Browser-surface only, like `observedEngine`, and sourced per `ClaimLane` like `executionSurface`:
    *
-   * That argument holds only for lane 1: the DSL's action union (`shared/schemas/browser-test-dsl.
-   * schema.json`) has no resize or emulation action, so nothing can change the viewport after
-   * `createBrowserAttemptSession` sets it from the declaration. Phase 7 obligation: a `test-result-batch`
-   * entry carries no viewport at all, so the same two derivation sites (`release-gate.ts`'s `asAttempt`,
-   * `evaluate-workspace-coverage.ts`'s `dimensions()`) would fall back to `test-case.coverage.viewport`
-   * with no causal link whatsoever to whatever produced the entry — the exact two-declarations-agreeing
-   * shape `observedEngine` exists to kill, just not yet closed here. It is not live today because no batch
-   * producer exists; it becomes live the moment Phase 7 lands one, so this viewport follow-up must be
-   * sequenced before or alongside that producer, not merely sometime after it.
+   * - `driven-attempt` still takes it from `test-case.coverage.viewport`, i.e. from the DECLARATION.
+   *   That is not the defect it looks like, because the runtime does not merely compare that value —
+   *   it SETS the live context from it (`createBrowserAttemptSession`) before the attempt runs, and
+   *   the DSL's action union (`shared/schemas/browser-test-dsl.schema.json`) has no resize or emulation
+   *   action, so nothing can move it afterwards. The declaration is causally UPSTREAM of the geometry
+   *   rather than an independent claim about it. It is still a weaker check than `observedEngine`;
+   *   closing the gap fully would mean reading `page.viewportSize()` back off the live handle, which
+   *   remains open and is the ONLY half of this argument still outstanding.
+   * - `observed-entry` READS the entry's own `viewport`. That causal argument does not survive the
+   *   crossing into lane 2: nothing links an external runner's geometry to what the plan declared, so
+   *   inheriting the declaration would compare it to itself — the two-declarations-agreeing shape
+   *   `observedEngine` exists to kill, and the other half of CONTEXT.md:441's "never satisfied by
+   *   another engine OR VIEWPORT". The entry now carries the value and the readers compare that.
    */
   viewport?: { width: number; height: number } | undefined;
   // There is deliberately NO `accessibilityMethod` here, for the same reason there is no declared

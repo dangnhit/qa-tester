@@ -2,7 +2,7 @@
 
 export interface TestResultBatch {
   artifactType: "test-result-batch";
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   producerVersion: string;
   executionId: string;
   runId: string;
@@ -22,9 +22,20 @@ export interface TestResultBatch {
       status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
       failureClassification: "PRODUCT_DEFECT" | "TEST_DEFECT" | "ENVIRONMENT_DEFECT" | "UNDETERMINED" | "NONE";
       /**
-       * The browser engine the observed execution reported for this entry. Same shape and same rule as test-result.observedEngine (CONTEXT.md:442): coverage is credited from the engine that ran, never from the one a test case declared. This artifact has no producer yet — Phase 7 owns it — so the field is required from the start rather than retrofitted onto existing instances.
+       * The Execution Surface this entry actually ran on, reported by the observed execution. A Runtime-Observed Execution is how the QA Runtime reaches every surface it does not execute itself (CONTEXT.md:444), so an entry is the only thing that can say which one it was; the bound test case does not declare a surface, and never should — a second declared label would only be a drift surface. Both coverage readers now read this field, with no fallback: an entry that names no recognized surface credits nothing. The enum is exactly coverage-obligation.executionSurface's, because the two are compared for equality.
        */
-      observedEngine: string;
+      executionSurface: "browser" | "api" | "unit" | "integration" | "performance" | "security" | "manual";
+      /**
+       * The browser engine the observed execution reported for this entry. Same shape and same rule as test-result.observedEngine (CONTEXT.md:442): coverage is credited from the engine that ran, never from the one a test case declared. Browser-surface only since 3.0.0 — required there, FORBIDDEN elsewhere. An api or unit suite has no browser engine, so an unconditional requirement would force a producer to invent a value it never observed, which is the fabrication Phase 5 removed from evidence geometry.
+       */
+      observedEngine?: string;
+      /**
+       * The viewport the observed execution reported for this entry, and the other half of CONTEXT.md:441 ('never satisfied by another engine OR VIEWPORT'). Browser-surface only, on the same conditional as observedEngine. Unlike lane 1 — where createBrowserAttemptSession SETS the live context from test-case.coverage.viewport, making the declaration causally upstream of the geometry — nothing links a batch entry to the plan's declared viewport, so inheriting it would credit a geometry nothing rendered at.
+       */
+      viewport?: {
+        width: number;
+        height: number;
+      };
       /**
        * @minItems 1
        */
@@ -57,9 +68,20 @@ export interface TestResultBatch {
       status: "PASSED" | "FAILED" | "BLOCKED" | "INCONCLUSIVE" | "NOT_RUN";
       failureClassification: "PRODUCT_DEFECT" | "TEST_DEFECT" | "ENVIRONMENT_DEFECT" | "UNDETERMINED" | "NONE";
       /**
-       * The browser engine the observed execution reported for this entry. Same shape and same rule as test-result.observedEngine (CONTEXT.md:442): coverage is credited from the engine that ran, never from the one a test case declared. This artifact has no producer yet — Phase 7 owns it — so the field is required from the start rather than retrofitted onto existing instances.
+       * The Execution Surface this entry actually ran on, reported by the observed execution. A Runtime-Observed Execution is how the QA Runtime reaches every surface it does not execute itself (CONTEXT.md:444), so an entry is the only thing that can say which one it was; the bound test case does not declare a surface, and never should — a second declared label would only be a drift surface. Both coverage readers now read this field, with no fallback: an entry that names no recognized surface credits nothing. The enum is exactly coverage-obligation.executionSurface's, because the two are compared for equality.
        */
-      observedEngine: string;
+      executionSurface: "browser" | "api" | "unit" | "integration" | "performance" | "security" | "manual";
+      /**
+       * The browser engine the observed execution reported for this entry. Same shape and same rule as test-result.observedEngine (CONTEXT.md:442): coverage is credited from the engine that ran, never from the one a test case declared. Browser-surface only since 3.0.0 — required there, FORBIDDEN elsewhere. An api or unit suite has no browser engine, so an unconditional requirement would force a producer to invent a value it never observed, which is the fabrication Phase 5 removed from evidence geometry.
+       */
+      observedEngine?: string;
+      /**
+       * The viewport the observed execution reported for this entry, and the other half of CONTEXT.md:441 ('never satisfied by another engine OR VIEWPORT'). Browser-surface only, on the same conditional as observedEngine. Unlike lane 1 — where createBrowserAttemptSession SETS the live context from test-case.coverage.viewport, making the declaration causally upstream of the geometry — nothing links a batch entry to the plan's declared viewport, so inheriting it would credit a geometry nothing rendered at.
+       */
+      viewport?: {
+        width: number;
+        height: number;
+      };
       /**
        * @minItems 1
        */

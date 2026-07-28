@@ -80,7 +80,9 @@ function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "AT
   };
 }
 
-/** One entry of a `test-result-batch`, defaulting to a coherent PASSED entry for `testCase("TC-1")`. */
+/** One entry of a `test-result-batch`, defaulting to a coherent PASSED browser entry for
+ *  `testCase("TC-1")`. Since schema 3.0.0 an entry declares the Execution Surface it ran on, plus the
+ *  engine and viewport it ran at — the browser surface's two dimensions, forbidden on every other one. */
 function batchEntry(overrides: Record<string, unknown> = {}) {
   return {
     entryId: "ENTRY-1",
@@ -89,7 +91,9 @@ function batchEntry(overrides: Record<string, unknown> = {}) {
     testCaseInstanceId: "TC-1--INSTANCE-1",
     status: "PASSED",
     failureClassification: "NONE",
+    executionSurface: "browser",
     observedEngine: "chromium",
+    viewport: { width: 1440, height: 900 },
     steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
     ...overrides,
   };
@@ -98,7 +102,7 @@ function batchEntry(overrides: Record<string, unknown> = {}) {
 function testResultBatch(workspace: RunWorkspace, entries: readonly Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
   return {
     artifactType: "test-result-batch",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     executionId: "EXEC-1",
     runId: workspace.runId,
