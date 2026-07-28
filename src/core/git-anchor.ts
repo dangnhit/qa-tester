@@ -24,6 +24,12 @@ export type GitAnchorRequest = Readonly<{
 export type GitAnchor = Readonly<{ commitSha: string; specTreeSha256: string }>;
 
 const commitShaPattern = /^[a-f0-9]{40}$/;
+/** `<mode> <object> <stage>\t<path>` — the record `git ls-files -s -z` emits. */
+const trackedEntryPattern = /^(\d{6}) [^ ]+ \d+\t([^]*)$/;
+/** Regular file and executable regular file. Every other git mode is refused, never skipped. */
+const regularFileModes: ReadonlySet<string> = new Set(["100644", "100755"]);
+
+type TrackedEntry = Readonly<{ mode: string; path: string }>;
 
 const defaultExecutor: GitExecutor = async (args, cwd) =>
   (await runFile("git", [...args], { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })).stdout;
@@ -32,12 +38,15 @@ function isSpawnFailure(error: unknown): boolean {
   return error instanceof Error && "code" in error && typeof error.code === "string";
 }
 
+function describeFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function runGit(execute: GitExecutor, args: readonly string[], cwd: string, code: string, message: string): Promise<string> {
   try {
     return await execute(args, cwd);
   } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new QaSkillsError(`${message}: ${detail}`, isSpawnFailure(error) ? "GIT_UNAVAILABLE" : code);
+    throw new QaSkillsError(`${message}: ${describeFailure(error)}`, isSpawnFailure(error) ? "GIT_UNAVAILABLE" : code);
   }
 }
 
@@ -51,15 +60,34 @@ async function resolveSpecDirCandidate(projectRoot: string, specDir: string): Pr
   return join(await realpath(dirname(requested)), basename(requested));
 }
 
-/** The digest's canonical line for one tracked file: the path git emitted, NUL, the working-tree
- *  content hash, newline. Contents are hashed as raw bytes with no normalization at all. */
-async function specTreeLine(repoRoot: string, gitPath: string): Promise<string> {
-  const bytes = await readFile(resolveWithin(repoRoot, gitPath));
-  return `${gitPath}\0${sha256Bytes(bytes)}\n`;
+/** Parses one `ls-files -s -z` record and refuses anything that is not a regular file. Fail closed:
+ *  an unrecognised record is a refusal too, because the alternative is anchoring a tree we cannot read. */
+function parseTrackedEntry(record: string, specDir: string): TrackedEntry {
+  const parsed = trackedEntryPattern.exec(record);
+  const mode = parsed?.[1];
+  const path = parsed?.[2];
+  if (mode === undefined || path === undefined) {
+    throw new QaSkillsError(`Spec directory ${specDir} has a tracked entry this module cannot classify: ${JSON.stringify(record)}`, "SPEC_TREE_UNSUPPORTED_ENTRY");
+  }
+  if (!regularFileModes.has(mode)) {
+    throw new QaSkillsError(
+      `Spec directory ${specDir} contains ${path}, which git records as mode ${mode} rather than a regular file. `
+      + "A submodule (160000) or a symlink (120000) under a spec directory is refused, not skipped: its contents are not covered by the spec-tree digest.",
+      "SPEC_TREE_UNSUPPORTED_ENTRY",
+    );
+  }
+  return { mode, path };
 }
 
-function byPathBytes(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+/** The digest's canonical line for one tracked file: the path git emitted, NUL, the working-tree
+ *  content hash, newline. Contents are hashed as raw bytes with no normalization at all. */
+async function specTreeLine(repoRoot: string, entry: TrackedEntry): Promise<string> {
+  const bytes = await readFile(resolveWithin(repoRoot, entry.path));
+  return `${entry.path}\0${sha256Bytes(bytes)}\n`;
+}
+
+function byPathBytes(left: TrackedEntry, right: TrackedEntry): number {
+  return Buffer.compare(Buffer.from(left.path, "utf8"), Buffer.from(right.path, "utf8"));
 }
 
 /**
@@ -73,8 +101,13 @@ function byPathBytes(left: string, right: string): number {
  * `specTreeSha256` is a normative on-disk contract value. Once a producer writes it into an
  * immutable artifact the algorithm can never change silently, so it is defined here verbatim:
  *
- * 1. Enumerate tracked files with `git ls-files -z --cached -- <specDir>` from the repository root.
- *    Tracked files only — untracked files are refused by the dirty check before this runs.
+ * 1. Enumerate tracked entries with `git ls-files -s -z --cached -- :(literal)<specDir>` from the
+ *    repository root. Tracked entries only; untracked and gitignored files are refused by the dirty
+ *    check before this runs. **Only regular files are included — git modes `100644` and `100755`.**
+ *    A symlink (`120000`) or a submodule gitlink (`160000`) is a refusal, never a skip: skipping one
+ *    would leave content inside the spec tree that the digest does not cover, and following a
+ *    symlink out of the repository would fold content reachable from no commit into a value that
+ *    must be reproducible from the commit alone. A record that does not parse is refused too.
  * 2. For each path, read the bytes **from the working tree** and take their `sha256` hex.
  * 3. Canonical line per file: `<path>` + `"\0"` + `<sha256hex>` + `"\n"`, where `<path>` is the
  *    repo-root-relative POSIX path exactly as git emitted it. No absolute path ever enters the
@@ -85,25 +118,65 @@ function byPathBytes(left: string, right: string): number {
  *    version prefix exists so a future change to this rule produces a visibly different value
  *    instead of a silently incompatible one.
  *
+ * Two encoding details a reimplementation must match: every hex digest is **lowercase**, and step 5
+ * hashes the **UTF-8 encoding** of the joined string. Paths arrive already UTF-8-decoded (the
+ * executor reads git's output with `encoding: "utf8"`), so a filename whose bytes are not valid
+ * UTF-8 is lossily replaced with U+FFFD before it reaches the digest.
+ *
  * File contents are never normalized: a CRLF/LF difference is visible rather than smoothed away.
+ *
+ * Two constraints this module's contract places on its callers:
+ *
+ * - **Runner output must live outside `specDir`.** `test-results/`, `playwright-report/`, and any
+ *   `.auth/` storage-state directory have to sit outside the spec directory. The dirty check refuses
+ *   gitignored files as well as untracked ones — without that, an ignored spec file is invisible to
+ *   both the check and the digest, which is a one-run way to smuggle an unreviewed executable spec
+ *   into a tree the anchor then certifies as clean (CONTEXT.md:345). The cost of closing it is that
+ *   a runner writing its artifacts under `specDir` makes every later run refuse.
+ * - **The anchor covers files, not the import graph.** A tracked spec that imports a helper from
+ *   outside `specDir`, or an ignored one, still executes code this digest does not cover. Known, and
+ *   deliberately not closed here.
+ *
+ * Every failure is a `QaSkillsError`; no raw error escapes.
  */
 export async function resolveGitAnchor(request: GitAnchorRequest): Promise<GitAnchor> {
+  try {
+    return await computeGitAnchor(request);
+  } catch (error: unknown) {
+    if (error instanceof QaSkillsError) throw error;
+    // A structural guarantee, not a classifier: a caller of a module whose whole contract is "refuse
+    // cleanly" must never receive a raw Error, which src/cli/program.ts:265-267 maps to
+    // ABORTED_OR_INTERNAL rather than to a refusal.
+    throw new QaSkillsError(`Unable to resolve the git anchor for ${request.specDir}: ${describeFailure(error)}`, "GIT_ANCHOR_FAILED");
+  }
+}
+
+async function computeGitAnchor(request: GitAnchorRequest): Promise<GitAnchor> {
   const execute = request.execute ?? defaultExecutor;
   const specDirCandidate = await resolveSpecDirCandidate(request.projectRoot, request.specDir);
   const repoRoot = (await runGit(execute, ["rev-parse", "--show-toplevel"], request.projectRoot, "NOT_A_GIT_REPOSITORY", `No git repository contains ${request.projectRoot}`)).trim();
   const specDir = await assertRealpathWithin(repoRoot, specDirCandidate);
-  const pathspec = relative(repoRoot, specDir).split(sep).join("/") || ".";
+  // `--` stops a path being read as a revision; `:(literal)` stops it being read as a glob. Without
+  // the magic, a directory named `specs*` or `specs[e2e]` is wildmatched, and the anchor can
+  // silently describe a different tracked directory while reporting it clean.
+  const relativeSpec = relative(repoRoot, specDir).split(sep).join("/");
+  const pathspec = relativeSpec === "" ? "." : `:(literal)${relativeSpec}`;
 
   const commitSha = (await runGit(execute, ["rev-parse", "HEAD"], repoRoot, "GIT_NO_COMMIT", `Repository ${repoRoot} has no commit at HEAD`)).trim();
   if (!commitShaPattern.test(commitSha)) throw new QaSkillsError(`git reported a HEAD commit that is not a 40-character hex SHA: ${commitSha}`, "GIT_COMMIT_SHA_INVALID");
 
-  const status = await runGit(execute, ["status", "--porcelain", "--untracked-files=all", "--", pathspec], repoRoot, "GIT_STATUS_FAILED", `Unable to read the working-tree status of ${specDir}`);
-  if (status.length > 0) throw new QaSkillsError(`Spec directory ${specDir} differs from ${commitSha}; commit or revert it before an observed execution:\n${status}`, "SPEC_TREE_DIRTY");
+  const status = await runGit(execute, ["status", "--porcelain", "--untracked-files=all", "--ignored=matching", "--", pathspec], repoRoot, "GIT_STATUS_FAILED", `Unable to read the working-tree status of ${specDir}`);
+  if (status.length > 0) {
+    throw new QaSkillsError(
+      `Spec directory ${specDir} does not match ${commitSha}; commit, revert, or remove these before an observed execution ("!!" marks a gitignored file):\n${status.trimEnd()}`,
+      "SPEC_TREE_DIRTY",
+    );
+  }
 
-  const listed = await runGit(execute, ["ls-files", "-z", "--cached", "--", pathspec], repoRoot, "GIT_LS_FILES_FAILED", `Unable to list the tracked files under ${specDir}`);
-  const paths = listed.split("\0").filter((entry) => entry.length > 0);
-  if (paths.length === 0) throw new QaSkillsError(`Spec directory ${specDir} has no tracked files at ${commitSha}`, "SPEC_TREE_EMPTY");
+  const listed = await runGit(execute, ["ls-files", "-s", "-z", "--cached", "--", pathspec], repoRoot, "GIT_LS_FILES_FAILED", `Unable to list the tracked files under ${specDir}`);
+  const entries = listed.split("\0").filter((record) => record.length > 0).map((record) => parseTrackedEntry(record, specDir));
+  if (entries.length === 0) throw new QaSkillsError(`Spec directory ${specDir} has no tracked files at ${commitSha}`, "SPEC_TREE_EMPTY");
 
-  const lines = await Promise.all([...paths].sort(byPathBytes).map((path) => specTreeLine(repoRoot, path)));
+  const lines = await Promise.all([...entries].sort(byPathBytes).map((entry) => specTreeLine(repoRoot, entry)));
   return { commitSha, specTreeSha256: sha256Text(`qa-skills/spec-tree/v1\n${lines.join("")}`) };
 }

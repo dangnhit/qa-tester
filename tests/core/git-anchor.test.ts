@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { QaSkillsError } from "../../src/core/errors.js";
 import { resolveGitAnchor } from "../../src/core/git-anchor.js";
 import type { GitExecutor } from "../../src/core/git-anchor.js";
 
@@ -27,15 +28,23 @@ async function newTempDir(label: string): Promise<string> {
   return root;
 }
 
-/** A temp-dir repository with identity and line-ending handling pinned, so no test outcome
- *  depends on the ambient git configuration of the machine running it. */
+/** A temp-dir repository with identity and line-ending handling pinned, so no test outcome depends
+ *  on the ambient git configuration of the machine running it. The settings are appended to
+ *  `.git/config` rather than set through four more `git config` spawns: every test in this file
+ *  drives real git, and process spawns are what makes them slow enough to hit a test timeout. */
 async function newRepo(label: string): Promise<string> {
   const root = await newTempDir(label);
   await git(root, "init", "-q", "-b", "main", ".");
-  await git(root, "config", "user.email", "anchor@example.test");
-  await git(root, "config", "user.name", "Anchor Test");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "config", "core.autocrlf", "false");
+  await appendFile(join(root, ".git", "config"), [
+    "[user]",
+    "\temail = anchor@example.test",
+    "\tname = Anchor Test",
+    "[commit]",
+    "\tgpgsign = false",
+    "[core]",
+    "\tautocrlf = false",
+    "",
+  ].join("\n"));
   return root;
 }
 
@@ -65,7 +74,11 @@ function digestOfOrderedEntries(entries: readonly (readonly [string, string])[])
 
 const realGit: GitExecutor = async (args, cwd) => (await runFile("git", [...args], { cwd, encoding: "utf8" })).stdout;
 
-describe("git anchor", () => {
+// Every test here spawns several real `git` processes against a real repository, and the file runs
+// under `fileParallelism: false` alongside suites that drive Chromium. The default 5s test timeout
+// is close enough to the slowest cases (a submodule clone, two repositories built back to back)
+// that they flake under load; 30s is generous without hiding a genuine hang.
+describe("git anchor", { timeout: 30_000 }, () => {
   it("anchors a clean spec tree to HEAD and to the pinned spec-tree digest", async () => {
     const root = await newRepo("clean");
     await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
@@ -121,6 +134,17 @@ describe("git anchor", () => {
     await commitAll(root, "add spec");
 
     expect(await anchorOf(root, root)).toBe(digestOfOrderedEntries([["a.spec.ts", "alpha\n"]]));
+  });
+
+  it.runIf(process.platform !== "win32")("matches the spec directory as a literal path, not as a glob", async () => {
+    const root = await newRepo("glob-pathspec");
+    await writeFileAt(root, "specs*/a.spec.ts", "real\n");
+    await writeFileAt(root, "specsX/decoy.spec.ts", "decoy\n");
+    await commitAll(root, "add the real directory and a decoy the glob would match");
+
+    // As a pathspec glob, `specs*` matches specsX/decoy.spec.ts too, and the anchor would
+    // silently describe a different tree while reporting it clean.
+    expect(await anchorOf(root, "specs*")).toBe(digestOfOrderedEntries([["specs*/a.spec.ts", "real\n"]]));
   });
 
   it("yields the same spec-tree digest for one commit checked out at two absolute paths", async () => {
@@ -291,6 +315,78 @@ describe("git anchor", () => {
       const shortHead: GitExecutor = (args, cwd) => (args[0] === "rev-parse" && args[1] === "HEAD" ? Promise.resolve("0123456789abcdef\n") : realGit(args, cwd));
 
       await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs", execute: shortHead })).rejects.toMatchObject({ code: "GIT_COMMIT_SHA_INVALID" });
+    });
+
+    it("refuses a spec tree containing a gitignored file, and names it", async () => {
+      const root = await newRepo("ignored-spec");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await commitAll(root, "add specs");
+      // The .gitignore sits at the repository root, OUTSIDE the spec pathspec, so a scoped
+      // `git status` never mentions it. The ignored spec is the file the agent smuggled in:
+      // invisible to an untracked-only dirty check and absent from the digest, so the anchor
+      // would certify a tree that does not contain the spec sitting on disk next to it.
+      await writeFileAt(root, ".gitignore", "specs/evil.spec.ts\n");
+      await writeFileAt(root, "specs/evil.spec.ts", "written this run\n");
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({
+        code: "SPEC_TREE_DIRTY",
+        message: expect.stringContaining("specs/evil.spec.ts"),
+      });
+    });
+
+    it("refuses a tracked submodule under the spec directory instead of crashing on it", async () => {
+      const root = await newRepo("gitlink");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await commitAll(root, "add specs");
+      const inner = await newRepo("gitlink-inner");
+      await writeFileAt(inner, "f.txt", "x\n");
+      await commitAll(inner, "inner commit");
+      await git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "specs/sub");
+      await commitAll(root, "add submodule");
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({ code: "SPEC_TREE_UNSUPPORTED_ENTRY" });
+    });
+
+    it.runIf(process.platform !== "win32")("refuses a tracked symlink under the spec directory", async () => {
+      const root = await newRepo("tracked-symlink");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await symlink("a.spec.ts", join(root, "specs/link.spec.ts"));
+      await commitAll(root, "add specs with a symlink");
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({ code: "SPEC_TREE_UNSUPPORTED_ENTRY" });
+    });
+
+    it.runIf(process.platform !== "win32")("refuses a tracked symlink whose target is outside the repository", async () => {
+      const root = await newRepo("tracked-symlink-outward");
+      const outside = await newTempDir("tracked-symlink-target");
+      await writeFileAt(outside, "foreign.txt", "content that is not in any commit\n");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await symlink(join(outside, "foreign.txt"), join(root, "specs/foreign.spec.ts"));
+      await commitAll(root, "add specs with an outward symlink");
+
+      // Following this would fold content reachable from no commit into a value that must be
+      // reproducible from the commit alone.
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs" })).rejects.toMatchObject({ code: "SPEC_TREE_UNSUPPORTED_ENTRY" });
+    });
+
+    it("refuses a tracked entry whose ls-files record it cannot classify", async () => {
+      const root = await newRepo("unclassifiable-entry");
+      await writeFileAt(root, "specs/a.spec.ts", "alpha\n");
+      await commitAll(root, "add specs");
+      const malformed: GitExecutor = (args, cwd) => (args[0] === "ls-files" ? Promise.resolve("not-an-ls-files-record\0") : realGit(args, cwd));
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs", execute: malformed })).rejects.toMatchObject({ code: "SPEC_TREE_UNSUPPORTED_ENTRY" });
+    });
+
+    it("turns an unclassified filesystem failure into a typed refusal rather than a raw Error", async () => {
+      const root = await newRepo("structural-typing");
+      await writeFileAt(root, "specs/nested/b.spec.ts", "beta\n");
+      await commitAll(root, "add specs");
+      // A regular-file entry naming a directory: readFile raises EISDIR, which src/cli/program.ts
+      // would turn into ABORTED_OR_INTERNAL rather than a refusal.
+      const fabricated: GitExecutor = (args, cwd) => (args[0] === "ls-files" ? Promise.resolve(`100644 ${"0".repeat(40)} 0\tspecs/nested\0`) : realGit(args, cwd));
+
+      await expect(resolveGitAnchor({ projectRoot: root, specDir: "specs", execute: fabricated })).rejects.toBeInstanceOf(QaSkillsError);
     });
 
     it("refuses when git cannot be executed at all", async () => {
