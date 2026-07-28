@@ -51,7 +51,7 @@
           "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
           "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "mediaType": { "type": "string", "minLength": 1 },
-          "captureType": { "enum": ["screenshot", "trace", "console", "network", "log"] },
+          "captureType": { "enum": ["screenshot", "trace", "console", "network", "log", "runner-report"] },
           "dimensions": {
             "type": "object",
             "additionalProperties": false,

@@ -7,7 +7,7 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "subject", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
   "properties": {
     "artifactType": { "const": "evidence" },
-    "schemaVersion": { "const": "2.0.0" },
+    "schemaVersion": { "const": "3.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "evidenceId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "runId": { "type": "string", "minLength": 1 },
@@ -18,7 +18,7 @@
         { "type": "object", "additionalProperties": false, "required": ["kind", "executionId"], "properties": { "kind": { "const": "observed-execution" }, "executionId": { "type": "string", "minLength": 1 } } }
       ]
     },
-    "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "evidence-gap"] },
+    "kind": { "enum": ["screenshot", "trace", "console", "network", "log", "runner-report", "evidence-gap"] },
     "capturedAt": { "type": "string", "format": "date-time" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
@@ -76,6 +76,19 @@
             "capturedAt": { "type": "string", "format": "date-time" },
             "testcaseId": { "type": "string" },
             "bugId": { "type": "string" }
+          }
+        },
+        {
+          "description": "A Runtime-Observed Execution's runner report (lane 2). One raw report covers a whole external suite run, so it measures no page and visits no single URL: the two branches above hard-require url/browser/build, which a reporter payload simply does not have, and reusing one of them would mean inventing all three. Fabricating provenance to satisfy a schema is the failure this contract exists to prevent. Records only what the runtime OBSERVED about the process. There is deliberately NO command/argv field: lane 2's arguments come from the caller and can carry a resolved token or password, CONTEXT.md:371 forbids resolved secret values in artifacts, and an immutable checksummed artifact is the worst possible place to discover one — do not add it back. There is no signal field either: a runner killed by a signal produced no trustworthy result, so the producer refuses outright rather than recording a half-execution, which means evidence for a signal-killed run never needs to exist.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["captureType", "runner", "runnerVersion", "exitCode", "capturedAt"],
+          "properties": {
+            "captureType": { "const": "runner-report" },
+            "runner": { "description": "The external runner the runtime spawned and observed, e.g. \"playwright\".", "type": "string", "minLength": 1 },
+            "runnerVersion": { "description": "The runner's own reported version, so the report's shape is auditable against the tool that wrote it.", "type": "string", "minLength": 1 },
+            "exitCode": { "description": "The process exit code the runtime observed. An integer, including 0 — a fully passing observed execution is still evidenceable.", "type": "integer" },
+            "capturedAt": { "type": "string", "format": "date-time" }
           }
         }
       ]

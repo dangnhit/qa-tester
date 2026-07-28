@@ -115,6 +115,28 @@ function testResultBatch(workspace: RunWorkspace, entries: readonly Record<strin
   };
 }
 
+/** A lane-2 `runner-report` evidence bundle: one raw JSON report about a whole Runtime-Observed
+ *  Execution, bound to no attempt. `kind` and `provenance.captureType` are BOTH `runner-report` because
+ *  `matchesEvidencePrimary` requires the descriptor kind, the provenance captureType and the manifest
+ *  record's captureType to be the same token — the two vocabularies are coupled by a live invariant,
+ *  which is why one token serves both. */
+function runnerReportBundle(workspace: RunWorkspace, input: { evidenceId: string; executionId: string; relationships?: string[]; descriptorOverrides?: Record<string, unknown>; captureType?: string }) {
+  return workspace.registerEvidenceBundle({
+    binaries: [{ filename: `${input.evidenceId}-report.json`, contents: Buffer.from('{"suites":[]}\n'), mediaType: "application/json", captureType: (input.captureType ?? "runner-report") as "runner-report" }],
+    relationships: input.relationships ?? [],
+    descriptor: (binaries) => ({
+      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: input.evidenceId, runId: workspace.runId,
+      subject: { kind: "observed-execution", executionId: input.executionId },
+      kind: "runner-report", capturedAt: "2026-07-23T12:34:56.000Z",
+      sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
+      binaryArtifactIds: binaries.map((binary) => binary.id),
+      binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+      provenance: { captureType: "runner-report", runner: "playwright", runnerVersion: "1.54.1", exitCode: 1, capturedAt: "2026-07-23T12:34:56.000Z" },
+      ...input.descriptorOverrides,
+    }),
+  });
+}
+
 async function registerEvidenceAttempt(workspace: RunWorkspace, attemptId = "ATTEMPT-EVIDENCE") {
   const testCaseRecord = await workspace.registerArtifactValue({ type: "test-case", relationships: [], value: testCase("TC-EVIDENCE") });
   return workspace.registerArtifactValue({ type: "test-result", relationships: [testCaseRecord.id], value: testResult(workspace, "TC-EVIDENCE", attemptId) });
@@ -175,7 +197,7 @@ function failSecondEvidenceBinaryWrite() {
 function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, subject: { kind: "attempt", attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1" }, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, subject: { kind: "attempt", attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1" }, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
     provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
     ...overrides,
@@ -875,7 +897,7 @@ describe("RunWorkspace", () => {
     const attemptSubject = { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-TC-1", testCaseInstanceId: "TC-1--INSTANCE-1" };
     const evidence = {
       artifactType: "evidence",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: workspace.runId,
@@ -925,7 +947,7 @@ describe("RunWorkspace", () => {
       binaries: [{ filename: `${evidenceId}.json`, contents: Buffer.from("observed\n"), mediaType: "application/json", captureType: "log" }],
       relationships,
       descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId, runId: workspace.runId,
+        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId, runId: workspace.runId,
         subject: { kind: "observed-execution", executionId: "EXEC-1" },
         kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
         binaryArtifactIds: binaries.map((binary) => binary.id),
@@ -938,6 +960,66 @@ describe("RunWorkspace", () => {
     await expect(observedBundle("01K0ABCDEFGHJKMNPQRSTVWXY1", [attempt.id])).rejects.toThrow(/must not claim a test result/i);
     // The read path must agree with the write path: no attempt binding is demanded on reopen either.
     expect((await workspace.readRegisteredArtifacts()).some((artifact) => artifact.record.type === "evidence" && artifact.value.evidenceId === "01K0ABCDEFGHJKMNPQRSTVWXYZ")).toBe(true);
+    await workspace.close();
+  });
+
+  // Lane 2's runner emits ONE raw JSON report per execution. Evidence 3.0.0's `runner-report` capture
+  // type is what lets that register without inventing the `url`/`browser`/`build` the other two
+  // provenance branches hard-require, and this walks it end to end: media bytes, manifest record,
+  // descriptor, and reopen.
+  it("registers a runner-report JSON binary and its descriptor end to end", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+
+    const bundle = await runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", executionId: "EXEC-1" });
+
+    expect(bundle.binaries[0]?.captureType).toBe("runner-report");
+    expect(bundle.binaries[0]?.mediaType).toBe("application/json");
+    const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { id: string; captureType?: string }[] };
+    expect(manifest.artifacts.find((artifact) => artifact.id === bundle.binaries[0]?.id)?.captureType).toBe("runner-report");
+    const reopened = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === bundle.descriptor.id);
+    expect(reopened?.value.kind).toBe("runner-report");
+    await workspace.close();
+  });
+
+  // `matchesEvidencePrimary` is the live invariant that couples the two vocabularies: the descriptor's
+  // `kind`, its `provenance.captureType`, and the manifest record's `captureType` must all be the SAME
+  // token — which is why `runner-report` is one token serving as both a `kind` and a `captureType`
+  // rather than two symmetrical-looking spellings. Each case below disagrees on exactly ONE of the
+  // three, so neither can pass for the other clause's reason: the schema itself cross-checks nothing
+  // here, so a runner-report binary described as a lane-1 `log` is stopped only by this invariant.
+  it.each([
+    ["descriptor kind", { kind: "log" }],
+    ["descriptor provenance captureType", { provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" } }],
+  ] as const)("rejects a runner-report binary whose %s says lane-1 log", async (_label, descriptorOverrides) => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+
+    await expect(runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", executionId: "EXEC-1", descriptorOverrides }))
+      .rejects.toThrow(/does not match its designated primary binary/i);
+    await workspace.close();
+  });
+
+  // Lane 1 is unchanged by lane 2's addition: every capture type that registered before still does,
+  // through the same bundle path, with the same manifest record.
+  it.each(["screenshot", "trace", "console", "network", "log"] as const)("still registers a lane-1 %s capture", async (captureType) => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+    const attempt = await registerEvidenceAttempt(workspace);
+
+    const bundle = await workspace.registerEvidenceBundle({
+      binaries: [{ filename: `capture-${captureType}.bin`, contents: Buffer.from(captureType), mediaType: "application/octet-stream", captureType, ...(captureType === "screenshot" ? { dimensions: { width: 1, height: 1 } } : {}) }],
+      relationships: [attempt.id],
+      descriptor: (binaries) => screenshotDescriptor(workspace, binaries, {
+        kind: captureType,
+        provenance: captureType === "screenshot"
+          ? { captureType, dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" }
+          : { captureType, url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
+      }),
+    });
+
+    expect(bundle.binaries[0]?.captureType).toBe(captureType);
+    expect((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === bundle.descriptor.id)?.value.kind).toBe(captureType);
     await workspace.close();
   });
 
@@ -977,22 +1059,11 @@ describe("RunWorkspace", () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
     const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-1"));
-    const evidence = await workspace.registerEvidenceBundle({
-      binaries: [{ filename: "observed.json", contents: Buffer.from("observed\n"), mediaType: "application/json", captureType: "log" }],
-      relationships: [],
-      descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
-        // This fixture happens to reuse "EXEC-1", `testResultBatch`'s default `executionId` (see above), so
-        // it matches the batch registered below — but nothing on write or read requires or checks that
-        // match; see the ARTIFACT_BINDING check's comment in semantic-rules.ts for why the linkage is
-        // unenforced in both directions.
-        subject: { kind: "observed-execution", executionId: "EXEC-1" },
-        kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
-        binaryArtifactIds: binaries.map((binary) => binary.id),
-        binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
-        provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
-      }),
-    });
+    // This fixture happens to reuse "EXEC-1", `testResultBatch`'s default `executionId` (see above), so
+    // it matches the batch registered below — but nothing on write or read requires or checks that
+    // match; see the ARTIFACT_BINDING check's comment in semantic-rules.ts for why the linkage is
+    // unenforced in both directions.
+    const evidence = await runnerReportBundle(workspace, { evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", executionId: "EXEC-1" });
 
     const registered = await workspace.registerArtifactValue({
       type: "test-result-batch", relationships: [testcase.id, evidence.descriptor.id], provenance: "runtime-observed",

@@ -166,7 +166,7 @@ describe("live evidence collector", () => {
       expect(result.kind).toBe("evidence");
       if (result.kind !== "evidence") return;
       const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === result.descriptorArtifactId);
-      expect(descriptor?.value.schemaVersion).toBe("2.0.0");
+      expect(descriptor?.value.schemaVersion).toBe("3.0.0");
       const provenance = descriptor?.value.provenance as Record<string, unknown>;
       expect(provenance.captureType).toBe("console");
       for (const field of ["dimensions", "dpr", "scroll", "clip", "viewport"]) expect(provenance).not.toHaveProperty(field);

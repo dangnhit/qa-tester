@@ -98,7 +98,7 @@ const otherArtifactContracts = [
     requiredField: "sha256",
     valid: {
       artifactType: "evidence",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
@@ -305,13 +305,14 @@ describe("validateArtifact", () => {
 });
 
 /** Evidence 2.0.0 replaced four flat identity fields with a `subject` union and made `provenance`
- *  a discriminated union on `captureType`. These pin the two shapes the bump exists to make honest:
- *  a non-screenshot capture may not carry geometry it never measured, and evidence may be about an
- *  externally observed execution rather than a runtime-driven attempt. */
-describe("evidence schema 2.0.0", () => {
+ *  a discriminated union on `captureType`; 3.0.0 adds the `runner-report` branch (see the block below).
+ *  These pin the two shapes the 2.0.0 bump exists to make honest: a non-screenshot capture may not carry
+ *  geometry it never measured, and evidence may be about an externally observed execution rather than a
+ *  runtime-driven attempt. */
+describe("evidence schema 3.0.0", () => {
   const attemptSubject = { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" };
   const logEvidence = {
-    artifactType: "evidence", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
     subject: attemptSubject, kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
     sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
@@ -368,8 +369,109 @@ describe("evidence schema 2.0.0", () => {
     expect(validateArtifact("evidence", { ...logEvidence, attemptId: "ATTEMPT-1" }).valid).toBe(false);
   });
 
-  it("rejects evidence still declaring schemaVersion 1.0.0", () => {
-    expect(validateArtifact("evidence", { ...logEvidence, schemaVersion: "1.0.0" }).valid).toBe(false);
+  it.each(["1.0.0", "2.0.0"])("rejects evidence still declaring schemaVersion %s", (schemaVersion) => {
+    expect(validateArtifact("evidence", { ...logEvidence, schemaVersion }).valid).toBe(false);
+  });
+});
+
+/** Evidence 3.0.0 adds a THIRD `provenance` branch, `runner-report`, and the matching `kind`. Lane 2's
+ *  runner emits one raw JSON report for a whole execution; no pre-3.0.0 branch could hold it, because
+ *  both hard-require `url`, `browser` and `build`, and a reporter payload has none of the three.
+ *  Reusing `log` would have meant inventing them — fabricating provenance to satisfy a schema is the
+ *  exact failure this contract exists to prevent, and the same one 2.0.0 removed from screenshot
+ *  geometry.
+ *
+ *  The branch is deliberately NARROW. It records what the RUNTIME OBSERVED about the process (which
+ *  runner, which version, what it exited with, when it was captured) and nothing the caller typed:
+ *  there is no `command`/`argv` field, because lane 2's arguments come from the caller and can carry a
+ *  resolved token or password, and CONTEXT.md:371 forbids resolved secret values in artifacts. An
+ *  immutable, checksummed artifact is the worst possible place to discover one. There is no `signal`
+ *  field either: a runner killed by a signal produced no trustworthy result, so the producer refuses
+ *  outright rather than recording a half-execution, and evidence for such a run never exists.
+ *
+ *  `additionalProperties: false` is what makes both of those absences ENFORCED rather than merely
+ *  conventional, and the `url`/`browser`/`build` rejections below are what prove this is a
+ *  discriminated THIRD case rather than a loophole that widens the existing two. */
+describe("evidence schema 3.0.0 (runner-report)", () => {
+  const runnerReport = {
+    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
+    subject: { kind: "observed-execution", executionId: "EXEC-1" },
+    kind: "runner-report", capturedAt: "2026-07-23T12:34:56.000Z",
+    sha256: "a".repeat(64), relativePath: "evidence/report.json", mediaType: "application/json",
+    binaryArtifactIds: ["binary-1"],
+    binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/report.json", sha256: "a".repeat(64), mediaType: "application/json" }],
+    provenance: { captureType: "runner-report", runner: "playwright", runnerVersion: "1.54.1", exitCode: 1, capturedAt: "2026-07-23T12:34:56.000Z" },
+  };
+
+  it("accepts a reporter-shaped evidence value", () => {
+    expect(validateArtifact("evidence", runnerReport).valid).toBe(true);
+  });
+
+  // The proof that the branch is a discriminated THIRD case: the very fields the other two REQUIRE are
+  // the ones this one forbids, so a runner report cannot be quietly widened into a browser capture.
+  it.each(["url", "browser", "build"] as const)("rejects a runner report that also declares %s", (field) => {
+    expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, [field]: "about:blank" } }).valid).toBe(false);
+  });
+
+  it.each(["dimensions", "dpr", "scroll", "clip", "viewport", "cssBoxes", "pixelBoxes", "locator", "annotationLabels"] as const)(
+    "rejects a runner report carrying screenshot geometry (%s)",
+    (field) => {
+      const geometry: Record<string, unknown> = { dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, viewport: { width: 1, height: 1 }, cssBoxes: [], pixelBoxes: [], locator: "#root", annotationLabels: ["label"] };
+      expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, [field]: geometry[field] } }).valid).toBe(false);
+    },
+  );
+
+  // The secret-leak guard, pinned as a test so a later contributor cannot "helpfully" add it back
+  // without this reddening first. See the block comment above and CONTEXT.md:371.
+  it.each(["command", "argv"] as const)("rejects a runner report recording what the caller typed (%s)", (field) => {
+    expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, [field]: ["npx", "playwright", "test"] } }).valid).toBe(false);
+  });
+
+  it.each(["captureType", "runner", "runnerVersion", "exitCode", "capturedAt"] as const)("rejects a runner report missing %s", (field) => {
+    const provenance: Record<string, unknown> = { ...runnerReport.provenance };
+    delete provenance[field];
+    expect(validateArtifact("evidence", { ...runnerReport, provenance }).valid).toBe(false);
+  });
+
+  it.each(["runner", "runnerVersion"] as const)("rejects an empty %s, which would name nothing at all", (field) => {
+    expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, [field]: "" } }).valid).toBe(false);
+  });
+
+  it("rejects a non-integer exit code, which no process ever returned", () => {
+    expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, exitCode: 1.5 } }).valid).toBe(false);
+  });
+
+  it("accepts exit code 0, so a fully passing observed execution is still evidenceable", () => {
+    expect(validateArtifact("evidence", { ...runnerReport, provenance: { ...runnerReport.provenance, exitCode: 0 } }).valid).toBe(true);
+  });
+
+  /** A SUBSET assertion, not a full-equality pin: `kind` gains `runner-report` and loses nothing, so
+   *  lane 1's five capture kinds (plus `evidence-gap`) must all still be members. A full-equality pin
+   *  is a test nobody updates; this one fails only for the drift that matters — a lane-1 kind quietly
+   *  disappearing behind lane 2's addition. */
+  it("adds runner-report to the kind vocabulary without removing any lane-1 kind", () => {
+    const kinds = (schemas.evidence as { properties: { kind: { enum: unknown[] } } }).properties.kind.enum;
+
+    expect(kinds).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "evidence-gap", "runner-report"]));
+  });
+
+  it("keeps the artifact-manifest captureType vocabulary a superset of every lane-1 capture type", () => {
+    const captureTypes = (schemas["artifact-manifest"] as { properties: { artifacts: { items: { properties: { captureType: { enum: unknown[] } } } } } })
+      .properties.artifacts.items.properties.captureType.enum;
+
+    expect(captureTypes).toEqual(expect.arrayContaining(["screenshot", "trace", "console", "network", "log", "runner-report"]));
+  });
+
+  // Lane 1 is unchanged by the third branch: each of the five still validates against the branch it
+  // always used. This is the other half of the subset pin above — the vocabulary keeps the members AND
+  // the shapes they name.
+  it.each(["trace", "console", "network", "log"] as const)("still accepts a lane-1 %s capture", (captureType) => {
+    expect(validateArtifact("evidence", {
+      ...runnerReport, kind: captureType,
+      subject: { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" },
+      provenance: { captureType, url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+    }).valid).toBe(true);
   });
 });
 

@@ -17,6 +17,7 @@ import {
   matchesEvidencePrimary,
   terminalStatuses,
   type ArtifactRecord,
+  type EvidenceCaptureType,
   type Manifest,
   type WorkspaceDiagnostic,
   type WorkspaceMetadata,
@@ -31,7 +32,7 @@ import { utcNow } from "./time.js";
 import { semanticRules, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
 import { isRecord } from "./values.js";
 
-export type { ArtifactRecord, WorkspaceDiagnostic } from "./artifact-record.js";
+export type { ArtifactRecord, EvidenceCaptureType, WorkspaceDiagnostic } from "./artifact-record.js";
 
 export type WorkspaceValidation = { valid: boolean; diagnostics: WorkspaceDiagnostic[] };
 export type RegisteredWorkspaceArtifact = Readonly<{ record: ArtifactRecord; value: Readonly<Record<string, unknown>> }>;
@@ -295,7 +296,7 @@ export class RunWorkspace {
     filename: string;
     contents: Uint8Array;
     mediaType: string;
-    captureType: "screenshot" | "trace" | "console" | "network" | "log";
+    captureType: EvidenceCaptureType;
     dimensions?: { width: number; height: number };
     relationships: string[];
     provenance?: string;
@@ -335,7 +336,7 @@ export class RunWorkspace {
       filename: string;
       contents: Uint8Array;
       mediaType: string;
-      captureType: "screenshot" | "trace" | "console" | "network" | "log";
+      captureType: EvidenceCaptureType;
       dimensions?: { width: number; height: number };
     }[];
     descriptor: (binaries: readonly ArtifactRecord[]) => unknown;

@@ -2,7 +2,7 @@
 
 export interface EvidenceItem {
   artifactType: "evidence";
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   producerVersion: string;
   evidenceId: string;
   runId: string;
@@ -18,7 +18,7 @@ export interface EvidenceItem {
         kind: "observed-execution";
         executionId: string;
       };
-  kind: "screenshot" | "trace" | "console" | "network" | "log" | "evidence-gap";
+  kind: "screenshot" | "trace" | "console" | "network" | "log" | "runner-report" | "evidence-gap";
   capturedAt: string;
   sha256: string;
   relativePath: string;
@@ -83,6 +83,22 @@ export interface EvidenceItem {
         capturedAt: string;
         testcaseId?: string;
         bugId?: string;
+      }
+    | {
+        captureType: "runner-report";
+        /**
+         * The external runner the runtime spawned and observed, e.g. "playwright".
+         */
+        runner: string;
+        /**
+         * The runner's own reported version, so the report's shape is auditable against the tool that wrote it.
+         */
+        runnerVersion: string;
+        /**
+         * The process exit code the runtime observed. An integer, including 0 — a fully passing observed execution is still evidenceable.
+         */
+        exitCode: number;
+        capturedAt: string;
       };
 }
 export interface Viewport {

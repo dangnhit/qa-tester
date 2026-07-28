@@ -37,7 +37,7 @@ export interface RunArtifactManifest {
     relativePath: string;
     sha256: string;
     mediaType?: string;
-    captureType?: "screenshot" | "trace" | "console" | "network" | "log";
+    captureType?: "screenshot" | "trace" | "console" | "network" | "log" | "runner-report";
     dimensions?: {
       width: number;
       height: number;

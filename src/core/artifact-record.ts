@@ -2,13 +2,29 @@ import type { ArtifactType, RunStatus } from "../contracts/types.js";
 import { artifactProfileVersion, type ArtifactProfileName } from "./artifact-profiles.js";
 import { isRecord } from "./values.js";
 
+/**
+ * What an evidence BINARY is a capture of. Kept as ONE exported type rather than re-spelled at each
+ * use site: this vocabulary is coupled to `evidence.schema.json`'s `kind` enum by
+ * `matchesEvidencePrimary` below, and it was previously written out as an identical literal union in
+ * three separate TypeScript declarations (`ArtifactRecord`, `registerBinaryArtifact`,
+ * `registerEvidenceBundle`) that every new capture type had to be added to in lockstep. Two schema
+ * copies remain by necessity (`evidence.schema.json`'s `kind`, `artifact-manifest.schema.json`'s
+ * `captureType`) and are pinned against each other by a subset assertion in
+ * `tests/contracts/validator.test.ts`.
+ *
+ * `runner-report` (evidence 3.0.0) is lane 2's: one raw JSON report for a whole Runtime-Observed
+ * Execution. It is deliberately the SAME token as the evidence `kind` and the provenance
+ * `captureType`, because `matchesEvidencePrimary` requires all three to be equal.
+ */
+export type EvidenceCaptureType = "screenshot" | "trace" | "console" | "network" | "log" | "runner-report";
+
 export type ArtifactRecord = {
   id: string;
   type: ArtifactType;
   relativePath: string;
   sha256: string;
   mediaType?: string;
-  captureType?: "screenshot" | "trace" | "console" | "network" | "log";
+  captureType?: EvidenceCaptureType;
   dimensions?: { width: number; height: number };
   provenance: string;
   relationships: string[];
@@ -52,7 +68,7 @@ export type WorkspaceDiagnostic = { code: string; message: string; relativePath?
  *  gating) and `semantic-rules.ts` (cleanup-run source-run immutability). */
 export const terminalStatuses = new Set<RunStatus>(["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"]);
 
-/** What an evidence record is *about* (evidence schema 2.0.0). `attempt` is lane 1 — a runtime-driven
+/** What an evidence record is *about* (evidence schema 3.0.0). `attempt` is lane 1 — a runtime-driven
  *  browser attempt bound to one canonical `test-result`. `observed-execution` is lane 2 — an externally
  *  observed Playwright execution, whose `executionId` is the identity field of the `test-result-batch`
  *  artifact; it binds no attempt and therefore no `test-result`. */
