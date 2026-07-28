@@ -27,9 +27,10 @@ export const runnerReportSanitizationPolicy = "qa-skills/observed-runner-report/
  * **The cost is real and is not hidden: a registered payload does not say WHY a test failed.** The
  * failure text, the error stack, the attachments and the captured stdio all go. What survives is what a
  * Coverage Obligation is credited from — which spec ran, under which project, with which status, at
- * which retry. The runner's verbatim report is still on disk in the runtime's temp working directory
- * for an operator to read; it is simply never registered, because an immutable checksummed artifact is
- * the worst possible place to discover a token.
+ * which retry. The runner's verbatim report is still on disk, in the `runnerWorkingDir` that
+ * `executeObservedPlaywright` returns and `qa-skill execute playwright` prints, so an operator can read
+ * it; it is simply never registered, because an immutable checksummed artifact is the worst possible
+ * place to discover a token.
  */
 export const removedRunnerReportFields: readonly string[] = [
   "config.argv",

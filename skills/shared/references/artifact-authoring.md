@@ -208,10 +208,15 @@ fields the obligation may carry. `browser` and `viewport` describe the browser s
 obligation has no engine and no geometry, and writing one in would put a value into a checksummed
 audit record that nothing ever measured.
 
-Author obligations on surfaces the runtime cannot execute. The QA Runtime drives only the `browser`
-surface, so an `api` or `manual` obligation is never satisfied today — that is the point. It is
-reported as **explicitly unmet** in the release gate (a `required` one blocks with `NOT_READY`, an
-optional one appears as a coverage gap), rather than being silently omitted from the run's record.
+Author obligations on every surface the requirement really needs, including ones this run will not
+execute. The QA Runtime drives `browser` itself and reaches every other surface except `manual`
+through a Runtime-Observed Execution (`qa-skill execute playwright` over a committed Playwright suite —
+see [observed execution](./observed-execution.md)); `manual` has no executor in either lane. The
+surfaces are deliberately not re-listed here: the enum above is this file's single listing, so it
+cannot drift from a second copy the way this sentence did when lane 2 landed. An obligation no execution covers is reported as **explicitly unmet** in the release gate
+(a `required` one blocks with `NOT_READY`, an optional one appears as a coverage gap), rather than
+being silently omitted from the run's record — and that stays true of a reachable surface that this
+particular run never observed.
 
 **`accessibilityMethod`** is an enum, not free text, and is required on both `coverage-obligation` and
 `test-case.coverage`. Write **`null`** — the common case — when the obligation names no accessibility

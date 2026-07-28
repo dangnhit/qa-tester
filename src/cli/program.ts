@@ -287,9 +287,14 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       // `OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR` joins that line as a containment denial of the same class as
       // `PATH_ESCAPE`/`SYMLINK_ESCAPE`: something executed outside the boundary the run is bounded by,
       // and its adversarial path is unreviewed code earning coverage credit.
+      // `OBSERVED_RUN_SPEC_LOCATION_UNKNOWN` sits beside it rather than on INVALID_INPUT because
+      // `assertExecutedSpecsAreAnchored` already treats the two identically — "could not prove it is
+      // inside" and "is outside" have the same consequence for the anchor — and because nothing about
+      // the invocation is malformed when a report arrives without the field that would place it.
       if (error.code === "LIVE_LOCK" || error.code === "SPEC_TREE_DIRTY") exitCode = ExitCode.BLOCKED;
       else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY"
-        || error.code === "OBSERVED_RUN_PRODUCTION_DENIED" || error.code === "OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR") exitCode = ExitCode.SAFETY_DENIED;
+        || error.code === "OBSERVED_RUN_PRODUCTION_DENIED" || error.code === "OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR"
+        || error.code === "OBSERVED_RUN_SPEC_LOCATION_UNKNOWN") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError && error.code === "commander.version") {
       exitCode = ExitCode.SUCCESS;

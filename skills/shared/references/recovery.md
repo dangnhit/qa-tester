@@ -120,9 +120,18 @@ A pause says "a person can fix this right now". It is deliberately **narrower** 
 unsatisfied", because pausing on something nobody can resolve would turn an honest verdict into an
 indefinite hang. None of the following pauses; each reaches the gate and is reported there:
 
-- **An Execution Surface no executor covers** (`api`, `unit`, `integration`, `performance`, `security`,
-  and `manual` without an accessibility method). No producer exists, so it stays explicitly unmet →
-  `NOT_READY`.
+- **An Execution Surface this run did not execute.** `api`, `unit`, `integration`, `performance` and
+  `security` are reachable — through a Runtime-Observed Execution (`qa-skill execute playwright`,
+  lane 2) — but reachable is not the same as run: an obligation on one of them stays unmet until a run
+  actually observes a spec tagged with that surface, and the runtime cannot write and merge that spec
+  for you. `manual` has no executor in either lane at all. Either way there is nothing a person can do
+  in the next minute that this run would then pick up, so it stays explicitly unmet → `NOT_READY`.
+- **A `manual` obligation declaring no accessibility method.** Nothing can satisfy it: no attempt is
+  ever produced on that surface, and no Human Attestation can bind it either — the attestation contract
+  admits only `keyboard`, `screen-reader` and `cognitive-manual`, and requires the obligation to declare
+  the same method → `NOT_READY`. An obligation that DOES declare one of those three is an Accessibility
+  Obligation and *does* pause — that is the attestation case above, and it turns on the method, not on
+  the surface, so it pauses on whatever surface the obligation names.
 - **`accessibilityMethod: "automated-analysis"`.** Only a machine-produced analysis could satisfy it and
   no scanner ships here; a person attesting to it is a category error the command itself refuses →
   `NOT_READY`.

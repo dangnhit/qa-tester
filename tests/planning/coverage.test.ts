@@ -200,6 +200,36 @@ describe("evaluateCoverage — accessibility obligations", () => {
     expect(evaluation.qualifyingAttemptIds).toEqual(["ATTEMPT-PASS"]);
   });
 
+  /**
+   * The `manual` SURFACE and the accessibility METHOD are separate axes, and conflating them put a
+   * false credit path into agent-facing documentation once already: `skills/browser-test-executor`
+   * claimed a `manual` obligation stays unmet "until a person records a Human Attestation".
+   *
+   * `satisfiedByAttestation` reads `accessibilityMethod` and never looks at the surface, and
+   * `matchesObligation` refuses every obligation carrying a method — so a `manual`-surface obligation
+   * with NO method is satisfiable by nothing at all, while one carrying a manual method is satisfiable
+   * by attestation for a reason that has nothing to do with its being `manual`.
+   */
+  it("never credits a manual-surface obligation that declares no accessibility method, attested or not", () => {
+    const manualObligation = { ...obligation, obligationId: "COV-SAVE-MANUAL", executionSurface: "manual" as const, browser: undefined, viewport: undefined };
+
+    const unattested = evaluateCoverage([manualObligation], [matchingAttempt()]);
+    const attested = evaluateCoverage([{ ...manualObligation, humanAttested: true }], [matchingAttempt()]);
+
+    expect(unattested.missing).toEqual(["COV-SAVE-MANUAL"]);
+    expect(attested.missing).toEqual(["COV-SAVE-MANUAL"]);
+    expect(attested.satisfied).toEqual([]);
+  });
+
+  it("credits an attested manual method on a non-browser surface, because the method decides and the surface does not", () => {
+    const apiKeyboard = { ...obligation, obligationId: "COV-SAVE-API-KEYBOARD", executionSurface: "api" as const, browser: undefined, viewport: undefined, accessibilityMethod: "keyboard", humanAttested: true };
+
+    const evaluation = evaluateCoverage([apiKeyboard], []);
+
+    expect(evaluation.satisfied).toEqual(["COV-SAVE-API-KEYBOARD"]);
+    expect(evaluation.missing).toEqual([]);
+  });
+
   it("does not credit a null-method obligation from an attestation alone", () => {
     // Defence in depth: no valid attestation can bind an obligation declaring no method (Task 34's
     // rule rejects it), so this record could only arise from a bug. It must still take an attempt.
@@ -210,11 +240,16 @@ describe("evaluateCoverage — accessibility obligations", () => {
   });
 });
 
-/** An obligation declares exactly one Execution Surface (CONTEXT.md:443). The runtime executes only
- *  the browser surface, so every other surface is authorable but unexecuted — and must therefore stay
- *  EXPLICITLY UNMET rather than quietly vanish (CONTEXT.md:445). */
+/** An obligation declares exactly one Execution Surface (CONTEXT.md:443). The runtime executes the
+ *  browser surface itself and reaches `api`, `unit`, `integration`, `performance` and `security`
+ *  through a Runtime-Observed Execution (CONTEXT.md:444, lane 2 since Phase 7) — but only when a run
+ *  actually observed a spec tagged with that surface. `manual` has no executor in either lane. An
+ *  obligation nothing executed must stay EXPLICITLY UNMET rather than quietly vanish (CONTEXT.md:445),
+ *  which is surface-independent and is what this block pins. */
 describe("evaluateCoverage — execution surfaces", () => {
-  /** A required obligation on a surface no executor covers: no engine, no geometry, by design. */
+  /** A required obligation on a non-browser surface: no engine, no geometry, by design. Lane 2 can
+   *  produce an `api` entry, so this is no longer a surface NOTHING can cover — but nothing covers it
+   *  in these evaluations, which is exactly the state each test below is about. */
   const apiObligation = {
     obligationId: "COV-SAVE-API",
     requirementId: "REQ-SAVE",

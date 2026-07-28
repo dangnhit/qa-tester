@@ -55,6 +55,20 @@ describe("portable QA skill bundle", () => {
   it("documents lane 2 against the exported constants rather than from memory", async () => {
     const reference = await readFile(resolve(root, "shared", "references", "observed-execution.md"), "utf8");
     const readme = await readFile(resolve(process.cwd(), "README.md"), "utf8");
+    // Every agent-facing document that enumerates Execution Surfaces. Landing lane 2 made two of them
+    // false at once — they still called all five "surfaces no executor covers" — so the surface list
+    // is pinned wherever it is written, not only where lane 2 is introduced. A sixth surface, or a
+    // surface leaving `observedEntrySurfaces`, now reddens every document that names the set.
+    const surfaceDocuments = {
+      "observed-execution.md": reference,
+      "README.md": readme,
+      "browser-test-executor/SKILL.md": await readFile(resolve(root, "browser-test-executor", "SKILL.md"), "utf8"),
+      "recovery.md": await readFile(resolve(root, "shared", "references", "recovery.md"), "utf8"),
+      "artifact-authoring.md": await readFile(resolve(root, "shared", "references", "artifact-authoring.md"), "utf8"),
+    };
+    for (const [name, document] of Object.entries(surfaceDocuments)) {
+      for (const surface of observedEntrySurfaces) expect(document, `${name} omits ${surface}`).toContain(`\`${surface}\``);
+    }
 
     for (const document of [reference, readme]) {
       expect(document).toContain("qa-skill execute playwright");
