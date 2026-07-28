@@ -2,6 +2,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { observedEntrySurfaces } from "../../src/observed/report-mapping.js";
+import { removedRunnerReportFields } from "../../src/observed/sanitize-report.js";
+
 const root = resolve(process.cwd(), "skills");
 const names = ["qa-tester", "requirement-analyzer", "testcase-designer", "test-data-manager", "browser-test-executor", "evidence-collector", "bug-reporter", "qa-report-generator"];
 // These four previously mislabelled a full `workflow scaffold` -> `workflow run` pipeline example
@@ -42,6 +45,31 @@ describe("portable QA skill bundle", () => {
     const qaTester = await readFile(resolve(root, "qa-tester", "SKILL.md"), "utf8");
     const powerShell = qaTester.slice(qaTester.indexOf("PowerShell:"));
     expect(powerShell).toContain("& $QaSkill workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json");
+  });
+
+  /**
+   * Lane 2's adapter document is the only place a spec author learns the tag format, and a producer no
+   * document mentions is unreachable in practice. These assertions pin the prose to the code it
+   * describes: the surfaces a batch entry may name, and the fields the registered evidence drops.
+   */
+  it("documents lane 2 against the exported constants rather than from memory", async () => {
+    const reference = await readFile(resolve(root, "shared", "references", "observed-execution.md"), "utf8");
+    const readme = await readFile(resolve(process.cwd(), "README.md"), "utf8");
+
+    for (const document of [reference, readme]) {
+      expect(document).toContain("qa-skill execute playwright");
+      expect(document).toContain("[qa:<testCaseId>/<revisionId>/<instanceId>@<surface>]");
+      for (const surface of observedEntrySurfaces) expect(document).toContain(`\`${surface}\``);
+      // Lane 2 producing no browser entry is a human ruling; a document that forgot to say so would
+      // leave a spec author tagging `browser` and discovering the refusal at run time.
+      expect(document).toMatch(/`browser` is refused|A spec tagged `browser`/);
+    }
+    // The reference is the document that CLAIMS to list every removal, so a field added to the code
+    // and forgotten here reddens. Matched as a backticked token ending in the field's leaf name, so
+    // `config.argv` satisfies `argv` while `errors` does not satisfy `error`.
+    for (const field of removedRunnerReportFields) {
+      expect(reference, field).toMatch(new RegExp(`\`[^\`]*\\b${field.split(".").at(-1) ?? field}\``));
+    }
   });
 
   it("never carries the literal unresolved SOURCE_RUN_ID placeholder as a bare command argument", async () => {

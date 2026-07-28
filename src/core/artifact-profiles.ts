@@ -16,10 +16,12 @@ export type ArtifactProfileEvaluation = { valid: boolean; diagnostics: ProfileDi
  * an observed batch structurally invalid — reporting an unmet obligation where the truth is that the
  * run was executed in the other lane.
  *
- * Deliberately NOT applied to `retest` or `regression`. Those profiles require a `test-result` because
- * their own artifacts bind to `attemptId`s (`retest-result.reproductionScenarios[].sourceAttemptArtifactId`,
- * and `selectRegressionCases`' attempt-keyed selection), and a batch entry has no attempt to bind to.
- * Extending either lane-2-ward is Phase 8's retest/regression work, not a line in this table.
+ * Deliberately NOT applied to `retest` or `regression`. `retest-result` binds every reproduction
+ * scenario to a `sourceAttemptArtifactId` and an `attemptId`, and a batch entry has neither — it is
+ * keyed by `entryId` precisely because no attempt was driven. `regression` is the weaker case (its
+ * selection keys on the test-case identity triple, not on attempts), but extending either lane-2-ward
+ * means deciding how an observed entry is re-executed and compared, which is Phase 8's retest and
+ * regression work rather than a line in this table.
  */
 const executionRecord = ["test-result", "test-result-batch"] as const;
 

@@ -7,6 +7,8 @@ description: Execute approved bounded browser Test DSL cases with fresh isolated
 
 Execution kind: runtime-backed. Read [browser adapters](../shared/references/agent-browser-adapters.md), [safety](../shared/references/safety.md), [artifact contracts](../shared/references/artifact-contracts.md), and [recovery](../shared/references/recovery.md). Invoke the runtime; do not drive a browser through arbitrary JavaScript, XPath, or untyped shell commands.
 
+This skill owns the **browser** Execution Surface only. Every other surface — `api`, `unit`, `integration`, `performance`, `security` — is reached by observing a committed external suite: see [observed execution](../shared/references/observed-execution.md) for `qa-skill execute playwright`, the in-spec identity tag it requires, and what the git anchor refuses. A spec tagged `browser` there is refused and sent back here, because a Playwright JSON report names neither the engine nor the viewport a browser result must record.
+
 Resolve `./node_modules/.bin/qa-skill` before `qa-skill` on `PATH`. Stop if neither is compatible; never use remote `npx`.
 
 Example — full-workflow run producing this skill's registered attempts:

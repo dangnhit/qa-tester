@@ -11,6 +11,8 @@ Resolve the compatible local runtime in this order: `./node_modules/.bin/qa-skil
 
 Create or open one run workspace. Keep drafts agent-authored and ingest them; let the runtime execute typed browser, evidence, defect, and report work. Validate before declaring completion.
 
+A run may be credited by either execution lane, or both. The runtime drives the browser itself; for any other Execution Surface it starts the project's own committed Playwright suite and records what it observed — see [observed execution](../shared/references/observed-execution.md). Never author a spec file and execute it in the same run: a Reviewed Test Suite earns coverage credit because a human merged it, and the runtime refuses a spec tree that differs from its commit.
+
 Example — full run:
 
 ```sh

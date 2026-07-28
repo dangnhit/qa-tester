@@ -107,9 +107,12 @@ function describeExcluded(excluded: readonly ExcludedSpec[]): string {
  * **Nothing is registered until everything maps.** The mapping runs before the first write, so a
  * refusal from it leaves a workspace with no half-written observation in it.
  *
- * Every failure is a `QaSkillsError`; the refusals that reach here from `runObservedPlaywright` and
- * `resolveGitAnchor` are re-thrown untouched, so their own messages — which name the offending paths —
- * reach the operator verbatim.
+ * Refusals from `resolveGitAnchor` and `runObservedPlaywright` are re-thrown untouched, so their own
+ * messages — which name the offending paths — reach the operator verbatim rather than being reworded
+ * by a second layer. This operation adds no catch-all of its own, and deliberately does not claim one:
+ * exactly like `validate`, `approval record` and `attestation record`, a `--root` that does not resolve
+ * surfaces as the raw filesystem error `RunWorkspace.open`'s `realpath` throws, which
+ * `src/cli/program.ts` maps to `ABORTED_OR_INTERNAL`.
  */
 export async function executeObservedPlaywright(input: ObservedPlaywrightExecutionInput): Promise<ObservedPlaywrightExecution> {
   const workspace = await RunWorkspace.open(input.root, input.runId);

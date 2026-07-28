@@ -48,8 +48,8 @@ const identityTagMarker = "[qa:";
 /**
  * The runner's per-EXECUTION statuses, and the only five `@playwright/test` 1.61 emits on a result.
  *
- * **A runner reports failure, never a cause.** CONTEXT.md:41-43 makes Failure Classification a
- * *diagnosis* ("the diagnosed source of a non-passing outcome"), while CONTEXT.md:38-39 makes Execution
+ * **A runner reports failure, never a cause.** CONTEXT.md:43-44 makes Failure Classification a
+ * *diagnosis* ("the diagnosed source of a non-passing outcome"), while CONTEXT.md:39-40 makes Execution
  * Status "the observed outcome of executing or scheduling a test case, **independent of its diagnosed
  * cause**". A reporter observes the outcome and diagnoses nothing, so every non-passing status maps to
  * `UNDETERMINED` and no mapping here can ever produce `PRODUCT_DEFECT` or `TEST_DEFECT`. `PASSED` pairs

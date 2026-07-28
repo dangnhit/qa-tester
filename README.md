@@ -73,6 +73,7 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
 | `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact; success has no stdout. |
+| `qa-skill execute playwright --root <path> --run-id <id> --spec-dir <path> [-- <runner args>]` | Start the project's own committed Playwright suite as a Runtime-Observed Execution and register one `test-result-batch` plus its sanitized runner report as evidence. Everything after `--` reaches the runner verbatim; `--reporter` and `--output` are runtime-owned and refused. |
 | `qa-skill approval record --root <path> --run-id <id> --plan-artifact-id <id> --approved-by <identity>` | Persist an immutable human approval bound to the exact pending plan checksum. |
 | `qa-skill attestation record --root <path> --run-id <id> --obligation-id <id> --method <keyboard\|screen-reader\|cognitive-manual> --attested-by <identity> --statement <text>` | Persist a person's immutable Human Attestation that a manual accessibility evaluation was carried out, bound to the exact obligation checksum. An agent cannot author one. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
@@ -130,6 +131,23 @@ qa-skill skills install --agent cursor --target project
 ```
 
 The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--target user` for the corresponding directory under the user home. The installation manifest binds the runtime command, real path, resolution source, version, and executable checksum; `skills verify` fails closed with a typed Runtime Binding status if any of that identity is missing, changed, or incompatible. After source updates, run `skills verify`, then `skills update`; never patch an installed copy directly.
+
+## Two execution lanes
+
+A test result satisfies a **Coverage Obligation** only when the QA Runtime observed the run that produced it.
+
+- **Lane 1** — the runtime drives the browser over a bounded Test DSL and registers one `test-result` per attempt.
+- **Lane 2** — `qa-skill execute playwright` starts your own committed Playwright suite, captures its exit status and JSON report, and registers one `test-result-batch` anchored to the commit and a checksum of the spec tree that ran.
+
+A result file handed to the runtime by any other route stays an **Agent Draft**: reportable, never coverage-crediting.
+
+Lane 2 identifies a spec by a tag in its `test(...)` title — `[qa:<testCaseId>/<revisionId>/<instanceId>@<surface>]` — which lives inside the spec tree, so the batch's own `specTreeSha256` covers it and whoever merged the spec reviewed it. The surface may be `api`, `unit`, `integration`, `performance` or `security`. **`browser` is refused**, with a message pointing back at lane 1: a browser result must record the engine and viewport it ran at, and a Playwright JSON report exposes neither. A spec with no tag, or one naming a test case the run never registered, is excluded and listed rather than silently dropped.
+
+The anchor is resolved **before** the runner starts, and a refusal from it means no process starts. A spec directory that is dirty relative to its commit — including untracked and **gitignored** files — is refused and exits `2`. Also refused, on `3`: a sparse checkout or an `--assume-unchanged` entry (both hide working-tree edits from the dirty check while their bytes would still enter the digest), a submodule or tracked symlink inside the spec directory, and a spec directory with no tracked files. In a real project a repository-root `--spec-dir` essentially always refuses, because `node_modules/` is ignored and therefore listed; point it at the directory holding your specs. Keep everything else out of that directory too — the runtime forces its own artifact directory and JSON report outside the repository, but it cannot move a path your own config or `globalSetup` writes to.
+
+The registered evidence is a **sanitized projection** of the reporter's output, never the report file the runner wrote: that file carries `config.argv` and, for an ordinary web project, `config.webServer.env`. The payload states its own removals, and the trade is explicit — the artifact records which spec ran and how it ended, not why it failed.
+
+`skills/shared/references/observed-execution.md` is the full adapter document.
 
 ## Environment and side-effect safety
 
