@@ -59,13 +59,35 @@ Refused, each naming the offending paths:
 - **A submodule or a tracked symlink** inside the spec directory — its contents are not covered by the digest, and following one out of the repository would fold in content no commit can reproduce.
 - **No tracked files** under the spec directory, no git repository, or no commit at `HEAD`.
 
-### The runner must stay inside `--spec-dir`
+### The report must place every spec inside `--spec-dir`
 
-**Every spec file the runner executed is checked against the anchored directory, and one outside refuses the whole run.** The anchor covers `--spec-dir` and nothing else, but the runner is not otherwise confined to it: `--config` reaches the runner verbatim like every other argument after `--`, and an ordinary `playwright.config` may simply declare a `testDir` broader than `--spec-dir`. Without the check, specs the spec-tree checksum never hashed — including files no human reviewed — would earn coverage credit under an anchor that claims to describe them.
+**Every spec file the runner's report names is checked against the anchored directory, and one outside refuses the whole run.** The anchor covers `--spec-dir` and nothing else, but the runner is not otherwise confined to it: `--config` reaches the runner verbatim like every other argument after `--`, and an ordinary `playwright.config` may simply declare a `testDir` broader than `--spec-dir`. Without the check, specs the spec-tree checksum never hashed — including files no human reviewed — would be reported as executed and earn coverage credit under an anchor that claims to describe them.
 
 The offending files are named. The usual cause is a `testDir` broader than `--spec-dir`, and the fix is to narrow the suite (a narrower `testDir`, or positional filters after `--`) or to point `--spec-dir` at the directory that really runs. Containment is judged on physical paths, so `specs2/` does not satisfy `specs/` and a symlink out of the tree does not either. The offending entries are not merely dropped: the anchor is a statement about the execution as a unit, so one unanchored spec falsifies it for every entry. Nothing is registered when this refuses.
 
-Two consequences worth planning for. Your spec directory must hold spec sources only: anything a run leaves under it — `test-results/`, `playwright-report/`, an `.auth/` storage state — makes every later run refuse. The runtime forces the runner's own artifact directory and JSON report outside the repository so its output cannot do that, but it cannot move a path your own config or `globalSetup` writes to; point those outside the spec directory yourself. And the anchor covers files, not the import graph: a tracked spec that imports a helper from outside the spec directory still executes code the digest does not cover.
+### The anchor must still hold when the runner exits
+
+**The anchor is resolved a second time after the runner exits, and a run whose spec tree moved underneath it is refused.** The first resolution is a snapshot taken before anything is spawned; nothing re-reads the tree until the process is gone. In between, code the anchor does not cover has write access to it — a `globalTeardown`, a `globalSetup`, a config-level `process.on("exit")` hook — so bytes can change while `specTreeSha256` still records the bytes that were there before. Two shapes, one refusal: the second resolution simply refuses (the ordinary case: the write leaves the tree dirty), or it succeeds with a different `commitSha`/`specTreeSha256` (the run committed its own change, so the dirty check would see nothing at all).
+
+This one is a containment denial, not housekeeping, and exits `4` rather than the `2` a dirty tree exits before a run: re-running unchanged does not clear it. It also means a run that writes into its own spec directory fails immediately instead of only poisoning the next one — see the consequences below.
+
+What it does not catch, said plainly: an edit applied and reverted inside the same run leaves both snapshots equal.
+
+### What lane 2 proves, and what it does not
+
+Read this before you describe lane 2 to anyone.
+
+The runtime resolves the runner binary itself, pins the reporter, spawns the process, captures its exit status and output, and re-checks the anchor. That is the whole `runtime-observed` claim, and it is what separates a batch from a report file an agent hands over.
+
+**The per-spec results, however, are read out of the JSON report that same process wrote.** The runtime tells the runner where to write it and reads back whatever is at that path; there is no signature, no nonce and no integrity check, because the reporter that writes the file is a module loaded inside the process being observed. Everything else loaded there is outside the anchor too — `playwright.config`, a `--config` after `--`, `globalSetup`/`globalTeardown`, fixtures, every helper any of them imports — none of it is under `--spec-dir`, none of it is in `specTreeSha256`, none of it has to be committed at all, and all of it runs with the runtime's trust. A config that installs an exit hook over the report file can turn a failing anchored spec into a passing entry, and every check that reads the report accepts it, because everything they read is what that hook wrote. The two anchor checks do not fire on it either — they read git, and a forged report leaves the spec tree untouched.
+
+So: a batch binds a committed, human-merged spec tree — proven unchanged across the run — to an execution this runtime started and whose exit it saw. It does not certify that those bytes, and only those, produced each recorded status. That is inherent to observing an external runner rather than interpreting it, and it is stated here rather than implied away. Do not describe lane 2 as proving that the anchored specs are what ran.
+
+### Two consequences worth planning for
+
+Your spec directory must hold spec sources only: anything a run leaves under it — `test-results/`, `playwright-report/`, an `.auth/` storage state — refuses the run that wrote it and every run after. The runtime forces the runner's own artifact directory and JSON report outside the repository so its output cannot do that, but it cannot move a path your own config or `globalSetup` writes to; point those outside the spec directory yourself.
+
+And the anchor covers files, not the import graph: a tracked spec that imports a helper from outside the spec directory still executes code the digest does not cover.
 
 ## What the run records
 

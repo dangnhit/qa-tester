@@ -165,6 +165,36 @@ describe("a QA Run credited entirely by an observed batch", () => {
   }, 180_000);
 });
 
+describe("a spec tree the observed process changes while it is running", () => {
+  it("refuses the run and registers nothing, because the anchor no longer describes what is on disk", async () => {
+    // `globalTeardown` is the honest way to produce this: it is committed, it is real Playwright
+    // machinery, and it is OUTSIDE `--spec-dir` — so the anchor never covered it, the dirty check never
+    // saw it, and it nonetheless runs with write access to the tree the anchor certifies. The pre-spawn
+    // anchor is taken before it runs; only re-resolving afterwards can see what it did.
+    const root = await newProject("teardown-mutation", {
+      ".gitignore": ignored,
+      "playwright.config.js": "export default { testDir: './specs', globalTeardown: './teardown.js' };\n",
+      // Relative to the runner's cwd, which the QA Runtime pins to the project root.
+      "teardown.js": "import { writeFileSync } from 'node:fs';\nexport default function globalTeardown() {\n  writeFileSync('specs/planted.spec.js', '// written while the run was in progress\\n');\n}\n",
+      "specs/ledger.spec.js": spec("the ledger balances"),
+    });
+    const runId = await newRun(root);
+
+    const executed = await runCli(["execute", "playwright", "--root", root, "--run-id", runId, "--spec-dir", "specs", "--", "--workers=1"], { cwd: root });
+
+    expect(executed.exitCode).toBe(ExitCode.SAFETY_DENIED);
+    expect(executed.stderr).toContain("planted.spec.js");
+    expect(executed.stderr).toContain("no longer matches the git anchor");
+    expect(executed.stdout).toBe("");
+    // The teardown really did run — otherwise this test would pass with the check deleted, on a run
+    // that simply failed for some other reason.
+    await expect(access(join(root, "specs", "planted.spec.js"))).resolves.toBeUndefined();
+    const registered = await registeredTypes(root, runId);
+    expect(registered).not.toContain("test-result-batch");
+    expect(registered).not.toContain("evidence");
+  }, 180_000);
+});
+
 describe("a runner that strays outside the anchored spec directory", () => {
   it("refuses a caller-supplied --config whose testDir points at unreviewed specs, and registers nothing", async () => {
     // `specs/` is committed and clean, so the anchor resolves; `agent/` and its config are gitignored,

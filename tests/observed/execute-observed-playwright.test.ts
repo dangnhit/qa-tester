@@ -83,8 +83,12 @@ type Spy = { readonly calls: RunnerInvocation[]; readonly execute: RunnerExecuto
 
 /** Writes the report where the runtime told the runner to put it, so the seam exercises the same
  *  file-reading path a real run does, and records every invocation so a refusal test can assert the
- *  runner was never started rather than only that the call threw. */
-function spy(report: string | undefined, exitCode = 0): Spy {
+ *  runner was never started rather than only that the call threw.
+ *
+ *  `duringRun` runs inside the observed process's own window — after the runtime resolved the anchor and
+ *  spawned, before the producer sees an exit. That is the only place a `globalTeardown`, a `globalSetup`
+ *  or a config-level exit hook can act, so it is where a test has to act to reproduce one. */
+function spy(report: string | undefined, exitCode = 0, duringRun?: () => Promise<void>): Spy {
   const calls: RunnerInvocation[] = [];
   return {
     calls,
@@ -95,6 +99,7 @@ function spy(report: string | undefined, exitCode = 0): Spy {
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, report);
       }
+      if (duringRun !== undefined) await duringRun();
       return { exitCode, signal: null, stdout: "", stderr: "" };
     },
   };
@@ -342,6 +347,58 @@ describe("executeObservedPlaywright anchored-spec containment", () => {
 
     expect(refusal.code).toBe("OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR");
     expect(refusal.message).toContain("no file");
+  }, 60_000);
+});
+
+describe("executeObservedPlaywright anchor re-verification", () => {
+  it("refuses when the spec tree was changed while the runner was running, and registers nothing", async () => {
+    const built = await fixture();
+    // What an unanchored `globalTeardown` does: the pre-spawn anchor hashed the committed spec bytes,
+    // and by the time the runner exits the tree on disk is not the tree that was hashed.
+    const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
+      await writeFile(join(built.root, "specs", "planted.spec.js"), "// written while the runner was running\n");
+    });
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
+    expect(refusal.message).toContain("planted.spec.js");
+    expect(runner.calls).toHaveLength(1);
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+    expect(await registeredOfType(built, "evidence")).toHaveLength(0);
+  }, 60_000);
+
+  it("refuses a mutation the run committed on its way out, where the tree is clean but the anchor moved", async () => {
+    const built = await fixture();
+    // The dirty check cannot see this one: the tree is spotless afterwards. Only comparing the anchor
+    // against the pre-spawn value catches it, so this is the case that pins the comparison itself.
+    const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
+      await writeFile(join(built.root, "specs", "planted.spec.js"), "// committed while the runner was running\n");
+      await git(built.root, "add", "-A");
+      await git(built.root, "commit", "-q", "-m", "planted");
+    });
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
+    expect(refusal.message).toContain("commitSha");
+    expect(refusal.message).toContain("specTreeSha256");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+  }, 60_000);
+
+  it("registers the run when the spec tree is untouched, so the re-check costs a clean run nothing", async () => {
+    const built = await fixture();
+    // The companion to the two above: the re-check must not refuse a run that changed nothing. A file
+    // written OUTSIDE the anchored directory is the ordinary case — the runtime forces the runner's own
+    // artifacts there deliberately — and the anchor covers `specs/` alone, so it stays legal.
+    const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
+      await writeFile(join(built.root, "runner-noise.txt"), "written outside the anchored directory\n");
+    });
+
+    const execution = await executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute });
+
+    expect(execution.entryCount).toBe(1);
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(1);
   }, 60_000);
 });
 

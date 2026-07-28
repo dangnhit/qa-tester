@@ -142,9 +142,17 @@ function byPathBytes(left: TrackedEntry, right: TrackedEntry): number {
  *   both the check and the digest, which is a one-run way to smuggle an unreviewed executable spec
  *   into a tree the anchor then certifies as clean (CONTEXT.md:345). The cost of closing it is that
  *   a runner writing its artifacts under `specDir` makes every later run refuse.
- * - **The anchor covers files, not the import graph.** A tracked spec that imports a helper from
- *   outside `specDir`, or an ignored one, still executes code this digest does not cover. Known, and
- *   deliberately not closed here.
+ * - **The anchor covers files, not the code that runs, and the gap is wider than "some code is
+ *   uncovered".** A tracked spec that imports a helper from outside `specDir`, or an ignored one, is
+ *   the small case. The larger one is that a Runtime-Observed Execution reads its result out of a
+ *   report the observed process itself writes, and every module deciding what goes in that report —
+ *   the runner's own `playwright.config`, a caller-supplied `--config`, `globalSetup`/`globalTeardown`,
+ *   fixtures — lives outside `specDir` by construction and has no entry in this digest. So unanchored
+ *   code does not merely run alongside the anchored bytes: it can determine, or simply author, the
+ *   result this anchor ends up attached to. **What this value states is which bytes stood in the spec
+ *   tree when it was computed, provably equal to the commit it is recorded beside; it cannot state that
+ *   those bytes are what produced a result.** Known, deliberately not closed here, and set out in full
+ *   — with the one half that IS closable — on `src/operations/execute-observed-playwright.ts`.
  *
  * Every failure is a `QaSkillsError`; no raw error escapes.
  */
@@ -154,8 +162,8 @@ export async function resolveGitAnchor(request: GitAnchorRequest): Promise<GitAn
   } catch (error: unknown) {
     if (error instanceof QaSkillsError) throw error;
     // A structural guarantee, not a classifier: a caller of a module whose whole contract is "refuse
-    // cleanly" must never receive a raw Error, which src/cli/program.ts:265-267 maps to
-    // ABORTED_OR_INTERNAL rather than to a refusal.
+    // cleanly" must never receive a raw Error, which the final `else` of `src/cli/program.ts`'s error
+    // mapping maps to ABORTED_OR_INTERNAL rather than to a refusal.
     throw new QaSkillsError(`Unable to resolve the git anchor for ${request.specDir}: ${describeFailure(error)}`, "GIT_ANCHOR_FAILED");
   }
 }

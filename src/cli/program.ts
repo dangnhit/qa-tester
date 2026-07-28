@@ -291,10 +291,17 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       // `assertExecutedSpecsAreAnchored` already treats the two identically — "could not prove it is
       // inside" and "is outside" have the same consequence for the anchor — and because nothing about
       // the invocation is malformed when a report arrives without the field that would place it.
+      // `OBSERVED_RUN_ANCHOR_CHANGED` is SAFETY_DENIED rather than BLOCKED even though its commonest
+      // cause is a tree that `SPEC_TREE_DIRTY` would call blocked BEFORE a run. The difference is who
+      // did it: before the run a dirty tree is an external condition the operator clears by committing
+      // or reverting, and nothing has run; after the run it means the process being observed wrote into
+      // the tree whose checksum certifies it, which is the same containment violation as
+      // `OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR` reached from the other side. Re-running unchanged would not
+      // clear it, which is the practical test for BLOCKED and it fails.
       if (error.code === "LIVE_LOCK" || error.code === "SPEC_TREE_DIRTY") exitCode = ExitCode.BLOCKED;
       else if (error.code === "PATH_ESCAPE" || error.code === "SYMLINK_ESCAPE" || error.code === "INSTALLER_SAFETY"
         || error.code === "OBSERVED_RUN_PRODUCTION_DENIED" || error.code === "OBSERVED_RUN_SPEC_OUTSIDE_ANCHOR"
-        || error.code === "OBSERVED_RUN_SPEC_LOCATION_UNKNOWN") exitCode = ExitCode.SAFETY_DENIED;
+        || error.code === "OBSERVED_RUN_SPEC_LOCATION_UNKNOWN" || error.code === "OBSERVED_RUN_ANCHOR_CHANGED") exitCode = ExitCode.SAFETY_DENIED;
       else exitCode = ExitCode.INVALID_INPUT;
     } else if (error instanceof CommanderError && error.code === "commander.version") {
       exitCode = ExitCode.SUCCESS;

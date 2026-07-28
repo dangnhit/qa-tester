@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 
 import { QaSkillsError } from "../core/errors.js";
 import { assertRealpathWithin } from "../core/fs.js";
+import { resolveGitAnchor, type GitAnchor } from "../core/git-anchor.js";
 import { createEntityId } from "../core/ids.js";
 import { RunWorkspace, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { array, isRecord } from "../core/values.js";
@@ -87,7 +88,63 @@ function describeExcluded(excluded: readonly ExcludedSpec[]): string {
 }
 
 /**
- * **Refuses an execution that ran any spec the git anchor does not describe.**
+ * **Re-resolves the git anchor after the runner exits and refuses if it moved.**
+ *
+ * `runObservedPlaywright` resolves the anchor before it spawns, and nothing between that resolution and
+ * the process's exit re-reads the spec tree. Meanwhile the runner loads code the anchor does not cover
+ * and cannot cover — the project's own `playwright.config`, a `--config` passed after `--`,
+ * `globalSetup`/`globalTeardown`, fixtures, every helper any of them imports — and that code runs with
+ * write access to the working tree. A `globalTeardown` that writes into the anchored directory, or a
+ * config-level `process.on("exit")` hook that does, changes the bytes on disk while `specTreeSha256`
+ * still records the bytes that were there before. The batch would then carry an anchor describing a tree
+ * that is not the tree standing at the end of the run.
+ *
+ * So the anchor is resolved a second time and compared. Two shapes of failure, one refusal:
+ *
+ * - **The second resolution refuses.** The likelier shape by far, because the ordinary mutation —
+ *   writing a file into the spec directory — leaves the tree dirty, and `resolveGitAnchor` refuses a
+ *   dirty tree outright rather than returning a different digest. Its refusal is quoted, but its code is
+ *   NOT reused: `SPEC_TREE_DIRTY` before the run is an external condition a person clears by committing
+ *   or reverting, and it exits `BLOCKED` for exactly that reason. The same words after the run mean the
+ *   observed process wrote into the tree that certifies it, which is a containment violation and not the
+ *   operator's housekeeping.
+ * - **The second resolution succeeds with different values.** Reachable when the run leaves the tree
+ *   clean again — a teardown that commits its own change is the honest example. Nothing else on this
+ *   path can see that case at all.
+ *
+ * **What this does not catch, stated because the point of the check is not to overclaim.** It compares
+ * two snapshots and sees only a difference that survives to the second one: code that edits a spec,
+ * runs it, and restores the original bytes before the process exits leaves both anchors equal. Nor does
+ * it say anything about the unanchored code itself, which ran either way. What it closes is the one
+ * half that is closable — the anchor can no longer certify a tree that visibly changed underneath it.
+ * The other half is {@link assertExecutedSpecsAreAnchored}'s to disclose.
+ */
+async function assertAnchorSurvivedTheRun(root: string, specDir: string, before: GitAnchor): Promise<void> {
+  const preamble = `The spec tree at ${specDir} no longer matches the git anchor this run recorded before the ${runnerLabel} runner started`;
+  const consequence = `A ${runnerLabel} run loads code the anchor does not cover — your playwright.config, a --config after --, globalSetup/globalTeardown and every helper they import — and that code can write to the spec tree while the run is in progress. `
+    + `A batch's commitSha and specTreeSha256 are immutable once written, so an anchor the QA Runtime can no longer stand behind is refused rather than recorded. Nothing was registered.`;
+
+  let after: GitAnchor;
+  try {
+    after = await resolveGitAnchor({ projectRoot: root, specDir });
+  } catch (error: unknown) {
+    throw new QaSkillsError(
+      `${preamble}: it resolved cleanly before the run and cannot be resolved at all now. ${consequence}\nThe second resolution refused with:\n`
+      + (error instanceof Error ? error.message : String(error)),
+      "OBSERVED_RUN_ANCHOR_CHANGED",
+    );
+  }
+
+  const moved = [
+    ...(after.commitSha === before.commitSha ? [] : [`commitSha ${before.commitSha} -> ${after.commitSha}`]),
+    ...(after.specTreeSha256 === before.specTreeSha256 ? [] : [`specTreeSha256 ${before.specTreeSha256} -> ${after.specTreeSha256}`]),
+  ];
+  if (moved.length === 0) return;
+  throw new QaSkillsError(`${preamble}, and the tree is clean at the new value, so nothing else would have noticed:\n${moved.map((change) => `- ${change}`).join("\n")}\n${consequence}`, "OBSERVED_RUN_ANCHOR_CHANGED");
+}
+
+/**
+ * **Refuses an execution whose report names any spec file the git anchor does not describe.**
  *
  * The anchor is computed over `--spec-dir` alone, but nothing constrains the runner to that directory:
  * `runObservedPlaywright` refuses only `--reporter` and `--output`, so a caller's `--config` reaches
@@ -97,11 +154,35 @@ function describeExcluded(excluded: readonly ExcludedSpec[]): string {
  * because it lives inside the anchored, reviewed tree — a spec outside it could earn coverage credit
  * having been reviewed by nobody. That is CONTEXT.md:344-345 with no other refusal in the way.
  *
- * **Every executed spec is checked, and one failure refuses the whole execution.** Not excluding the
- * offenders: excluding would still register a batch whose `specTreeSha256` claims to describe the tree
- * that ran while something outside it also ran. The anchor is a statement about the execution as a
- * unit, so one unanchored spec falsifies it for all of them — and nothing has been registered at this
- * point, so refusing costs no partial state.
+ * **Every spec file the report names is checked, and one failure refuses the whole execution.** Not
+ * excluding the offenders: excluding would still register a batch whose `specTreeSha256` claims to
+ * describe the tree that ran while something outside it also ran. The anchor is a statement about the
+ * execution as a unit, so one unanchored spec falsifies it for all of them — and nothing has been
+ * registered at this point, so refusing costs no partial state.
+ *
+ * **BOTH SIDES OF THIS CHECK COME FROM THE OBSERVED PROCESS, AND THAT BOUND IS NOT CLOSABLE HERE.** The
+ * file list is each `spec.file` in the report's nested `suites` tree, and the directory those names are
+ * resolved against is the report's own `config.rootDir`. `runObservedPlaywright` hands the runner a
+ * `PLAYWRIGHT_JSON_OUTPUT_FILE` path and reads back whatever is at that path once the process exits; it
+ * applies no signature, no nonce and no integrity check, because there is nothing to check one against
+ * — the reporter that writes that file is a module loaded inside the process being observed. Everything
+ * else loaded inside that process is unanchored too: the project's `playwright.config`, a `--config`
+ * after `--`, `globalSetup`/`globalTeardown`, fixtures, and every helper any of them imports. A config
+ * carrying `process.on("exit", …)` that rewrites the report file can therefore hand this check a report
+ * in which a genuinely failing anchored spec is described as having passed, under a `config.rootDir`
+ * inside the anchored directory — and this check passes it, because everything it reads is what that
+ * hook wrote.
+ *
+ * **So state what is enforced, in the terms it is actually enforced in.** This refuses an execution
+ * whose *report* places a spec outside `--spec-dir`. That is worth having and is not a formality: it is
+ * what stops an ordinary project whose `testDir` is broader than `--spec-dir` from crediting files
+ * `specTreeSha256` never hashed, and what stops a caller-supplied `--config` aimed at an unreviewed
+ * tree from doing it deliberately — the accident, and the adversary that does not go to the trouble of
+ * forging a report. It is not a proof about the execution. The anchor proves which bytes a human
+ * committed and merged, and {@link assertAnchorSurvivedTheRun} proves those bytes were still standing
+ * when the runner exited; no check anywhere on this path proves that those bytes, and only those,
+ * produced the recorded result. That is the shape of observing an external runner rather than
+ * interpreting it, which is why it is disclosed here rather than implied away.
  *
  * Containment is `assertRealpathWithin`'s, not a string prefix: `specs2/` must not satisfy `specs/`,
  * and a symlink out of the anchored directory must not either. Anything that cannot be placed — a
@@ -180,15 +261,31 @@ function runnerWorkingDirOf(report: PlaywrightJsonReport): string | undefined {
  * — the provenance both coverage readers gate credit on. A report file handed to the runtime by any
  * other route stays an Agent Draft and credits nothing (CONTEXT.md:341-342).
  *
+ * **What `runtime-observed` claims here, and what it does not — stated so no reader infers wider.** The
+ * runtime resolved the runner binary itself, pinned the reporter, spawned the process, captured its exit
+ * status and output, and re-checked the anchor afterwards. That is the provenance claim, and it is the
+ * whole of what separates lane 2 from a report file an agent hands over. The *results* are then read out
+ * of the JSON report that same process wrote, and the code that process loads is outside the anchor and
+ * cannot be brought inside it: `playwright.config`, a `--config` after `--`,
+ * `globalSetup`/`globalTeardown`, fixtures and every helper any of them imports all live outside
+ * `--spec-dir`, are absent from `specTreeSha256`, and run with the runtime's trust. So what a batch
+ * registered here binds is a committed, human-merged spec tree — proven unchanged across the run — to an
+ * execution this runtime started and whose exit it saw. It does not certify that those anchored bytes,
+ * and only those, produced each recorded status. Report authorship is not closable while the runtime
+ * observes an external runner rather than interpreting it, which is exactly why it is written down
+ * instead of being left to be discovered. {@link assertExecutedSpecsAreAnchored} sets out the mechanics.
+ *
  * **What each artifact says, and what it deliberately does not:**
  *
  * - The batch's `commitSha` and `specTreeSha256` come from `resolveGitAnchor`, which ran BEFORE the
  *   process started; a spec tree that differs from its commit produces no observed execution at all
- *   (CONTEXT.md:344). **And what ran is checked against what the anchor covers** — see
- *   {@link assertExecutedSpecsAreAnchored}, without which a caller's `--config`, or an ordinary project
- *   whose `testDir` is broader than `--spec-dir`, would credit coverage from files the checksum never
- *   hashed. No entry names an `observedEngine` or a `viewport`, because no entry names the `browser`
- *   surface: `mapObservedReport` refuses one, and the schema forbids both fields elsewhere.
+ *   (CONTEXT.md:344). The same anchor is resolved again AFTER the runner exits and refused if it moved
+ *   ({@link assertAnchorSurvivedTheRun}), so a run that rewrote the tree certifying it registers
+ *   nothing. And the report's account of what it ran is checked against what the anchor covers
+ *   ({@link assertExecutedSpecsAreAnchored}), without which a caller's `--config`, or an ordinary
+ *   project whose `testDir` is broader than `--spec-dir`, would credit coverage from files the checksum
+ *   never hashed. No entry names an `observedEngine` or a `viewport`, because no entry names the
+ *   `browser` surface: `mapObservedReport` refuses one, and the schema forbids both fields elsewhere.
  * - The evidence carries `sanitizeRunnerReport`'s projection, not the report file the runner wrote. The
  *   descriptor's `sha256` is therefore the checksum of what was registered — the file on disk still
  *   holds `config.argv` and, for an ordinary web project, `config.webServer.env`, and registering it
@@ -231,7 +328,13 @@ export async function executeObservedPlaywright(input: ObservedPlaywrightExecuti
       projectRoot: input.root, specDir: input.specDir, args: input.args, environment,
       ...(input.execute === undefined ? {} : { execute: input.execute }),
     });
-    // Before the report is interpreted at all: did the runner stay inside the tree the anchor covers?
+    // Two containment questions, in this order, both before the report is interpreted and both before
+    // anything is written. First: does the anchor still describe the tree on disk? It goes first
+    // because it is answered from git rather than from the report — a pass from the second check is a
+    // statement about a directory whose contents the anchor may by then no longer describe, so the
+    // weaker evidence must not be what the operator is handed as the cause.
+    await assertAnchorSurvivedTheRun(input.root, input.specDir, run.anchor);
+    // Second: does the report place every spec it names inside that same tree?
     await assertExecutedSpecsAreAnchored(input.root, input.specDir, run.report);
     const mapped = mapObservedReport(run.report, cases);
     if (mapped.entries.length === 0) {
