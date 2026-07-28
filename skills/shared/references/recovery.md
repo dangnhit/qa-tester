@@ -179,7 +179,7 @@ claim, not a verified pass).
 
 Every artifact declares a `schemaVersion`, and the runtime validates against exactly one version per
 artifact type. When a schema takes a breaking change its `schemaVersion` is bumped (for example
-`evidence` went `1.0.0` → `2.0.0`), and artifacts written by an older version of the package stop
+`evidence` went `2.0.0` → `3.0.0`), and artifacts written by an older version of the package stop
 validating. Reopening such a run reports validation diagnostics rather than silently accepting a shape
 the current contract no longer describes.
 
@@ -199,7 +199,7 @@ a third and fourth way — the read-path check in `src/core/semantic-rules.ts` a
 `possibleDuplicateSources` and read its registered artifacts to verify the reference.
 `readRegisteredArtifacts()` (`src/core/run-workspace.ts`) throws on **any** diagnostic in the run it
 reads — not only on the specific artifact a caller wanted — so if that other run contains even one
-`evidence` artifact written before the `2.0.0` bump, all four of these flows fail, and they fail while
+`evidence` artifact written before the `3.0.0` bump, all four of these flows fail, and they fail while
 acting on the *other* run, not the one you asked to open. Since any run that has actually executed and
 captured evidence writes `evidence` artifacts, this means a source run from before the bump is
 permanently unusable as a retest target, a regression baseline, or a duplicate-comparison source. The
@@ -212,7 +212,7 @@ no longer validates," not as a problem with the run you just opened. "Start a ne
 this: the new run reads fine, but the bug it would retest, or the baseline it would import, stays locked
 behind the old-schema source. The only remedy is to **re-execute the linked source run under the current
 package version** so
-it writes fresh `evidence` at `2.0.0`, then retest, regress, or compare against that new run instead.
+it writes fresh `evidence` at `3.0.0`, then retest, regress, or compare against that new run instead.
 
 **A bootstrap bundle is not exempt — it is now the most likely thing to break.** A source run created by
 `qa-skill workflow bootstrap` (a `plan`-mode run) never registers `evidence`, so the `evidence` story

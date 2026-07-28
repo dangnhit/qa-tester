@@ -618,7 +618,7 @@ const incidentRule: SemanticRule = {
         : attempt?.failureClassification === "UNDETERMINED" ? "INVESTIGATION_FINDING" : undefined;
     // The attempt equality was one conjunct of each `.some(...)` below and is now carried by the bucket,
     // so the residual predicate keeps only the id and run-scope conjuncts. Evidence claims its attempt
-    // inside its `subject` union (schema 2.0.0), hence `evidenceAttemptId` as that index's key.
+    // inside its `subject` union (since schema 2.0.0), hence `evidenceAttemptId` as that index's key.
     const evidenceForAttempt = indexByAttemptId(ctx.relatedOfType("evidence"), (candidate) => evidenceAttemptId(candidate.value)).get(value.attemptId);
     const gapsForAttempt = indexByAttemptId(ctx.relatedOfType("evidence-gap"), attemptIdOf).get(value.attemptId);
     const validEvidence = Array.isArray(value.evidenceIds) && value.evidenceIds.length > 0 && value.evidenceIds.every((id) => evidenceForAttempt.some((candidate) => candidate.value?.evidenceId === id && candidate.value?.runId === ctx.runId));
