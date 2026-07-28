@@ -214,8 +214,11 @@ function describeFailure(error: unknown): string {
  * **A refusal quotes the runner's stderr, bounded.** A project whose `playwright.config.ts` fails to
  * load exits non-zero having written no report, and that is the most ordinary failure on this path; a
  * refusal that said only "wrote no JSON report at /var/folders/…" would discard the one thing that
- * explains it. So the first {@link maxQuotedStderrChars} characters of stderr are quoted in the
- * no-report refusals. **That bound is a length, not a redaction** — runner output can echo an
+ * explains it. So the first {@link maxQuotedStderrChars} characters of stderr are quoted in **every
+ * refusal raised after the process ran** — the three no-report refusals and the signal death, which
+ * fires before the report is read and fires even when a valid report exists. This sentence discloses
+ * where a secret can surface, so it names every such place rather than the common one.
+ * **That bound is a length, not a redaction** — runner output can echo an
  * environment, and a runner that prints a secret to stderr puts it in the refusal message. The trade is
  * deliberate and narrow: a refusal message is operator-facing diagnostic text on the error path, not an
  * immutable artifact, and this module writes no artifact at all. Output is deliberately *not* added to
@@ -324,13 +327,13 @@ async function startRunner(execute: RunnerExecutor, invocation: RunnerInvocation
   }
 }
 
-/** Quotes the tail of the runner's stderr for a refusal message, or nothing when it said nothing. The
+/** Quotes the head of the runner's stderr for a refusal message, or nothing when it said nothing. The
  *  bound is on length only — see the guarantee stated on `runObservedPlaywright`. */
 function quotedStderr(output: RunnerOutput): string {
   const trimmed = output.stderr.trim();
   if (trimmed.length === 0) return "";
-  const head = trimmed.length > maxQuotedStderrChars ? `${trimmed.slice(0, maxQuotedStderrChars)}…` : trimmed;
-  return `\nThe runner's first ${maxQuotedStderrChars} characters of stderr follow, which is where the cause normally is:\n${head}`;
+  if (trimmed.length <= maxQuotedStderrChars) return `\nThe runner's stderr follows, which is where the cause normally is:\n${trimmed}`;
+  return `\nThe first ${maxQuotedStderrChars} characters of the runner's stderr follow, which is where the cause normally is:\n${trimmed.slice(0, maxQuotedStderrChars)}…`;
 }
 
 async function readRunnerReport(reportPath: string, exit: RunnerOutput & { exitCode: number }): Promise<PlaywrightJsonReport> {
@@ -355,8 +358,15 @@ async function readRunnerReport(reportPath: string, exit: RunnerOutput & { exitC
  *  `runObservedPlaywright` for which keys that is about and why an allowlist is the only safe shape. */
 function projectReport(report: Record<string, unknown>): PlaywrightJsonReport {
   const kept = pick(report, reportKeys);
+  if (!("config" in kept)) return kept;
+
   const config: unknown = kept.config;
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return kept;
+  // Fail closed. A `config` this module cannot recognise cannot be projected key by key, and passing
+  // it through whole would be the one hole in the guarantee stated above — which is absolute, and has
+  // to stay that way to be worth anything. Unreachable through any report 1.61.1 emits, but this
+  // parses untrusted JSON off disk, where the file can be anything. Dropping loses nothing a consumer
+  // could have used: a `config` that is a string or an array has no key for it to read.
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return pick(kept, reportKeys.filter((key) => key !== "config"));
 
   const keptConfig = pick(config as Record<string, unknown>, reportConfigKeys);
   const projects: unknown = keptConfig.projects;

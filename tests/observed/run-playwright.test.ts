@@ -64,6 +64,16 @@ async function newProject(label: string, spec: string, options: { readonly withR
   return root;
 }
 
+/** Drives the real runner directly and returns its report **verbatim**, bypassing the module entirely.
+ *  The upgrade detector needs to see what Playwright emitted, not what the module's allowlist kept. */
+async function rawRunnerReport(root: string): Promise<string> {
+  const reportPath = join(root, "raw-report.json");
+  await runFile(process.execPath, [join(root, "node_modules", "@playwright", "test", "cli.js"), "test", "--reporter=json", `--output=${join(root, "raw-artifacts")}`, "--workers=1"], {
+    cwd: root, env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_FILE: reportPath }, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  });
+  return readFile(reportPath, "utf8");
+}
+
 const passingSpec = "import { test, expect } from '@playwright/test';\ntest('arithmetic holds', () => { expect(1 + 1).toBe(2); });\n";
 const failingSpec = "import { test, expect } from '@playwright/test';\ntest('arithmetic is broken', () => { expect(1 + 1).toBe(3); });\n";
 const chromiumSpec = [
@@ -361,6 +371,16 @@ describe("runObservedPlaywright observations", () => {
     expect((run.report as { config: { projects: unknown[] } }).config.projects[0]).toEqual({ id: "chromium", name: "chromium", outputDir: "/tmp/x" });
   }, 60_000);
 
+  it.each([['"a string"'], ["[1, 2, 3]"], ["null"]])("drops a config it cannot recognise (%s) rather than passing it through whole", async (config) => {
+    const root = await newProject("config-fail-closed", passingSpec);
+    const runner = spy(async (invocation) => { await writeReport(invocation, `{ "config": ${config}, "suites": [], "stats": { "expected": 0 } }`); return exited(0); });
+
+    const run = await runObservedPlaywright({ projectRoot: root, specDir: "specs", args: [], environment: local, execute: runner.execute });
+
+    // Fail closed: the guarantee that no unallowlisted config key survives has to hold with no exception.
+    expect(run.report).toEqual({ suites: [], stats: { expected: 0 } });
+  }, 60_000);
+
   it("keeps only the allowlisted config keys, so a key a future runner adds is dropped rather than passed through", async () => {
     const root = await newProject("config-allowlist", passingSpec);
     const report = JSON.stringify({ config: { version: "1.61.1", rootDir: "/srv/app", projects: [], somethingAddedLater: "unexamined" }, suites: [], errors: [], stats: { expected: 0 }, alsoAddedLater: "unexamined" });
@@ -452,10 +472,28 @@ describe("runObservedPlaywright against a real Playwright process", () => {
     expect(spec?.ok).toBe(true);
     expect(spec?.tests[0]?.status).toBe("expected");
     expect(spec?.tests[0]?.results[0]?.status).toBe("passed");
-    // The finding this task exists to surface: the JSON reporter serializes a fixed allowlist of
-    // project fields and `use` is not in it, so neither the engine nor the viewport is observable here.
+    // These two assert the PROJECTION drops the engine and the viewport. They are NOT the upgrade
+    // detector — `reportProjectKeys` would silently drop a `use` a future runner started serializing,
+    // and this test would still pass. The detector is the next test, which reads the raw report.
     expect(JSON.stringify(run.report)).not.toContain("browserName");
     expect(JSON.stringify(run.report)).not.toContain("viewport");
+  }, 180_000);
+
+  it("detects a runner upgrade: the RAW report exposes neither the browser engine nor the viewport", async () => {
+    // The project declares both explicitly, so a runner that ever begins serializing `use` puts these
+    // exact strings in its own output and reddens this test. Asserted against what the runner wrote,
+    // not against what the module's allowlist kept — the human's ruling that lane 2 produces no
+    // `browser` entries rests on this staying true, so the detector has to see past the projection.
+    const config = "export default { testDir: './specs', projects: [{ name: 'chromium', use: { browserName: 'chromium', viewport: { width: 1280, height: 720 } } }] };\n";
+    const root = await newProject("raw-upgrade-detector", chromiumSpec, { config });
+
+    const raw = await rawRunnerReport(root);
+    const report = JSON.parse(raw) as { config: { version: string; projects: Record<string, unknown>[] } };
+
+    expect(report.config.version).toMatch(/^1\.61\./);
+    expect(Object.keys(report.config.projects[0] ?? {}).sort()).toEqual(["id", "metadata", "name", "outputDir", "repeatEach", "retries", "testDir", "testIgnore", "testMatch", "timeout"]);
+    expect(raw).not.toContain("browserName");
+    expect(raw).not.toContain("viewport");
   }, 180_000);
 });
 
@@ -479,6 +517,8 @@ describe("the pinned real chromium JSON report", () => {
     expect(typeof spec?.tests[0]?.results[0]?.duration).toBe("number");
   });
 
+  // Frozen at 1.61.1, so this half pins the shape a producer was written against and can never itself
+  // detect an upgrade. The live raw-report test above is the detector.
   it("exposes NEITHER the browser engine NOR the viewport, which is the finding Task 39b must plan around", async () => {
     const raw = await readFile(join(repoRoot, "tests", "fixtures", "playwright-json-report-chromium.json"), "utf8");
     const report = JSON.parse(raw) as { config: { projects: Record<string, unknown>[] } };
