@@ -1,0 +1,107 @@
+{
+  "config": {
+    "configFile": "/private/var/folders/dd/n4fkxc_92g9d6yxm08_m_q580000gn/T/qa-skills-observed-fixture-ylKsRJ/playwright.config.js",
+    "rootDir": "/private/var/folders/dd/n4fkxc_92g9d6yxm08_m_q580000gn/T/qa-skills-observed-fixture-ylKsRJ/specs",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/var/folders/dd/n4fkxc_92g9d6yxm08_m_q580000gn/T/qa-skills-observed-fixture-ylKsRJ/out/artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/private/var/folders/dd/n4fkxc_92g9d6yxm08_m_q580000gn/T/qa-skills-observed-fixture-ylKsRJ/specs",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "observed.spec.js",
+      "file": "observed.spec.js",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "a chromium page reports its title",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 297,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-07-28T11:38:56.002Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "96cbdfbc2ceecad8f828-614f76a44719df97e6d6",
+          "file": "observed.spec.js",
+          "line": 2,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-07-28T11:38:55.547Z",
+    "duration": 1300.915,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
