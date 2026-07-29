@@ -370,7 +370,13 @@ describe("runObservedPlaywright observations", () => {
     ["config.argv, which echoes the whole process command line", (secret: string) => ({ argv: ["node", "cli.js", "test", secret] })],
   ])("keeps a resolved secret in %s out of the return value", async (_label, carrier) => {
     const root = await newProject("secret-config", passingSpec);
-    const secret = "sk-live-abcdef0123456789";
+    // Deliberately un-credential-shaped, and it has to stay that way: `scripts/check-secrets.ts` scans
+    // every git-tracked file for provider-credential shapes (`sk-…`, `ghp_…`, `xox…`), has no allowlist,
+    // and cannot tell a fixture from a leaked key — a realistic-looking value here reddens the
+    // `Deterministic secret and ignore scan` CI job, which is how this file last broke `main`. Nothing
+    // is lost: `projectReport` selects by key name via `pick` and never inspects this value, so the
+    // assertion below needs it unique and greppable, not credential-shaped.
+    const secret = "planted-not-a-real-credential-config";
     const report = JSON.stringify({ config: { version: "1.61.1", projects: [], ...carrier(secret) }, suites: [], errors: [], stats: {} });
     const runner = spy(async (invocation) => { await writeReport(invocation, report); return exited(0); });
 
@@ -381,7 +387,9 @@ describe("runObservedPlaywright observations", () => {
 
   it("keeps a resolved secret in a project's own metadata out of the return value", async () => {
     const root = await newProject("secret-project", passingSpec);
-    const secret = "sk-live-fedcba9876543210";
+    // Un-credential-shaped for the same reason as the fixture above, and for the same reason nothing
+    // is lost by it: the projection drops `metadata` by key name, never by what the key holds.
+    const secret = "planted-not-a-real-credential-project";
     const report = JSON.stringify({ config: { version: "1.61.1", projects: [{ id: "chromium", name: "chromium", outputDir: "/tmp/x", metadata: { token: secret } }] }, suites: [], errors: [], stats: {} });
     const runner = spy(async (invocation) => { await writeReport(invocation, report); return exited(0); });
 

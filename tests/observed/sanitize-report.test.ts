@@ -11,7 +11,21 @@ import { removedRunnerReportFields, runnerReportSanitizationPolicy, sanitizeRunn
  * own claim about what it dropped is a tested claim rather than a sentence.
  */
 
-const secret = "sk-live-abcdef0123456789";
+/**
+ * The value planted in every field a secret can reach. **It must stay un-credential-shaped**, and that
+ * is a hard constraint rather than a preference: `scripts/check-secrets.ts` scans every git-tracked file
+ * for provider-credential shapes (`sk-…`, `ghp_…`, `xox…`), has no allowlist, and cannot tell a fixture
+ * from a leaked key — a realistic-looking value here reddens the `Deterministic secret and ignore scan`
+ * CI job, which is how this file last broke `main`.
+ *
+ * Nothing is lost by that, because `sanitizeRunnerReport` selects by **key name** and never inspects a
+ * leaf value: `pick` copies the keys it was given, and the only value inspection anywhere in
+ * `src/observed/sanitize-report.ts` is `isRecord`/`array` deciding whether a *container* can be
+ * projected. So the assertions below need this string to be unique and greppable, not to look like a
+ * credential — including `not.toContain`, which needs only that it cannot occur in a payload by
+ * accident. Making it "more realistic" changes nothing that is tested and re-reds CI.
+ */
+const secret = "planted-not-a-real-credential-sanitize";
 
 /** A report carrying a secret in every place the reporter can put caller-controlled bytes. Built from
  *  `JSONReporter._serializeReport`'s real field names, so a field the reporter emits and this suite
