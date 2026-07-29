@@ -60,23 +60,39 @@ const testCase = {
 
 const taggedTitle = `the ledger balances [qa:${testCase.testCaseId}/${testCase.revisionId}/${testCase.instanceId}@api]`;
 
+/**
+ * The value planted in every field the sanitizer must strip. It looks credential-shaped on purpose —
+ * the point of this file is that a realistic-looking secret never reaches a registered artifact — and
+ * it survives `npm run scan:secrets` only by an ACCIDENT worth naming: `scripts/check-secrets.ts:9`
+ * matches `sk-[A-Za-z0-9_-]{16,}`, and the tail here (`live-planted`) is 12 characters, four short of
+ * that minimum. Nothing enforces the gap.
+ *
+ * So this constant is load-bearing in a way the literal was not: lengthening the tail past 15
+ * characters — or planting an `sk-…` value of any length at a new site — reddens the `Deterministic
+ * secret and ignore scan` CI job, which has no allowlist and cannot tell a fixture from a leaked key.
+ * The assertions below need this string to be unique and greppable; they need nothing from its length.
+ * Task 42 left the same warning on the `run-playwright` and `sanitize-report` fixtures, which chose
+ * un-credential-shaped values instead.
+ */
+const plantedSecret = "sk-live-planted";
+
 /** `rootDir` is the fixture's own repository, and `spec.file` is relative to it exactly as
  *  `JSONReporter._relativeLocation` emits it, so the seam exercises the same anchored-spec containment
  *  check a real run does rather than routing around it. */
 function runnerReport(specs: readonly Record<string, unknown>[], rootDir: string, outputDir = "/tmp/qa-skills-observed-seam/artifacts"): string {
   return JSON.stringify({
-    config: { version: "1.61.1", rootDir, argv: ["node", "cli.js", "--grep=sk-live-planted"], projects: [{ id: "", name: "", outputDir }] },
+    config: { version: "1.61.1", rootDir, argv: ["node", "cli.js", `--grep=${plantedSecret}`], projects: [{ id: "", name: "", outputDir }] },
     suites: [{ title: "observed.spec.js", file: "specs/observed.spec.js", line: 0, column: 0, specs }],
     errors: [], stats: { expected: 1, unexpected: 0 },
   });
 }
 
 function passingSpec(title: string = taggedTitle, id = "aaaa-bbbb"): Record<string, unknown> {
-  return { title, ok: true, tags: [], id, file: "specs/observed.spec.js", line: 2, column: 5, tests: [{ projectId: "", projectName: "", status: "expected", results: [{ status: "passed", duration: 4, retry: 0, stdout: [{ text: "sk-live-planted" }], attachments: [], annotations: [], errors: [] }] }] };
+  return { title, ok: true, tags: [], id, file: "specs/observed.spec.js", line: 2, column: 5, tests: [{ projectId: "", projectName: "", status: "expected", results: [{ status: "passed", duration: 4, retry: 0, stdout: [{ text: plantedSecret }], attachments: [], annotations: [], errors: [] }] }] };
 }
 
 function failingSpec(): Record<string, unknown> {
-  return { title: taggedTitle, ok: false, tags: [], id: "cccc-dddd", file: "specs/observed.spec.js", line: 2, column: 5, tests: [{ projectId: "", projectName: "", status: "unexpected", results: [{ status: "failed", duration: 9, retry: 0, errors: [{ message: "sk-live-planted" }], stdout: [], stderr: [], annotations: [], attachments: [] }] }] };
+  return { title: taggedTitle, ok: false, tags: [], id: "cccc-dddd", file: "specs/observed.spec.js", line: 2, column: 5, tests: [{ projectId: "", projectName: "", status: "unexpected", results: [{ status: "failed", duration: 9, retry: 0, errors: [{ message: plantedSecret }], stdout: [], stderr: [], annotations: [], attachments: [] }] }] };
 }
 
 type Spy = { readonly calls: RunnerInvocation[]; readonly execute: RunnerExecutor };
@@ -194,7 +210,7 @@ describe("executeObservedPlaywright registration", () => {
     try {
       const descriptor = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "evidence" && artifact.value.kind === "runner-report");
       const registeredBytes = await readFile(await workspace.resolve(descriptor?.value.relativePath as string), "utf8");
-      expect(registeredBytes).not.toContain("sk-live-planted");
+      expect(registeredBytes).not.toContain(plantedSecret);
       // `"argv":` and not `argv`: the payload's own disclosure block NAMES `config.argv` as removed,
       // so the bare substring would be found there and the assertion would pass for the wrong reason.
       expect(registeredBytes).not.toContain("\"argv\":");
