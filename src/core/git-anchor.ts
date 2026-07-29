@@ -147,7 +147,10 @@ function byPathBytes(left: TrackedEntry, right: TrackedEntry): number {
  *   the small case. The larger one is that a Runtime-Observed Execution reads its result out of a
  *   report the observed process itself writes, and every module deciding what goes in that report —
  *   the runner's own `playwright.config`, a caller-supplied `--config`, `globalSetup`/`globalTeardown`,
- *   fixtures — lives outside `specDir` by construction and has no entry in this digest. So unanchored
+ *   fixtures — may live outside `specDir`, and whatever does has no entry in this digest. Nothing
+ *   requires any of it to live inside: this digest covers every tracked file under `specDir`, not only
+ *   `*.spec.*`, so a fixture kept there is hashed here and reviewed like a spec — but an ordinary
+ *   project's config sits at the repository root and this module cannot move it. So unanchored
  *   code does not merely run alongside the anchored bytes: it can determine, or simply author, the
  *   result this anchor ends up attached to. **What this value states is which bytes stood in the spec
  *   tree when it was computed, provably equal to the commit it is recorded beside; it cannot state that

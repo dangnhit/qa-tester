@@ -91,8 +91,8 @@ function describeExcluded(excluded: readonly ExcludedSpec[]): string {
  * **Re-resolves the git anchor after the runner exits and refuses if it moved.**
  *
  * `runObservedPlaywright` resolves the anchor before it spawns, and nothing between that resolution and
- * the process's exit re-reads the spec tree. Meanwhile the runner loads code the anchor does not cover
- * and cannot cover — the project's own `playwright.config`, a `--config` passed after `--`,
+ * the process's exit re-reads the spec tree. Meanwhile the runner loads code the anchor need not cover —
+ * the project's own `playwright.config`, a `--config` passed after `--`,
  * `globalSetup`/`globalTeardown`, fixtures, every helper any of them imports — and that code runs with
  * write access to the working tree. A `globalTeardown` that writes into the anchored directory, or a
  * config-level `process.on("exit")` hook that does, changes the bytes on disk while `specTreeSha256`
@@ -135,15 +135,29 @@ async function assertAnchorSurvivedTheRun(root: string, specDir: string, before:
     );
   }
 
-  // Both values are compared, and the asymmetry between them is disclosed rather than left to look
-  // like two equal checks. `commitSha` moving alone is reachable and tested — a run that commits
-  // anything OUTSIDE `--spec-dir` does it. `specTreeSha256` moving alone is NOT reachable: this second
-  // resolution only returns at all when the tree is clean, clean means the tracked bytes under
-  // `--spec-dir` equal the ones at HEAD, so the digest is a function of the commit and cannot move
-  // while the commit stands still. The digest comparison is therefore defence in depth, not an
-  // independently triggerable refusal, and a mutation deleting it survives every reachable state.
-  // It stays: it is the value the batch actually records, and it is the half that keeps holding if
-  // `resolveGitAnchor`'s dirty check is ever scoped more narrowly than the digest.
+  // Both values are compared, and BOTH comparisons are independently triggerable: each half refuses a
+  // state the other cannot see, so neither is defence in depth for the other.
+  //
+  // `commitSha` moves alone when the run commits anything OUTSIDE `--spec-dir` — HEAD advances while the
+  // anchored bytes stand still. `specTreeSha256` moves alone when the tracked byte set under the anchored
+  // directory changes while `git status` still reports that directory clean. Two ways to reach it, both
+  // reproduced against git 2.44:
+  //
+  // - **The spec directory is swapped for a symlink to a second tracked directory.**
+  //   `resolveSpecDirCandidate` follows symlinks only at the PARENT, and `assertRealpathWithin` returns
+  //   the RESOLVED candidate, so the second resolution builds its pathspec from the directory the symlink
+  //   now points at (`src/core/git-anchor.ts:59-65`, `src/core/fs.ts:43-48`, `git-anchor.ts:176-183`).
+  //   Scoped to that pathspec the tree is spotless and HEAD never moved, so only the digest differs.
+  // - **A `clean` filter whose output differs from the bytes on disk.** `specTreeLine` hashes the raw
+  //   working-tree bytes by design (`git-anchor.ts:82-85`, and its TSDoc: contents are never normalized),
+  //   while `git status` compares filter output. A size-preserving `filter.<name>.clean` therefore leaves
+  //   the tree clean at HEAD while the bytes the digest hashes have changed.
+  //
+  // Neither is a defect in the dirty check. It is reliable for what it measures — whether git's view of
+  // the tracked content matches HEAD — and the digest deliberately measures something else: the raw bytes
+  // that actually stood on disk. The first case is precisely the hostile-`globalTeardown` actor this
+  // function exists to stop. `tests/observed/execute-observed-playwright.test.ts` pins each half against
+  // the state only that half can see, so deleting either line reddens a test rather than passing silently.
   const moved = [
     ...(after.commitSha === before.commitSha ? [] : [`commitSha ${before.commitSha} -> ${after.commitSha}`]),
     ...(after.specTreeSha256 === before.specTreeSha256 ? [] : [`specTreeSha256 ${before.specTreeSha256} -> ${after.specTreeSha256}`]),
@@ -175,8 +189,9 @@ async function assertAnchorSurvivedTheRun(root: string, specDir: string, before:
  * `PLAYWRIGHT_JSON_OUTPUT_FILE` path and reads back whatever is at that path once the process exits; it
  * applies no signature, no nonce and no integrity check, because there is nothing to check one against
  * — the reporter that writes that file is a module loaded inside the process being observed. Everything
- * else loaded inside that process is unanchored too: the project's `playwright.config`, a `--config`
- * after `--`, `globalSetup`/`globalTeardown`, fixtures, and every helper any of them imports. A config
+ * else loaded inside that process may be unanchored too: the project's `playwright.config`, a `--config`
+ * after `--`, `globalSetup`/`globalTeardown`, fixtures, and every helper any of them imports — none of
+ * which this runtime can require to live under `--spec-dir`, where the digest would cover it. A config
  * carrying `process.on("exit", …)` that rewrites the report file can therefore hand this check a report
  * in which a genuinely failing anchored spec is described as having passed, under a `config.rootDir`
  * inside the anchored directory — and this check passes it, because everything it reads is what that
@@ -274,15 +289,19 @@ function runnerWorkingDirOf(report: PlaywrightJsonReport): string | undefined {
  * runtime resolved the runner binary itself, pinned the reporter, spawned the process, captured its exit
  * status and output, and re-checked the anchor afterwards. That is the provenance claim, and it is the
  * whole of what separates lane 2 from a report file an agent hands over. The *results* are then read out
- * of the JSON report that same process wrote, and the code that process loads is outside the anchor and
- * cannot be brought inside it: `playwright.config`, a `--config` after `--`,
- * `globalSetup`/`globalTeardown`, fixtures and every helper any of them imports all live outside
- * `--spec-dir`, are absent from `specTreeSha256`, and run with the runtime's trust. So what a batch
- * registered here binds is a committed, human-merged spec tree — proven unchanged across the run — to an
- * execution this runtime started and whose exit it saw. It does not certify that those anchored bytes,
- * and only those, produced each recorded status. Report authorship is not closable while the runtime
- * observes an external runner rather than interpreting it, which is exactly why it is written down
- * instead of being left to be discovered. {@link assertExecutedSpecsAreAnchored} sets out the mechanics.
+ * of the JSON report that same process wrote, and the runtime cannot compel the code that process loads
+ * to be inside the anchor: `playwright.config`, a `--config` after `--`, `globalSetup`/`globalTeardown`,
+ * fixtures and every helper any of them imports run with the runtime's trust, and nothing requires any of
+ * them to live under `--spec-dir` — an ordinary project's config sits at the repository root, outside it
+ * and absent from `specTreeSha256`. The digest covers every tracked file under `--spec-dir`, not only
+ * `*.spec.*`, so a fixture kept inside the spec directory IS anchored and reviewed like a spec; the gap is
+ * the code that is not, and this runtime has no way to require that there be none. So what a batch
+ * registered here binds is a committed, human-merged spec tree — proven to have still been standing when
+ * the runner exited — to an execution this runtime started and whose exit it saw. It does not certify
+ * that those anchored bytes, and only those, produced each recorded status. Report authorship is not
+ * closable while the runtime observes an external runner rather than interpreting it, which is exactly
+ * why it is written down instead of being left to be discovered.
+ * {@link assertExecutedSpecsAreAnchored} sets out the mechanics.
  *
  * **What each artifact says, and what it deliberately does not:**
  *

@@ -410,9 +410,44 @@ describe("executeObservedPlaywright anchor re-verification", () => {
     expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
   }, 60_000);
 
+  it("refuses a spec directory swapped for a symlink mid-run, which only the digest half can see", async () => {
+    const built = await fixture();
+    // The mirror of the test above, and the case that proves the digest half refuses on its own.
+    // `other/` is committed BEFORE the run so HEAD stands still across it and `commitSha` cannot move.
+    await mkdir(join(built.root, "other"), { recursive: true });
+    await writeFile(join(built.root, "other", "swapped.spec.js"), "// a different tracked tree\n");
+    await git(built.root, "add", "-A");
+    await git(built.root, "commit", "-q", "-m", "a second tracked directory");
+
+    // `resolveSpecDirCandidate` follows symlinks only at the PARENT, and `assertRealpathWithin` returns
+    // the resolved candidate, so the second resolution anchors `other/` while still being asked for
+    // `specs`. Scoped to `:(literal)other` the tree is spotless and HEAD is untouched: the dirty check
+    // and the commit comparison both see nothing, and `specTreeSha256` moves alone.
+    //
+    // The report names the spec through the SWAPPED path, so it resolves inside the directory `specs`
+    // now points at and {@link assertExecutedSpecsAreAnchored} is satisfied. That is what leaves the
+    // digest comparison as the only thing between this run and a registered batch — delete it and this
+    // test registers one instead of refusing, which is the whole point of the case.
+    const swapped = passingSpec();
+    swapped.file = "specs/swapped.spec.js";
+    const runner = spy(runnerReport([swapped], built.root), 0, async () => {
+      await rm(join(built.root, "specs"), { recursive: true, force: true });
+      await symlink("other", join(built.root, "specs"), "dir");
+    });
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
+    expect(refusal.message).toContain("- specTreeSha256 ");
+    // And the commit half stays silent, so this pins the digest comparison and nothing else.
+    expect(refusal.message).not.toContain("- commitSha ");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+    expect(await registeredOfType(built, "evidence")).toHaveLength(0);
+  }, 60_000);
+
   it("registers the run when the spec tree is untouched, so the re-check costs a clean run nothing", async () => {
     const built = await fixture();
-    // The companion to the two above: the re-check must not refuse a run that changed nothing. A file
+    // The companion to the three above: the re-check must not refuse a run that changed nothing. A file
     // written OUTSIDE the anchored directory is the ordinary case — the runtime forces the runner's own
     // artifacts there deliberately — and the anchor covers `specs/` alone, so it stays legal.
     const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
