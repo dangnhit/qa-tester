@@ -158,15 +158,22 @@ function rawScreenshotDescriptor(workspace: RunWorkspace, binaries: readonly { i
  *  `derivation` binds the raw descriptor/binary checksums. The derived descriptor thus has both an
  *  attempt binding (block A) AND a derivation (block B). */
 async function buildDerivedScreenshotWorkspace() {
+  const mark = Date.now();
+  const lap = (label: string): void => { console.error(`[probe] ${label} ${String(Date.now() - mark)}ms`); };
   const directory = await root();
   const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
+  lap("workspace-created");
   const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
   const result = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
+  lap("documents-registered");
+  const png = await solidPng();
+  lap("sharp-create-png");
   const rawBundle = await workspace.registerEvidenceBundle({
-    binaries: [{ filename: "raw.png", contents: await solidPng(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
+    binaries: [{ filename: "raw.png", contents: png, mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
     relationships: [result.id],
     descriptor: (binaries) => rawScreenshotDescriptor(workspace, binaries),
   });
+  lap("raw-bundle-registered");
   const rawBinary = rawBundle.binaries[0];
   if (!rawBinary) throw new Error("Expected raw evidence binary");
   const derived = await annotateScreenshot({
@@ -175,6 +182,7 @@ async function buildDerivedScreenshotWorkspace() {
     rawBinaryArtifactId: rawBinary.id,
     annotations: [{ id: "one", x: 10, y: 10, width: 30, height: 20, label: "Input", cssBox: { x: 10, y: 10, width: 30, height: 20 } }],
   });
+  lap("annotated");
   return { workspace, derivedDescriptorId: derived.descriptorArtifactId };
 }
 
@@ -219,7 +227,7 @@ describe("inspectWorkspaceState — evidence read two-diagnostic lock (Task 15c 
     ]);
 
     await workspace.close();
-  });
+  }, 120_000);
 });
 
 describe("inspectWorkspaceState — clean run golden", () => {

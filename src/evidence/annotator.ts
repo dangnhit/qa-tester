@@ -1,10 +1,12 @@
+import { readFile } from "node:fs/promises";
+
 import sharp from "sharp";
 
 import { validateAnnotation } from "../contracts/validator.js";
 import type { RunWorkspace } from "../core/run-workspace.js";
 import { indexByAttemptId } from "../core/artifact-index.js";
 import { evidenceSubject } from "../core/artifact-record.js";
-import { sha256 } from "../core/checksum.js";
+import { sha256Bytes } from "../core/checksum.js";
 import { createEntityId } from "../core/ids.js";
 import { evidenceFilename, type EvidenceProvenance, type ScreenshotEvidenceProvenance } from "./manifest.js";
 import type { PixelAnnotation } from "./geometry.js";
@@ -44,7 +46,13 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
   const rawRecord = await input.workspace.readArtifactRecord(input.rawBinaryArtifactId);
   if (rawRecord.type !== "evidence" || rawRecord.mediaType !== "image/png" || rawRecord.captureType !== "screenshot") throw new Error("Raw evidence binary is not a sanitized screenshot");
   const rawPath = await input.workspace.resolve(rawRecord.relativePath);
-  const metadata = await sharp(rawPath).metadata();
+  // Read the bytes once and hand libvips a Buffer rather than the path. libvips' operation cache
+  // retains an open descriptor on a file input, and on Windows that descriptor makes the registered
+  // evidence binary undeletable — `rm(workspaceRoot, { recursive: true })` fails EBUSY long after the
+  // annotation returns. `collector.ts` already passes bytes for exactly this shape of call; this was
+  // the one path-input left. It also removes a second read: the checksum below reuses these bytes.
+  const rawBytes = await readFile(rawPath);
+  const metadata = await sharp(rawBytes).metadata();
   if (!metadata.width || !metadata.height || input.annotations.some((annotation) => !valid(annotation, metadata.width, metadata.height))) throw new Error("Annotation geometry is invalid or outside the screenshot bounds");
   const dimensions = { width: metadata.width, height: metadata.height };
   const sourceProvenance = sourceValue.provenance as Record<string, unknown>;
@@ -71,10 +79,10 @@ export async function annotateScreenshot(input: { workspace: RunWorkspace; rawEv
     ...(locator === undefined ? {} : { locator }),
     ...(annotationLabels.length === 0 ? {} : { annotationLabels }),
   };
-  const rawChecksum = await sha256(rawPath);
+  const rawChecksum = sha256Bytes(rawBytes);
   const annotationValue = { artifactType: "annotation", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceId: provenance.evidenceId, captureType: "screenshot", sourceEvidenceArtifactId: source.record.id, sourceEvidenceSha256: source.record.sha256, sourceBinaryArtifactId: rawRecord.id, rawSha256: rawChecksum, annotations: input.annotations.map((annotation) => ({ id: annotation.id, ...(annotation.label === undefined ? {} : { label: annotation.label }), ...(annotation.locator === undefined ? {} : { locator: annotation.locator }), cssBox: annotation.cssBox, pixelBox: { x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height } })), provenance: { runId: provenance.runId, attemptId: provenance.attemptId, ...(provenance.testcaseId === undefined ? {} : { testcaseId: provenance.testcaseId }), ...(provenance.bugId === undefined ? {} : { bugId: provenance.bugId }), url: provenance.url, viewport: provenance.viewport, browser: provenance.browser, build: provenance.build, capturedAt: provenance.capturedAt, dimensions, dpr: provenance.dpr, scroll: provenance.scroll, clip: provenance.clip } };
   if (!validateAnnotation(annotationValue).valid) throw new Error("Annotation descriptor does not match its contract");
-  const bytes = await sharp(rawPath).composite([{ input: svg({ width: dimensions.width, height: dimensions.height, annotations: input.annotations, provenance }), top: 0, left: 0 }]).png().toBuffer();
+  const bytes = await sharp(rawBytes).composite([{ input: svg({ width: dimensions.width, height: dimensions.height, annotations: input.annotations, provenance }), top: 0, left: 0 }]).png().toBuffer();
   const annotationId = createEntityId();
   const bundle = await input.workspace.registerEvidenceBundle({
     binaries: [{ filename: evidenceFilename(annotationId, "annotated"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions }],
