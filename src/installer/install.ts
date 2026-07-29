@@ -45,22 +45,51 @@ async function assertTargetComponents(path: string): Promise<void> {
   }
 }
 
-export type DirectorySyncOptions = Readonly<{ platform?: NodeJS.Platform; openDirectory?: (path: string) => Promise<Pick<Awaited<ReturnType<typeof open>>, "sync" | "close">> }>;
+type SyncHandle = Pick<Awaited<ReturnType<typeof open>>, "sync" | "close">;
+export type DirectorySyncOptions = Readonly<{
+  platform?: NodeJS.Platform;
+  openDirectory?: (path: string) => Promise<SyncHandle>;
+  /** Test seam mirroring `openDirectory`; production callers use the real handle. */
+  openFile?: (path: string, flags: string) => Promise<SyncHandle>;
+}>;
+
+/** Errors Windows raises for a flush the filesystem or handle simply cannot service. Durability is
+ *  best-effort there; refusing to install because NTFS will not flush a handle is worse than the
+ *  weaker guarantee. */
+const windowsUnsupportedSync = ["EISDIR", "EINVAL", "EPERM", "ENOTSUP", "EACCES"];
+
+function errorCode(error: unknown): string {
+  return String(error instanceof Error && "code" in error ? error.code : undefined);
+}
+
+/** Flush one already-opened handle, tolerating the unsupported-flush errors above on Windows only. */
+async function syncTolerantly(openHandle: () => Promise<SyncHandle>, platform: NodeJS.Platform): Promise<void> {
+  try {
+    const handle = await openHandle();
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (error: unknown) {
+    if (platform !== "win32" || !windowsUnsupportedSync.includes(errorCode(error))) throw error;
+  }
+}
 
 export async function fsyncTree(root: string, options: DirectorySyncOptions = {}): Promise<void> {
   const { readdir } = await import("node:fs/promises");
+  const platform = options.platform ?? process.platform;
+  const openFile = options.openFile ?? ((path: string, flags: string) => open(path, flags));
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const item = join(root, entry.name);
     if (entry.isDirectory()) await fsyncTree(item, options);
-    else if (entry.isFile()) { const handle = await open(item, "r"); try { await handle.sync(); } finally { await handle.close(); } }
+    // Windows' FlushFileBuffers needs a handle with write access, so `open(item, "r")` + `sync()`
+    // fails EPERM for every file — which made `fsyncTree(stage)` throw on every Windows install, not
+    // just in tests. Staged files are ours and writable, so "r+" is the normal path; a genuinely
+    // read-only file still falls back to the read handle exactly as before.
+    else if (entry.isFile()) {
+      await syncTolerantly(async () => {
+        try { return await openFile(item, "r+"); } catch { return await openFile(item, "r"); }
+      }, platform);
+    }
   }
-  try {
-    const handle = await (options.openDirectory ?? ((path: string) => open(path, "r")))(root);
-    try { await handle.sync(); } finally { await handle.close(); }
-  } catch (error: unknown) {
-    const code = error instanceof Error && "code" in error ? error.code : undefined;
-    if ((options.platform ?? process.platform) !== "win32" || !["EISDIR", "EINVAL", "EPERM", "ENOTSUP"].includes(String(code))) throw error;
-  }
+  await syncTolerantly(() => (options.openDirectory ?? ((path: string) => open(path, "r")))(root), platform);
 }
 
 async function restore(root: string, previous: string | undefined, stage: string): Promise<void> {
