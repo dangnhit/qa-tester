@@ -381,8 +381,32 @@ describe("executeObservedPlaywright anchor re-verification", () => {
     const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
 
     expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
-    expect(refusal.message).toContain("commitSha");
-    expect(refusal.message).toContain("specTreeSha256");
+    // The LIST LINES, not the bare field names: the refusal's closing paragraph says "commitSha and
+    // specTreeSha256 are immutable once written", so `toContain("commitSha")` passes on the prose alone
+    // and cannot tell which half of the comparison fired. Asserting `- commitSha ` and
+    // `- specTreeSha256 ` asserts that both halves ran and both reported.
+    expect(refusal.message).toContain("- commitSha ");
+    expect(refusal.message).toContain("- specTreeSha256 ");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+  }, 60_000);
+
+  it("refuses a run that moved HEAD without touching the spec tree, which only the commit half can see", async () => {
+    const built = await fixture();
+    // Commits OUTSIDE the anchored directory, so `specTreeSha256` is unchanged and `commitSha` alone
+    // moves. This is the one reachable state that separates the two comparisons, and it is the state
+    // that proves the commit half can refuse on its own rather than riding along with the digest half.
+    const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
+      await writeFile(join(built.root, "unrelated.txt"), "committed while the runner was running\n");
+      await git(built.root, "add", "-A");
+      await git(built.root, "commit", "-q", "-m", "unrelated to the spec tree");
+    });
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
+    expect(refusal.message).toContain("- commitSha ");
+    // And the digest half stays silent, so the operator is told what actually moved.
+    expect(refusal.message).not.toContain("- specTreeSha256 ");
     expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
   }, 60_000);
 

@@ -135,6 +135,15 @@ async function assertAnchorSurvivedTheRun(root: string, specDir: string, before:
     );
   }
 
+  // Both values are compared, and the asymmetry between them is disclosed rather than left to look
+  // like two equal checks. `commitSha` moving alone is reachable and tested — a run that commits
+  // anything OUTSIDE `--spec-dir` does it. `specTreeSha256` moving alone is NOT reachable: this second
+  // resolution only returns at all when the tree is clean, clean means the tracked bytes under
+  // `--spec-dir` equal the ones at HEAD, so the digest is a function of the commit and cannot move
+  // while the commit stands still. The digest comparison is therefore defence in depth, not an
+  // independently triggerable refusal, and a mutation deleting it survives every reachable state.
+  // It stays: it is the value the batch actually records, and it is the half that keeps holding if
+  // `resolveGitAnchor`'s dirty check is ever scoped more narrowly than the digest.
   const moved = [
     ...(after.commitSha === before.commitSha ? [] : [`commitSha ${before.commitSha} -> ${after.commitSha}`]),
     ...(after.specTreeSha256 === before.specTreeSha256 ? [] : [`specTreeSha256 ${before.specTreeSha256} -> ${after.specTreeSha256}`]),
