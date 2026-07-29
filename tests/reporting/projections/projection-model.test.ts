@@ -13,7 +13,7 @@ const gateArtifact: ProjectionArtifact = {
 };
 
 const drivenAttempt: ProjectionArtifact = {
-  record: { id: "tr-1", sha256: "b".repeat(64), type: "test-result" },
+  record: { id: "tr-1", sha256: "b".repeat(64), type: "test-result", provenance: "runtime-execution" },
   value: {
     artifactType: "test-result", attemptId: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1",
     status: "FAILED", failureClassification: "PRODUCT_DEFECT", observedEngine: "chromium",
@@ -22,7 +22,7 @@ const drivenAttempt: ProjectionArtifact = {
 };
 
 const batch: ProjectionArtifact = {
-  record: { id: "batch-1", sha256: "c".repeat(64), type: "test-result-batch" },
+  record: { id: "batch-1", sha256: "c".repeat(64), type: "test-result-batch", provenance: "runtime-observed" },
   value: {
     artifactType: "test-result-batch", executionId: "EX-1", commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64),
     entries: [
@@ -52,6 +52,7 @@ describe("buildProjectionModel", () => {
     expect(model.attempts).toEqual([{
       lane: "driven-attempt", id: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1",
       status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "browser", durationMs: 1500,
+      provenance: "runtime-execution",
     }]);
   });
 
@@ -65,5 +66,14 @@ describe("buildProjectionModel", () => {
     expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, batch] }).anchor)
       .toEqual({ commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) });
     expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt] }).anchor).toBeUndefined();
+  });
+
+  it("carries each row's own record provenance, so a runtime-observed row is distinguishable from a runtime-executed one", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt, batch] });
+    expect(model.attempts.map((row) => [row.id, row.provenance])).toEqual([
+      ["ATT-1", "runtime-execution"],
+      ["E-1", "runtime-observed"],
+      ["E-2", "runtime-observed"],
+    ]);
   });
 });

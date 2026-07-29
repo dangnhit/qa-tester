@@ -23,6 +23,10 @@ export type AttemptRow = Readonly<{
   failureClassification: string;
   executionSurface: string;
   durationMs: number;
+  /** The claim's own `record.provenance` (defaulted per `provenanceOf` below) — carried so a CI reader
+   *  can tell a runtime-observed row from an `agent-draft` one. This is NOT a credit filter: see
+   *  `provenanceOf`'s comment for why this reducer carries the fact instead of acting on it. */
+  provenance: string;
   location?: ProjectionLocation;
 }>;
 
@@ -48,6 +52,25 @@ const arr = (value: unknown): readonly unknown[] => (Array.isArray(value) ? valu
  *  different things under one column. Step durations are what both lanes actually measured. */
 function durationOf(value: Readonly<Record<string, unknown>>): number {
   return arr(value.steps).filter(isRecord).reduce((total, step) => total + (typeof step.durationMs === "number" ? step.durationMs : 0), 0);
+}
+
+/**
+ * The claim's own provenance, defaulted to `"agent-draft"` when the record carries none —
+ * `RunWorkspace.registerArtifactValue` stamps that exact default on an unstamped registration
+ * (`src/core/provenance.ts`'s own comment says so), so an absent value here means the same thing it
+ * means everywhere else in the artifact system: recorded, but not runtime-observed. A silent `undefined`
+ * or an invented fourth label would let this one reducer claim a provenance the record itself does not
+ * carry, which is the same defect one level down from the one this field exists to fix.
+ *
+ * This is deliberately NOT a credit filter. The coverage readers gate on
+ * `creditsCoverage(record.provenance)` (`release-gate.ts:249,254`) because THEY decide what earns
+ * credit; `generate-qa-report.ts:39-41` already settled that a report instead "describes what the run
+ * recorded rather than what earned credit," and a projection is exactly such a report. Carrying
+ * `provenance` on every row lets a CI consumer see the fact for itself — filtering or hiding an
+ * `agent-draft` row here would silently apply the credit gate this file must not apply.
+ */
+function provenanceOf(record: Readonly<{ provenance?: string }>): string {
+  return record.provenance ?? "agent-draft";
 }
 
 export function buildProjectionModel(input: Readonly<{
@@ -76,19 +99,24 @@ export function buildProjectionModel(input: Readonly<{
     const failureClassification = str(artifact.value.failureClassification);
     return id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined
       ? []
-      : [{ lane: "driven-attempt" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface: "browser", durationMs: durationOf(artifact.value) }];
+      : [{ lane: "driven-attempt" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface: "browser", durationMs: durationOf(artifact.value), provenance: provenanceOf(artifact.record) }];
   });
 
   const batches = input.artifacts.filter((artifact) => artifact.record.type === "test-result-batch");
-  const observed: AttemptRow[] = batches.flatMap((artifact) => arr(artifact.value.entries).filter(isRecord).flatMap((entry) => {
-    const id = str(entry.entryId); const testCaseId = str(entry.testCaseId);
-    const testCaseRevisionId = str(entry.testCaseRevisionId);
-    const testCaseInstanceId = str(entry.testCaseInstanceId); const status = str(entry.status);
-    const failureClassification = str(entry.failureClassification); const executionSurface = str(entry.executionSurface);
-    return id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined || executionSurface === undefined
-      ? []
-      : [{ lane: "observed-entry" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface, durationMs: durationOf(entry) }];
-  }));
+  // Every entry in one batch shares the manifest record's provenance: lane 2 has no per-entry
+  // registration, only the one record the whole `test-result-batch` artifact was registered under.
+  const observed: AttemptRow[] = batches.flatMap((artifact) => {
+    const provenance = provenanceOf(artifact.record);
+    return arr(artifact.value.entries).filter(isRecord).flatMap((entry) => {
+      const id = str(entry.entryId); const testCaseId = str(entry.testCaseId);
+      const testCaseRevisionId = str(entry.testCaseRevisionId);
+      const testCaseInstanceId = str(entry.testCaseInstanceId); const status = str(entry.status);
+      const failureClassification = str(entry.failureClassification); const executionSurface = str(entry.executionSurface);
+      return id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined || executionSurface === undefined
+        ? []
+        : [{ lane: "observed-entry" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface, durationMs: durationOf(entry), provenance }];
+    });
+  });
 
   const anchorSource = batches[0]?.value;
   const commitSha = anchorSource === undefined ? undefined : str(anchorSource.commitSha);
