@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { ArtifactType } from "../contracts/types.js";
 import { validateArtifact } from "../contracts/validator.js";
@@ -14,7 +14,7 @@ import {
 } from "./artifact-record.js";
 import { sha256, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
-import { assertPathWithin, assertRealpathWithin } from "./fs.js";
+import { assertPathWithin, assertRealpathWithin, manifestRelativePath } from "./fs.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
 import { semanticRules, type CrossRunView, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
 import { array, canonicalJson, isRecord } from "./values.js";
@@ -536,7 +536,9 @@ export async function inspectWorkspaceState(
   const registered = new Set(manifest.artifacts.map((artifact) => artifact.relativePath));
   for (const directory of [join(path, "inputs"), join(path, "evidence")]) {
     for (const absolutePath of await filesUnder(path, directory)) {
-      const relativePath = relative(path, absolutePath);
+      // Canonical POSIX form, not `path.relative`'s native form: `registered` is built from the
+      // manifest, which stores `inputs/…` on every platform (see `manifestRelativePath`).
+      const relativePath = manifestRelativePath(path, absolutePath);
       if (!registered.has(relativePath)) addDiagnostic(diagnostics, { code: "ORPHAN_FILE", message: `Unregistered file ${relativePath}`, relativePath });
     }
   }

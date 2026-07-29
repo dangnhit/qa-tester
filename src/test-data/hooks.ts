@@ -1,6 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { QaConfig } from "../config/load-config.js";
+import { isPathWithin } from "../core/fs.js";
 import { isRecord } from "../core/values.js";
 import { ownedResources, type TestResource } from "./resources.js";
 
@@ -11,9 +12,11 @@ export type TestDataHookDescriptor =
 type ProducedResource = Readonly<{ id: string; cleanupAction: string }>;
 type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: TestDataHookDescriptor, operation?: Readonly<Record<string, unknown>>) => Promise<readonly ProducedResource[]>>>;
 
+/** Strictly inside `directory` — the directory itself is not a module target. Delegates the escape
+ *  test to the shared `isPathWithin` so it is separator-aware: the previous literal `"../"` check
+ *  admitted every `..\` traversal on Windows, where `path.relative` emits backslashes. */
 function contained(directory: string, candidate: string): boolean {
-  const relativePath = relative(directory, candidate);
-  return relativePath !== "" && !relativePath.startsWith("../") && relativePath !== "..";
+  return relative(directory, candidate) !== "" && isPathWithin(directory, candidate);
 }
 
 function freezeDescriptor<T extends TestDataHookDescriptor>(descriptor: T): T {

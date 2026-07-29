@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -184,7 +184,10 @@ function failSecondEvidenceBinaryWrite() {
   return {
     persistence: {
       async writeAtomic(rootPath: string, path: string, contents: string | Uint8Array): Promise<void> {
-        if (path.includes("/evidence/") && contents instanceof Uint8Array && ++evidenceWrites === 2) {
+        // `WorkspacePersistence.writeAtomic` receives a NATIVE absolute path, so this fault seam must
+        // match on the platform separator. A literal "/evidence/" never matched on Windows, where the
+        // path reads `…\evidence\…`, and the injected failure silently never fired.
+        if (path.includes(`${sep}evidence${sep}`) && contents instanceof Uint8Array && ++evidenceWrites === 2) {
           await atomicWriteFile(rootPath, path, contents);
           throw new Error("Injected late evidence binary write failure");
         }
