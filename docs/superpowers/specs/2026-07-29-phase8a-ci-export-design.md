@@ -182,7 +182,6 @@ Written next to the projection as `<out>.provenance.json`:
   "runId": "...",
   "gate": { "artifactId": "...", "sha256": "...", "recommendation": "NOT_READY" },
   "sourceArtifacts": [{ "id": "...", "sha256": "...", "type": "test-result-batch" }],
-  "protectedEnvironment": true,
   "reduced": true,
   "producerVersion": "<dynamic runtimeVersion>",
   "generatedAt": "..."
