@@ -18,13 +18,22 @@ const nativePathSemantics: PathSemantics = { relative, isAbsolute, sep };
  *  alone silently admits every traversal — and a candidate on another Windows drive relative-izes to
  *  an absolute path, which `isAbsolute` rejects.
  *
- *  Exported so that every decision of the form "does this resolved path lie under this root" shares
- *  this one implementation instead of re-deriving a POSIX-only one. Those are, exhaustively:
- *  `resolveWithin`, `assertPathWithin` and `assertRealpathWithin` below; `test-data/hooks.ts`'s
- *  `contained`; and `run-workspace.ts`'s decision of whether a registration source is inside the
- *  workspace. `installer/manifest.ts`'s `validateRelativeFilePath` is deliberately NOT one of these —
- *  it is a syntax gate on a DECLARED manifest string, rejecting `\` outright rather than comparing
- *  two filesystem paths, and is already stricter than this on both platforms. */
+ *  Exported so that a decision of the form "does this resolved path lie under this root" shares this
+ *  one implementation instead of re-deriving a POSIX-only one. Callers: `resolveWithin`,
+ *  `assertPathWithin` and `assertRealpathWithin` below; `test-data/hooks.ts`'s `contained`; and
+ *  `run-workspace.ts`'s decision of whether a registration source is inside the workspace.
+ *
+ *  Three places make a related decision and deliberately do NOT call this, so the list above is not
+ *  a claim that no other prefix test exists:
+ *  - `installer/manifest.ts`'s `validateRelativeFilePath` is a syntax gate on a DECLARED manifest
+ *    string, not a comparison of two filesystem paths. It rejects `\` outright and is already
+ *    stricter than this on both platforms.
+ *  - `installer/uninstall.ts` and `installer/shims.ts`'s `removeEmptyParents` loops guard an
+ *    ancestor walk with a raw `current.startsWith(root)`. Both sides are native paths produced by
+ *    `dirname`, so there is no separator hazard and no Windows defect. The raw prefix test does
+ *    admit a sibling that merely shares a prefix (`/a/bc` under `/a/b`), which is pre-existing,
+ *    needs a mis-scoped target to reach, and can only remove already-empty directories. Left
+ *    untouched deliberately rather than overlooked. */
 export function isPathWithin(root: string, candidate: string, pathApi: PathSemantics = nativePathSemantics): boolean {
   const relativePath = pathApi.relative(root, candidate);
   return relativePath === ""
