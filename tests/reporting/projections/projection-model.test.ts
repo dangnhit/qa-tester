@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { buildProjectionModel, type ProjectionArtifact } from "../../../src/reporting/projections/projection-model.js";
+import { evaluateReleaseGate } from "../../../src/reporting/release-gate.js";
+import { identifierOnlyGateRules } from "../../../src/reporting/projections/projection-model.js";
 
 const gateArtifact: ProjectionArtifact = {
   record: { id: "gate-1", sha256: "a".repeat(64), type: "release-gate" },
@@ -75,5 +77,62 @@ describe("buildProjectionModel", () => {
       ["E-1", "runtime-observed"],
       ["E-2", "runtime-observed"],
     ]);
+  });
+});
+
+const withFindings = (protectedEnvironment: boolean): ProjectionArtifact => ({
+  record: { id: "gate-2", sha256: "a".repeat(64), type: "release-gate" },
+  value: {
+    artifactType: "release-gate", recommendation: "NOT_READY", protectedEnvironment,
+    sourceArtifacts: [],
+    ruleInputs: {
+      artifactsValid: true,
+      coverage: { requiredMissing: ["COV-1"], optionalGaps: ["COV-2"], requiredHighRisk: [] },
+      bugs: [{ bugId: "BUG-1", triageStatus: "TRIAGED", severity: "Critical", open: true },
+             { bugId: "BUG-2", triageStatus: "TRIAGED", severity: "Minor", open: true },
+             { bugId: "BUG-3", triageStatus: "TRIAGED", severity: "Major", open: false }],
+      sharedBlockers: ["Evidence gap GAP-1 affects the checkout total shown to a signed-in buyer"],
+    },
+    verdicts: [
+      { rule: "NO_SHARED_BLOCKERS", passed: false, reason: "Shared blockers: Evidence gap GAP-1 affects the checkout total shown to a signed-in buyer." },
+      { rule: "REQUIRED_COVERAGE_COMPLETE", passed: false, reason: "Required coverage missing: COV-1." },
+    ],
+  },
+});
+
+const gapArtifact: ProjectionArtifact = {
+  record: { id: "gap-1", sha256: "f".repeat(64), type: "evidence-gap" },
+  value: { artifactType: "evidence-gap", evidenceGapId: "GAP-1", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
+};
+
+describe("projection findings", () => {
+  it("emits one finding per open bug, unmet requirement, optional gap and evidence gap, and none for a closed bug", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [withFindings(false), gapArtifact] });
+    expect(model.findings.map((finding) => [finding.ruleId, finding.level, finding.id])).toEqual([
+      ["open-bug", "error", "BUG-1"],
+      ["open-bug", "warning", "BUG-2"],
+      ["required-coverage-unmet", "error", "COV-1"],
+      ["optional-coverage-gap", "warning", "COV-2"],
+      ["evidence-gap", "warning", "GAP-1"],
+    ]);
+  });
+
+  it("keeps authored text out of a reduced projection, in findings AND in the one verdict reason that can carry it", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [withFindings(true), gapArtifact] });
+    expect(model.reduced).toBe(true);
+    const serialized = JSON.stringify(model);
+    expect(serialized).not.toContain("checkout total shown to a signed-in buyer");
+    expect(serialized).not.toContain("Trace retention refused");
+    expect(model.findings.find((finding) => finding.id === "GAP-1")?.message).toBe("evidence gap GAP-1");
+    expect(model.gate.verdicts.find((verdict) => verdict.rule === "NO_SHARED_BLOCKERS")?.reason).toBe("Shared blockers: 1.");
+    // Identifier-only reasons survive reduction: they name what is wrong without quoting anyone.
+    expect(model.gate.verdicts.find((verdict) => verdict.rule === "REQUIRED_COVERAGE_COMPLETE")?.reason).toBe("Required coverage missing: COV-1.");
+  });
+
+  it("pins the set of gate rules whose reason is identifier-only, so a new rule cannot silently join it", () => {
+    const everyRule = evaluateReleaseGate({
+      artifactsValid: true, coverage: { requiredMissing: [], optionalGaps: [], requiredHighRisk: [] }, bugs: [], sharedBlockers: [],
+    }).verdicts.map((verdict) => verdict.rule);
+    expect([...everyRule].sort()).toEqual([...identifierOnlyGateRules, "NO_SHARED_BLOCKERS"].sort());
   });
 });

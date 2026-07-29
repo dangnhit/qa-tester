@@ -73,6 +73,31 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
   return record.provenance ?? "agent-draft";
 }
 
+/** Every gate rule whose `reason` is composed in code from IDENTIFIERS ONLY — bug ids, obligation ids —
+ *  and therefore survives a reduced projection unchanged.
+ *
+ *  `NO_SHARED_BLOCKERS` is deliberately absent. Its reason interpolates `sharedBlockers`, one of whose
+ *  five sources is `Evidence gap <id> affects <affectedClaim>` (release-gate.ts:278-288), and
+ *  `affectedClaim` is a free-form string in evidence-gap.schema.json:15 — authored text, not an
+ *  identifier. It is the ONLY reason that can carry authored text, and the reduced mode recomposes it.
+ *
+ *  The drift test in tests/reporting/projections/projection-model.test.ts pins this list against the
+ *  rules `evaluateReleaseGate` actually emits, so a seventh rule cannot silently inherit "safe". */
+export const identifierOnlyGateRules = [
+  "VALID_ARTIFACTS",
+  "NO_OPEN_BLOCKER_OR_CRITICAL",
+  "NO_UNTRIAGED_PRODUCT_BUG",
+  "REQUIRED_HIGH_RISK_PASSED",
+  "REQUIRED_COVERAGE_COMPLETE",
+  "NO_OPEN_PRODUCT_DEFECT_FOR_READY",
+] as const;
+
+/** A reduced reason states the same verdict with a count instead of a quotation. */
+export function reducedVerdictReason(verdict: Readonly<{ rule: string; reason: string }>, ruleInputs: Readonly<Record<string, unknown>>): string {
+  if ((identifierOnlyGateRules as readonly string[]).includes(verdict.rule)) return verdict.reason;
+  return `Shared blockers: ${arr(ruleInputs.sharedBlockers).length}.`;
+}
+
 export function buildProjectionModel(input: Readonly<{
   runId: string; producerVersion: string; generatedAt: string; artifacts: readonly ProjectionArtifact[];
 }>): ProjectionModel {
@@ -88,6 +113,37 @@ export function buildProjectionModel(input: Readonly<{
     const id = str(entry.id); const sha256 = str(entry.sha256); const type = str(entry.type);
     return id === undefined || sha256 === undefined || type === undefined ? [] : [{ id, sha256, type }];
   });
+
+  const reduced = gateArtifact.value.protectedEnvironment === true;
+  const ruleInputs = isRecord(gateArtifact.value.ruleInputs) ? gateArtifact.value.ruleInputs : {};
+  const coverage = isRecord(ruleInputs.coverage) ? ruleInputs.coverage : {};
+  const bugs = arr(ruleInputs.bugs).filter(isRecord).filter((bug) => bug.open === true);
+
+  const findings: FindingRow[] = [
+    ...bugs.flatMap((bug) => {
+      const id = str(bug.bugId);
+      if (id === undefined) return [];
+      const severity = str(bug.severity) ?? "Unspecified";
+      const level = severity === "Blocker" || severity === "Critical" ? "error" as const : "warning" as const;
+      return [{ ruleId: "open-bug", level, id, message: `open bug ${id}, severity ${severity}` }];
+    }),
+    ...arr(coverage.requiredMissing).flatMap((item) => {
+      const id = str(item);
+      return id === undefined ? [] : [{ ruleId: "required-coverage-unmet", level: "error" as const, id, message: `required coverage obligation ${id} is unmet` }];
+    }),
+    ...arr(coverage.optionalGaps).flatMap((item) => {
+      const id = str(item);
+      return id === undefined ? [] : [{ ruleId: "optional-coverage-gap", level: "warning" as const, id, message: `optional coverage obligation ${id} is unmet` }];
+    }),
+    ...input.artifacts.filter((artifact) => artifact.record.type === "evidence-gap").flatMap((artifact) => {
+      const id = str(artifact.value.evidenceGapId);
+      if (id === undefined) return [];
+      // The gap's own `reason` and `affectedClaim` are authored text; under reduction the message is
+      // composed from the identifier alone, which still names the gap without quoting anyone.
+      const message = reduced ? `evidence gap ${id}` : `evidence gap ${id}: ${str(artifact.value.reason) ?? "no reason recorded"}`;
+      return [{ ruleId: "evidence-gap", level: "warning" as const, id, message }];
+    }),
+  ];
 
   // Lane 1's Execution Surface is structural, not declared: the runtime drives every `test-result`
   // through a live browser context, which is why `release-gate.ts:63-70` hardcodes "browser" for the
@@ -126,10 +182,15 @@ export function buildProjectionModel(input: Readonly<{
     runId: input.runId,
     producerVersion: input.producerVersion,
     generatedAt: input.generatedAt,
-    reduced: gateArtifact.value.protectedEnvironment === true,
-    gate: { artifactId: gateArtifact.record.id, sha256: gateArtifact.record.sha256, recommendation: str(gateArtifact.value.recommendation) ?? "NOT_READY", verdicts },
+    reduced,
+    gate: {
+      artifactId: gateArtifact.record.id,
+      sha256: gateArtifact.record.sha256,
+      recommendation: str(gateArtifact.value.recommendation) ?? "NOT_READY",
+      verdicts: reduced ? verdicts.map((verdict) => ({ ...verdict, reason: reducedVerdictReason(verdict, ruleInputs) })) : verdicts,
+    },
     attempts: [...driven, ...observed],
-    findings: [],
+    findings,
     ...(commitSha === undefined || specTreeSha256 === undefined ? {} : { anchor: { commitSha, specTreeSha256 } }),
     sourceArtifacts,
   };
