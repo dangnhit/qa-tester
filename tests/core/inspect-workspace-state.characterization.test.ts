@@ -162,9 +162,8 @@ async function buildDerivedScreenshotWorkspace() {
   const workspace = await RunWorkspace.create({ root: directory, mode: "execute", environmentProfile });
   const testcase = await registerDocument(workspace, "test-case", "case.json", testCase("TC-X"));
   const result = await registerDocument(workspace, "test-result", "result.json", testResult(workspace, "TC-X", "ATTEMPT-1"), [testcase.id]);
-  const png = await solidPng();
   const rawBundle = await workspace.registerEvidenceBundle({
-    binaries: [{ filename: "raw.png", contents: png, mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
+    binaries: [{ filename: "raw.png", contents: await solidPng(), mediaType: "image/png", captureType: "screenshot", dimensions: { width: 120, height: 80 } }],
     relationships: [result.id],
     descriptor: (binaries) => rawScreenshotDescriptor(workspace, binaries),
   });

@@ -362,6 +362,28 @@ describe("RunWorkspace", () => {
     await expect(workspace.registerArtifact(input)).rejects.toThrow(/immutable|duplicate/i);
   });
 
+  // The containment guard must fire ONLY for a source inside the workspace. A source outside it is a
+  // legitimate input — a spec or fixture elsewhere in the repo — and on Windows that includes a source
+  // on ANOTHER DRIVE, which relative-izes to `D:\…` rather than `..\…`. The hand-rolled
+  // `!startsWith("/")` test this replaced classified `D:\…` as inside, so once `isPathWithin` learned
+  // to reject cross-drive candidates it would have failed this registration with PATH_ESCAPE. This is
+  // the POSIX-expressible half (a source above the workspace root); `tests/core/fs.test.ts` pins the
+  // cross-drive decision itself under `path.win32`.
+  it("registers a real source that lives outside the workspace, rather than treating it as an escape", async () => {
+    const directory = await root();
+    const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "qa-skills-outside-source-"));
+    roots.push(outsideDirectory);
+    const sourcePath = join(outsideDirectory, "draft.json");
+    await writeFile(sourcePath, JSON.stringify(metadata(workspace)));
+
+    const registered = await workspace.registerArtifact({ type: "run-metadata", sourcePath, relationships: [] });
+
+    expect(registered.relativePath.startsWith("inputs/")).toBe(true);
+    expect(await sha256(registered.absolutePath)).toBe(registered.sha256);
+    await workspace.close();
+  });
+
   it("rejects path traversal and symlink escapes", async () => {
     const directory = await root();
     const workspace = await RunWorkspace.create({ root: directory, mode: "plan", environmentProfile });

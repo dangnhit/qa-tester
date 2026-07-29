@@ -1,7 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { QaConfig } from "../config/load-config.js";
-import { isPathWithin } from "../core/fs.js";
+import { isPathWithin, type PathSemantics } from "../core/fs.js";
 import { isRecord } from "../core/values.js";
 import { ownedResources, type TestResource } from "./resources.js";
 
@@ -14,9 +14,14 @@ type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: T
 
 /** Strictly inside `directory` — the directory itself is not a module target. Delegates the escape
  *  test to the shared `isPathWithin` so it is separator-aware: the previous literal `"../"` check
- *  admitted every `..\` traversal on Windows, where `path.relative` emits backslashes. */
-function contained(directory: string, candidate: string): boolean {
-  return relative(directory, candidate) !== "" && isPathWithin(directory, candidate);
+ *  admitted every `..\` traversal on Windows, where `path.relative` emits backslashes.
+ *
+ *  `pathApi` is threaded from `fromConfig` for one reason: without it this rejection is observable
+ *  ONLY on Windows, `tests/test-data/` is not in the Windows job's selection, and the literal `"../"`
+ *  check could be restored with the suite still green everywhere. A security check no test can fail
+ *  on is a comment. */
+function contained(directory: string, candidate: string, pathApi?: PathSemantics): boolean {
+  return relative(directory, candidate) !== "" && isPathWithin(directory, candidate, pathApi);
 }
 
 function freezeDescriptor<T extends TestDataHookDescriptor>(descriptor: T): T {
@@ -37,7 +42,9 @@ export class TestDataHookRegistry {
       this.hooks.set(frozen.id, frozen);
     }
   }
-  public static async fromConfig(config: Pick<QaConfig, "configDirectory" | "snapshot">, runners: HookRunners): Promise<TestDataHookRegistry> {
+  /** `pathApi` overrides the platform's path semantics for the containment checks below. Production
+   *  callers omit it; tests pass `path.win32` to assert the Windows escape form from POSIX CI. */
+  public static async fromConfig(config: Pick<QaConfig, "configDirectory" | "snapshot">, runners: HookRunners, pathApi?: PathSemantics): Promise<TestDataHookRegistry> {
     const configDirectory = await realpath(config.configDirectory);
     const hooks = config.snapshot.hooks;
     if (hooks === undefined) return new TestDataHookRegistry([], runners);
@@ -50,10 +57,10 @@ export class TestDataHookRegistry {
       if (hook.kind === "api" && typeof hook.fixture === "string") return { id: hook.id, kind: "api", fixture: hook.fixture };
       if (hook.kind === "module" && typeof hook.modulePath === "string" && (hook.exportName === undefined || typeof hook.exportName === "string")) {
         const candidate = resolve(configDirectory, hook.modulePath);
-        if (!contained(configDirectory, candidate)) throw new Error("Configured module hook path must remain contained by the config directory");
+        if (!contained(configDirectory, candidate, pathApi)) throw new Error("Configured module hook path must remain contained by the config directory");
         if (!(await stat(candidate)).isFile()) throw new Error("Configured module hook target must be a file");
         const modulePath = await realpath(candidate);
-        if (!contained(configDirectory, modulePath)) throw new Error("Configured module hook symlink escapes the config directory");
+        if (!contained(configDirectory, modulePath, pathApi)) throw new Error("Configured module hook symlink escapes the config directory");
         return { id: hook.id, kind: "module", modulePath, ...(typeof hook.exportName === "string" ? { exportName: hook.exportName } : {}) };
       }
       throw new Error("Config hook descriptor is invalid");

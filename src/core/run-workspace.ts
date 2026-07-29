@@ -24,7 +24,7 @@ import {
 } from "./artifact-record.js";
 import { sha256, sha256Bytes, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
-import { assertRealpathWithin, atomicWriteFile, resolveWithin } from "./fs.js";
+import { assertRealpathWithin, atomicWriteFile, isPathWithin, resolveWithin } from "./fs.js";
 import { createEntityId, createRunId } from "./ids.js";
 import { inspectWorkspaceState } from "./inspect-workspace-state.js";
 import { acquireRunLock, type RunLock } from "./run-lock.js";
@@ -172,7 +172,14 @@ export class RunWorkspace {
     return this.trackMutation(async () => {
       const sourcePath = resolve(input.sourcePath);
       const sourceRelative = relative(this.path, sourcePath);
-      if (sourceRelative === "" || (!sourceRelative.startsWith("..") && !sourceRelative.startsWith("/"))) {
+      // Only a source INSIDE the workspace goes through the symlink-containment guard. A source
+      // outside it is a legitimate registration input — a spec or fixture elsewhere in the repo — and
+      // must be left to `stat` below. Delegating the decision to `isPathWithin` rather than
+      // re-deriving it keeps the two in step: the hand-rolled `!startsWith("/")` test admitted a
+      // Windows source on ANOTHER DRIVE, which relative-izes to `D:\…` rather than to `..\…`, and
+      // once `isPathWithin` learned to reject cross-drive candidates that guard would have sent a
+      // valid registration into `assertRealpathWithin` and failed it with PATH_ESCAPE.
+      if (isPathWithin(this.path, sourcePath)) {
         await assertRealpathWithin(this.path, sourceRelative);
       }
       const sourceStats = await stat(sourcePath);

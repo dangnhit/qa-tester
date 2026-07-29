@@ -16,8 +16,15 @@ const nativePathSemantics: PathSemantics = { relative, isAbsolute, sep };
 /** Whether an already-resolved absolute `candidate` is `root` itself or lies under it. Separator-aware
  *  in both directions: the escape marker is `..${sep}` — `..\` on Windows, where a check for `../`
  *  alone silently admits every traversal — and a candidate on another Windows drive relative-izes to
- *  an absolute path, which `isAbsolute` rejects. Exported so every containment check in the codebase
- *  shares this one implementation instead of re-deriving a POSIX-only one. */
+ *  an absolute path, which `isAbsolute` rejects.
+ *
+ *  Exported so that every decision of the form "does this resolved path lie under this root" shares
+ *  this one implementation instead of re-deriving a POSIX-only one. Those are, exhaustively:
+ *  `resolveWithin`, `assertPathWithin` and `assertRealpathWithin` below; `test-data/hooks.ts`'s
+ *  `contained`; and `run-workspace.ts`'s decision of whether a registration source is inside the
+ *  workspace. `installer/manifest.ts`'s `validateRelativeFilePath` is deliberately NOT one of these —
+ *  it is a syntax gate on a DECLARED manifest string, rejecting `\` outright rather than comparing
+ *  two filesystem paths, and is already stricter than this on both platforms. */
 export function isPathWithin(root: string, candidate: string, pathApi: PathSemantics = nativePathSemantics): boolean {
   const relativePath = pathApi.relative(root, candidate);
   return relativePath === ""

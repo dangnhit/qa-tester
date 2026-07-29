@@ -53,10 +53,18 @@ export type DirectorySyncOptions = Readonly<{
   openFile?: (path: string, flags: string) => Promise<SyncHandle>;
 }>;
 
-/** Errors Windows raises for a flush the filesystem or handle simply cannot service. Durability is
- *  best-effort there; refusing to install because NTFS will not flush a handle is worse than the
- *  weaker guarantee. */
+/** Errors Windows raises when it cannot service a flush — for the OPEN as well as for the `sync()`,
+ *  since `syncTolerantly` wraps both. On Windows that means an anti-virus or indexer holding a staged
+ *  file (`EPERM`/`EACCES` on open) is tolerated too, not only a handle NTFS declines to flush.
+ *  Durability is deliberately best-effort there: refusing to install because a scanner briefly held a
+ *  file we have already written and checksummed is worse than the weaker guarantee. Nothing is
+ *  tolerated off Windows. */
 const windowsUnsupportedSync = ["EISDIR", "EINVAL", "EPERM", "ENOTSUP", "EACCES"];
+
+/** Open failures that mean "you may not write this file", and so justify retrying read-only. Anything
+ *  else — ENOENT, EMFILE, EIO — is a real fault and must propagate rather than be reinterpreted as a
+ *  read-only file. */
+const notWritableOnOpen = ["EACCES", "EPERM", "EROFS", "ETXTBSY"];
 
 function errorCode(error: unknown): string {
   return String(error instanceof Error && "code" in error ? error.code : undefined);
@@ -85,7 +93,12 @@ export async function fsyncTree(root: string, options: DirectorySyncOptions = {}
     // read-only file still falls back to the read handle exactly as before.
     else if (entry.isFile()) {
       await syncTolerantly(async () => {
-        try { return await openFile(item, "r+"); } catch { return await openFile(item, "r"); }
+        try {
+          return await openFile(item, "r+");
+        } catch (error: unknown) {
+          if (!notWritableOnOpen.includes(errorCode(error))) throw error;
+          return await openFile(item, "r");
+        }
       }, platform);
     }
   }
