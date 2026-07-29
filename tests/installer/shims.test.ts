@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import { codexManagedInner, removeCodexBlock, upsertCodexBlock } from "../../src
 import { runCli } from "../../src/cli/program.js";
 import { manifestFilename } from "../../src/installer/manifest.js";
 import { QaSkillsError } from "../../src/core/errors.js";
+import { writeProjectRuntime } from "./runtime-fixture.js";
 
 const CODEX_START = "<!-- qa-skills:start (managed by qa-skill; do not edit inside) -->";
 const CODEX_END = "<!-- qa-skills:end -->";
@@ -30,9 +31,7 @@ async function fixture(): Promise<{ sourceRoot: string; projectRoot: string }> {
   await mkdir(join(sourceRoot, "shared", "references"), { recursive: true });
   await writeFile(join(sourceRoot, "shared", "references", "safety.md"), "shared\n");
   const projectRoot = join(root, "project");
-  await mkdir(join(projectRoot, "node_modules", ".bin"), { recursive: true });
-  const runtime = join(projectRoot, "node_modules", ".bin", "qa-skill");
-  await writeFile(runtime, "#!/bin/sh\necho 0.1.0\n"); await chmod(runtime, 0o755);
+  await writeProjectRuntime(projectRoot);
   return { sourceRoot, projectRoot };
 }
 
@@ -165,8 +164,7 @@ describe("per-agent discovery shims (ADR-0011)", () => {
 
   it("CLI verify exits UNMET_OBLIGATIONS when a codex shim goes stale", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-skill-shim-cli-")); roots.push(root);
-    await mkdir(join(root, "node_modules", ".bin"), { recursive: true });
-    const runtime = join(root, "node_modules", ".bin", "qa-skill"); await writeFile(runtime, "#!/bin/sh\necho 0.1.0\n"); await chmod(runtime, 0o755);
+    await writeProjectRuntime(root);
     expect((await runCli(["skills", "install", "--agent", "codex"], { cwd: root })).exitCode).toBe(0);
     expect((await runCli(["skills", "verify", "--agent", "codex"], { cwd: root })).exitCode).toBe(0);
     const agentsPath = join(root, "AGENTS.md");

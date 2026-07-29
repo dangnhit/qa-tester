@@ -48,7 +48,23 @@ export function resolveAgentRoot(agent: AgentName, target: InstallTarget, option
 
 export type RuntimeCommand = Readonly<{ command: string; source: "project" | "path"; version: string }>;
 const runFile = promisify(execFile);
-export type RuntimeExecutionOptions = Readonly<{ platform?: NodeJS.Platform; execute?: (command: string, args: readonly string[]) => Promise<string> }>;
+/** How a `--version` probe is spawned. `windowsVerbatimArguments` is part of the contract, not an
+ *  incidental detail: the Windows `.cmd` branch is only correct when it is set (see
+ *  `runRuntimeVersion`), so the seam surfaces it and the test asserts it. */
+export type RuntimeSpawnOptions = Readonly<{ windowsVerbatimArguments?: boolean }>;
+export type RuntimeExecutionOptions = Readonly<{
+  platform?: NodeJS.Platform;
+  /** Overrides `process.env.ComSpec`; supplied by tests so the expected interpreter is deterministic. */
+  comSpec?: string;
+  execute?: (command: string, args: readonly string[], options: RuntimeSpawnOptions) => Promise<string>;
+}>;
+
+/** The Windows command interpreter to run a `.cmd` shim through. `ComSpec` is the supported way to
+ *  locate it, but an empty or absent value must still fall back — `??` alone would spawn `""`. */
+export function windowsCommandInterpreter(env: Readonly<Partial<Record<string, string>>> = process.env): string {
+  const comSpec = env.ComSpec ?? env.COMSPEC;
+  return comSpec !== undefined && comSpec.length > 0 ? comSpec : "cmd.exe";
+}
 
 export async function captureRuntimeBinding(runtime: RuntimeCommand): Promise<RuntimeBinding> {
   const resolvedPath = await realpath(runtime.command);
@@ -85,17 +101,26 @@ async function inspectRuntime(command: string, source: RuntimeCommand["source"],
   return { command, source, version };
 }
 
-/** Execute only the fixed `--version` argument; .cmd files use cmd.exe on Windows. */
+/** Execute only the fixed `--version` argument; .cmd files use cmd.exe on Windows.
+ *
+ *  `windowsVerbatimArguments` is required, not optional polish. Without it libuv re-quotes the
+ *  already-quoted `/c` payload into `"\"C:\…\qa-skill.cmd\" --version"`; `cmd /s` then strips the
+ *  outer pair and tries to run a program literally named `\"C:\…\qa-skill.cmd\"`, which fails. This
+ *  is the same `/d /s /c` + verbatim combination Node's own `{ shell: true }` builds on Windows.
+ *  Spawning the `.cmd` directly is not an alternative: Node refuses to spawn `.cmd`/`.bat` without a
+ *  shell since the CVE-2024-27980 hardening. */
 export async function runRuntimeVersion(command: string, execution: RuntimeExecutionOptions = {}): Promise<string> {
   const platform = execution.platform ?? process.platform;
   if (platform === "win32" && command.toLowerCase().endsWith(".cmd")) {
     const quoted = `"${command.replaceAll('"', '""')}" --version`;
     const args = ["/d", "/s", "/c", quoted] as const;
-    if (execution.execute) return execution.execute(process.env.ComSpec ?? "cmd.exe", args);
-    return (await runFile(process.env.ComSpec ?? "cmd.exe", args, { encoding: "utf8" })).stdout;
+    const interpreter = execution.comSpec ?? windowsCommandInterpreter();
+    const spawnOptions = { windowsVerbatimArguments: true } as const;
+    if (execution.execute) return execution.execute(interpreter, args, spawnOptions);
+    return (await runFile(interpreter, args, { ...spawnOptions, encoding: "utf8" })).stdout;
   }
   const args = ["--version"] as const;
-  if (execution.execute) return execution.execute(command, args);
+  if (execution.execute) return execution.execute(command, args, {});
   return (await runFile(command, args, { encoding: "utf8" })).stdout;
 }
 

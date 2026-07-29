@@ -2,7 +2,8 @@ import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveAgentRoot, runRuntimeVersion } from "../../src/installer/agents.js";
+import { resolveAgentRoot, runRuntimeVersion, windowsCommandInterpreter } from "../../src/installer/agents.js";
+import type { RuntimeSpawnOptions } from "../../src/installer/agents.js";
 import { fsyncTree } from "../../src/installer/install.js";
 
 const roots: string[] = [];
@@ -19,9 +20,35 @@ describe("agent install roots", () => {
   });
 
   it("uses a platform-aware fixed version invocation for Windows cmd shims", async () => {
-    const calls: Array<{ command: string; args: readonly string[] }> = [];
-    await expect(runRuntimeVersion("C:\\work\\node_modules\\.bin\\qa-skill.cmd", { platform: "win32", execute: async (command, args) => { calls.push({ command, args }); await Promise.resolve(); return "0.1.0\n"; } })).resolves.toBe("0.1.0\n");
-    expect(calls).toEqual([{ command: "cmd.exe", args: ["/d", "/s", "/c", "\"C:\\work\\node_modules\\.bin\\qa-skill.cmd\" --version"] }]);
+    const calls: Array<{ command: string; args: readonly string[]; options: RuntimeSpawnOptions }> = [];
+    // `comSpec` is supplied rather than left to `process.env.ComSpec`, which on a real Windows host
+    // is the absolute `C:\Windows\system32\cmd.exe` and made this assertion unsatisfiable there.
+    // `windowsVerbatimArguments` is asserted because the quoted `/c` payload is only correct with it.
+    await expect(runRuntimeVersion("C:\\work\\node_modules\\.bin\\qa-skill.cmd", {
+      platform: "win32",
+      comSpec: "cmd.exe",
+      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "0.1.0\n"; },
+    })).resolves.toBe("0.1.0\n");
+    expect(calls).toEqual([{
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "\"C:\\work\\node_modules\\.bin\\qa-skill.cmd\" --version"],
+      options: { windowsVerbatimArguments: true },
+    }]);
+  });
+
+  it("spawns a non-cmd runtime directly, with no interpreter and no verbatim quoting", async () => {
+    const calls: Array<{ command: string; args: readonly string[]; options: RuntimeSpawnOptions }> = [];
+    await expect(runRuntimeVersion("/work/node_modules/.bin/qa-skill", {
+      platform: "linux",
+      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "0.1.0\n"; },
+    })).resolves.toBe("0.1.0\n");
+    expect(calls).toEqual([{ command: "/work/node_modules/.bin/qa-skill", args: ["--version"], options: {} }]);
+  });
+
+  it("falls back to cmd.exe when ComSpec is absent or blank, and honours it otherwise", () => {
+    expect(windowsCommandInterpreter({})).toBe("cmd.exe");
+    expect(windowsCommandInterpreter({ ComSpec: "" })).toBe("cmd.exe");
+    expect(windowsCommandInterpreter({ ComSpec: "C:\\Windows\\system32\\cmd.exe" })).toBe("C:\\Windows\\system32\\cmd.exe");
   });
 
   it("makes unsupported Windows directory open/sync failures best-effort only", async () => {
