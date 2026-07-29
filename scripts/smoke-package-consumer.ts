@@ -36,10 +36,13 @@ try {
   const bin = join(consumer, "node_modules", ".bin", process.platform === "win32" ? "qa-skill.cmd" : "qa-skill");
   const version = run(bin, ["--version"], consumer).trim();
   // Compared against the tarball's own package.json rather than a hardcoded literal: this line
-  // used to read `if (version !== "0.1.0")` and stayed there, unnoticed, across two later version
-  // bumps (b4d5912 to 0.2.0, 2cc7030 to 0.3.0) because nothing re-ran this script until it was
-  // invoked directly. tests/installer/manifest.test.ts guards the same equality inside the source
-  // tree (runtimeVersion vs package.json); this is the same guard at the packaging boundary.
+  // used to read `if (version !== "0.1.0")` and never tracked the two later version bumps
+  // (b4d5912 to 0.2.0, 2cc7030 to 0.3.0). This was not a script that sat unexecuted between those
+  // bumps and now: CI's "Pack and install in a clean typed consumer" step (ci.yml) runs it on every
+  // push, and it has been red there on every push since the drift — a failing signal that went
+  // unacted on, not a missing one. tests/installer/manifest.test.ts guards the same equality inside
+  // the source tree (runtimeVersion vs package.json); this is the same guard at the packaging
+  // boundary.
   if (version !== installed.version) throw new Error(`installed CLI --version reported "${version}", but the installed package.json version is "${installed.version}"`);
 
   for (const locale of ["en", "vi"]) {
