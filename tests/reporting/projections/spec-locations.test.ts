@@ -187,6 +187,41 @@ describe("specLocationsByEntryIdentity", () => {
     expect(specLocationsByEntryIdentity([first, second]).has("TC-7/REV-7/INST-7@api")).toBe(false);
   });
 
+  /**
+   * The discriminating case the two tests above cannot reach, because both use DIFFERENT files.
+   *
+   * A run may hold several Runtime-Observed Executions — `executeObservedPlaywright` mints a fresh
+   * `executionId` per invocation with no uniqueness guard, and `tests/operations/export-projection.test.ts`
+   * registers two — so re-executing the same observed suite (a retry, or a second pass after a fix)
+   * hands this function two sanitized reports over the same spec tree. Every identity in them agrees
+   * with itself, byte for byte. Under a has-key ambiguity test that emptied the ENTIRE map:
+   * `unreadableRunnerReports` stayed empty, the export exited 0, and the SARIF was indistinguishable
+   * from a run whose specs were never tagged. Ambiguity is a DISAGREEMENT, and two reports saying the
+   * same thing disagree about nothing.
+   */
+  it("keeps a location claimed twice at the SAME file and line, because agreement is not ambiguity", () => {
+    const spec = { title: "[qa:TC-8/REV-8/INST-8@api] retried", ok: false, id: "spec-8", file: "specs/retried.spec.ts", line: 12, column: 1, tests: [] };
+    const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [spec] }] };
+
+    const joined = specLocationsByEntryIdentity([report, report]);
+
+    expect(joined.get("TC-8/REV-8/INST-8@api")).toEqual({ file: "specs/retried.spec.ts", line: 12 });
+    expect(joined.size).toBe(1);
+  });
+
+  /**
+   * The same agreement, reached through the LINE guard rather than through equal payloads: `line: 0`
+   * and an absent `line` both resolve to no line, so the two locations this function would emit are
+   * equal even though the payload fields are not. Comparing raw payload fields instead of resolved
+   * locations would call this a conflict and drop a location both reports agree on.
+   */
+  it("treats a rejected line and an absent line as agreeing, because both resolve to no line", () => {
+    const withZero: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-8/REV-8/INST-8@api] a", ok: false, id: "a", file: "specs/same.spec.ts", line: 0, column: 1, tests: [] }] }] };
+    const withNone: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-8/REV-8/INST-8@api] b", ok: false, id: "b", file: "specs/same.spec.ts", column: 1, tests: [] }] }] };
+
+    expect(specLocationsByEntryIdentity([withZero, withNone]).get("TC-8/REV-8/INST-8@api")).toEqual({ file: "specs/same.spec.ts" });
+  });
+
   it("attaches the joined location to the matching attempt row and to no other", () => {
     const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [runnerReport] });
     expect(model.attempts.find((row) => row.id === "E-1")?.location).toEqual({ file: "specs/checkout.spec.ts", line: 42 });

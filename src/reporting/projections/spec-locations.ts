@@ -69,10 +69,21 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * exists, never a gate on whether it exists, so an untagged spec, a spec whose tag does not parse, and
  * a spec whose file is missing are all silently excluded from the map rather than raised as an error.
  *
- * **A duplicate identity poisons the key rather than being resolved to whichever spec came first.** Two
- * specs claiming the same identity means this join cannot tell which one actually produced the entry,
- * and picking one is a guess wearing a file path -- worse than no location at all, because a wrong
- * location is indistinguishable from a right one to whoever reads it next.
+ * **A duplicate identity poisons the key only when the two occurrences DISAGREE.** Two specs claiming
+ * the same identity from DIFFERENT places means this join cannot tell which one actually produced the
+ * entry, and picking one is a guess wearing a file path -- worse than no location at all, because a
+ * wrong location is indistinguishable from a right one to whoever reads it next.
+ *
+ * Two occurrences that agree are not that case, and treating them as one silently destroyed every
+ * location for a shape that is ordinary rather than exotic. A run may hold SEVERAL Runtime-Observed
+ * Executions -- `executeObservedPlaywright` mints a fresh `executionId` per invocation with no
+ * uniqueness guard, and `tests/operations/export-projection.test.ts` registers two -- so re-executing
+ * the same observed suite inside one run (a retry, or a second pass after a fix) hands this function two
+ * sanitized reports over the SAME spec tree, carrying the same identity at the same file and the same
+ * line. There is nothing to guess between them: they say the same thing. Under a has-key test the
+ * whole map emptied, `unreadableRunnerReports` stayed empty, the export exited 0, and the SARIF was
+ * indistinguishable from a run whose specs were never tagged. So the ambiguity test compares the
+ * RESOLVED LOCATION, and only a genuine disagreement about `file` or `line` poisons the key.
  */
 export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Record<string, unknown>>[]): ReadonlyMap<string, ProjectionLocation> {
   const found = new Map<string, ProjectionLocation>();
@@ -87,7 +98,6 @@ export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Re
       // pattern requires all four groups, so a successful match always populates them, but
       // `noUncheckedIndexedAccess` still types a capture group access as possibly `undefined`.
       const key = specLocationKey({ testCaseId: match[1] ?? "", testCaseRevisionId: match[2] ?? "", testCaseInstanceId: match[3] ?? "", executionSurface: match[4] ?? "" });
-      if (found.has(key)) { ambiguous.add(key); continue; }
       // A POSITIVE INTEGER, not merely a number. `renderSarif` puts this straight into
       // `region.startLine`, which the official schema types `{"type": "integer", "minimum": 1}`
       // (verified in the vendored `fixtures/sarif/sarif-2.1.0-schema.json`), so `0`, `-3`, `1.5`, `NaN`
@@ -100,6 +110,14 @@ export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Re
       // discarding a correct fact because a neighbouring one is wrong would tell a reader less than the
       // run actually knows.
       const line = typeof spec.line === "number" && Number.isInteger(spec.line) && spec.line >= 1 ? spec.line : undefined;
+      // Compared AFTER `line` is resolved, so the two sides being compared are the locations this
+      // function would actually emit rather than the raw payload fields -- a spec whose `line` is `0`
+      // and one whose `line` is absent both resolve to no line, agree, and must not read as a conflict.
+      const existing = found.get(key);
+      if (existing !== undefined) {
+        if (existing.file !== file || existing.line !== line) ambiguous.add(key);
+        continue;
+      }
       found.set(key, line === undefined ? { file } : { file, line });
     }
   }
