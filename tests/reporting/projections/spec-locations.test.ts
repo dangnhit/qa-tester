@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildProjectionModel, type ProjectionArtifact } from "../../../src/reporting/projections/projection-model.js";
+import { renderSarif } from "../../../src/reporting/projections/sarif.js";
 import { specLocationsByEntryIdentity } from "../../../src/reporting/projections/spec-locations.js";
 
 // Task 1's `gateArtifact`/`base` fixtures, redeclared locally rather than imported from
@@ -376,6 +377,78 @@ describe("specLocationsByEntryIdentity", () => {
 
     expect(joined.get("TC-1/REV-1/INST-1@api")).toEqual({ file: "e2e/checkout.spec.ts", line: 1 });
     expect(joined.get("TC-2/REV-2/INST-2@api")).toEqual({ file: "api-tests/search.spec.ts", line: 2 });
+  });
+
+  /**
+   * `ProjectionLocation.file` is a PATH, not a URI reference, and this is the test that says so on the
+   * producing side. Percent-encoding lives at the ONE place a URI is emitted (`sarif.ts`'s
+   * `artifactUri`); re-introducing it here would double-encode, and nothing in `tests/reporting/` or
+   * `tests/operations/` could see it, because every SARIF test builds its `AttemptRow` by hand and no
+   * fixture in this file used to carry a filename needing an escape at all.
+   *
+   * Stated as the raw path rather than "is not encoded" because the field's whole contract is that a
+   * JUnit `file=` attribute or a Markdown projection could print it to a human unchanged.
+   */
+  it.each([
+    ["a space", "check out.spec.ts", "e2e/check out.spec.ts"],
+    ["a non-ASCII character", "テスト.spec.ts", "e2e/テスト.spec.ts"],
+    ["a literal percent sign", "100%-done.spec.ts", "e2e/100%-done.spec.ts"],
+    ["a fragment delimiter", "a#b.spec.ts", "e2e/a#b.spec.ts"],
+  ])("joins a filename carrying %s as the raw PATH, leaving the URI spelling to the renderer", (_case, file, expected) => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir: "/repo/e2e" },
+      suites: [{ title: "s", specs: [{ title: "[qa:TC-U/REV-U/INST-U@api] awkward", ok: false, id: "spec-u", file, line: 9, column: 1, tests: [] }] }],
+    };
+
+    expect(specLocationsByEntryIdentity(runRoot, [report]).get("TC-U/REV-U/INST-U@api")).toEqual({ file: expected, line: 9 });
+  });
+
+  /**
+   * THE INVARIANT SPANS TWO MODULES, so this is the one test that runs both halves: report payload ->
+   * join -> model -> rendered SARIF -> the URI a consumer parses. "Encode exactly once" is not
+   * observable from either module alone — encoding at the producer AND the renderer yields `%2520`,
+   * which is a perfectly valid uri-reference that decodes to `check%20out.spec.ts`, a file that does
+   * not exist. Only decoding the emitted URI back to the AUTHORED filename can catch that.
+   */
+  it.each([
+    ["a space", "check out.spec.ts"],
+    ["a literal percent sign", "100%-done.spec.ts"],
+    ["a fragment delimiter", "a#b.spec.ts"],
+  ])("encodes a filename carrying %s exactly once between the join and the rendered SARIF uri", (_case, file) => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir: "/repo/e2e" },
+      suites: [{ title: "s", specs: [{ title: "[qa:TC-1/REV-1/INST-1@api] awkward", ok: false, id: "spec-u", file, line: 9, column: 1, tests: [] }] }],
+    };
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [report] });
+
+    const sarif = JSON.parse(renderSarif(model)) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
+    const uri = sarif.runs[0].results.find((result) => result.ruleId === "observed-failure")?.locations?.[0]?.physicalLocation.artifactLocation.uri ?? "";
+    const resolved = new URL(uri, "https://example.invalid/checkout/");
+
+    expect(resolved.hash).toBe("");
+    expect(resolved.pathname.split("/").map(decodeURIComponent)).toEqual(["", "checkout", "e2e", file]);
+  });
+
+  /**
+   * The producer half of the lone-surrogate ruling. `encodeURIComponent` THROWS `URIError` on an
+   * unpaired surrogate, and one reaches here without any filesystem being involved: this payload is
+   * registered BINARY content that nothing schema-validates, `\ud800` is a legal JSON escape, and
+   * `JSON.parse` restores it verbatim on every platform (verified by executing the real
+   * `readFile` -> `JSON.parse` path, not by reasoning about NTFS).
+   *
+   * Refused HERE, alongside containment and the `line` guard, because this module's question is
+   * "is this a location I can vouch for?" and the answer has been fail-closed every other time it was
+   * asked. `sarif.ts` separately refuses to THROW on one, which is a different question — see its
+   * `artifactUri` TSDoc. The two agree on the outcome, so they are one policy with two enforcement
+   * points, not two policies.
+   */
+  it("emits no location for a spec whose filename carries a lone surrogate, which no uri can spell", () => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir: "/repo/e2e" },
+      suites: [{ title: "s", specs: [{ title: "[qa:TC-S/REV-S/INST-S@api] lone surrogate", ok: false, id: "spec-s", file: "bad\uD800name.spec.ts", line: 1, column: 1, tests: [] }] }],
+    };
+
+    expect(specLocationsByEntryIdentity(runRoot, [report]).size).toBe(0);
   });
 
   it("attaches the joined location to the matching attempt row and to no other", () => {

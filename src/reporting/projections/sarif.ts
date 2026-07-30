@@ -24,8 +24,16 @@ type SarifResult = {
  * (measured `valid: true`) naming the file `e2e/a` with fragment `b.spec.ts`, and `?` opens a query the
  * same way. A wrong location is worse than none, because a reader cannot tell it from a right one — the
  * same reason `spec-locations.ts` refuses a `file` it cannot rebase. Splitting on `/` first keeps the
- * separator a separator; everything `encodeURIComponent` leaves unescaped (`A-Za-z0-9-_.!~*'()`) is a
- * valid RFC 3986 `pchar`, so every segment it produces is safe.
+ * separator a separator, and everything `encodeURIComponent` leaves unescaped (`A-Za-z0-9-_.!~*'()`) is
+ * a valid RFC 3986 `pchar` — so every segment it produces is a legal one.
+ *
+ * Legal is not the same as inert, and exactly one class shows the difference: `.` and `..` are spelled
+ * entirely in unreserved characters, so they survive encoding untouched and are then resolved away as
+ * DOT SEGMENTS by whoever reads the URI (measured: `e2e/../secret.spec.ts` emits unchanged and resolves
+ * to `/repo/secret.spec.ts` — a different file, the same defect class as `#`, and invisible to a schema
+ * check). This function does not strip them; `spec-locations.ts` does, because `resolve()` normalizes
+ * every dot segment away before `manifestRelativePath` ever sees the path. That is a real dependency on
+ * the producer, recorded here so it cannot be broken silently from the other side.
  *
  * **Double-encoding is the risk in the other direction, and the input shape is what rules it out.** A
  * file literally named `100%-done.spec.ts` must reach `100%25-done.spec.ts` and decode back — it does,
@@ -42,12 +50,35 @@ type SarifResult = {
  * competing with it, and a literal backslash — legal in a POSIX filename, impossible in a Windows one —
  * is correctly escaped to `%5C` rather than mistaken for a separator.
  *
- * **A leading `/` or a drive letter cannot arrive**, and the containment check is why: `isPathWithin`
- * rejects a relative result that `isAbsolute`, so `manifestRelativePath` only ever returns a contained
- * relative path. Were one to arrive anyway, `encodeURIComponent` escapes `:` to `%3A`, which keeps
- * `C:/x` a relative-path reference instead of letting `C:` read as a URI scheme.
+ * **A leading `/` or a drive letter cannot arrive**, and the containment check is the ONLY thing making
+ * that true: `isPathWithin` rejects a relative result that `isAbsolute`, so `manifestRelativePath` only
+ * ever returns a contained relative path. This function does not re-derive that and cannot repair it —
+ * measured, the two halves behave differently if one ever slips through. A drive letter degrades safely
+ * (`C:/x` → `C%3A/x`, still a relative-path reference rather than a `C:` scheme), but a LEADING `/`
+ * does not: its empty first segment encodes to empty, so `/e2e/a.spec.ts` emits unchanged and resolves
+ * at the origin root, dropping the repository base entirely. Stated because the earlier version of this
+ * comment claimed a fallback that only ever held for the drive letter.
+ *
+ * **TOTAL: this function never throws, and that is a separate guarantee from truth.** `encodeURIComponent`
+ * throws `URIError` on an unpaired UTF-16 surrogate, which is unencodable as UTF-8 and therefore
+ * unspellable as any URI. `spec-locations.ts` already refuses to emit such a location — TRUTH is its
+ * guarantee, asked and answered fail-closed — but this renderer's contract is over `ProjectionModel`, an
+ * EXPORTED type any caller can construct, so the producer's care is a fact about one caller and not
+ * about the type. Measured before the fix: the throw escaped through `program.ts`'s final `else` as the
+ * bare string `URI malformed` at exit `ABORTED_OR_INTERNAL`, naming no spec file and no artifact.
+ *
+ * `undefined` — omit the location — rather than `junit.ts`'s neutralize-to-`\uFFFD`, and the two are NOT
+ * in conflict. `escapeXml` neutralizes because the field it guards is MANDATORY: a `<testcase>` must
+ * carry a `name`, XML has no way to spell "no name", and dropping the element would lose a whole result,
+ * so it accepts local damage to keep the record. SARIF's `locations` is OPTIONAL — this file already
+ * omits it for every row that joined nothing, and `projection-model.ts` states the rule: a location is
+ * an annotation on a result that already exists, never a gate on whether it exists. So SARIF can decline
+ * to spell the location and still keep the failure, where JUnit could not. `%EF%BF%BD` would be a URI
+ * naming a file that does not exist — the fabrication this whole module refuses. One rule, preserve the
+ * result and never invent, applied to fields with different obligations.
  */
-const artifactUri = (file: string): string => file.split("/").map(encodeURIComponent).join("/");
+const artifactUri = (file: string): string | undefined =>
+  (file.isWellFormed() ? file.split("/").map(encodeURIComponent).join("/") : undefined);
 
 /**
  * One SARIF result for an observed (lane-2) FAILED attempt.
@@ -69,15 +100,20 @@ const artifactUri = (file: string): string => file.split("/").map(encodeURICompo
  * credits coverage" and "this renderer simply didn't say." Naming it every time removes that ambiguity,
  * which is why this function needs no `creditsCoverage` branch at all.
  *
- * A location is attached only when one was JOINED from the sanitized report. Everything else in this
- * file has no file position that exists, and inventing one — from change-scope, from a test case, from
- * anywhere — would assert more than the run knows.
+ * A location is attached only when one was JOINED from the sanitized report AND `artifactUri` can spell
+ * it. Everything else in this file has no file position that exists, and inventing one — from
+ * change-scope, from a test case, from anywhere — would assert more than the run knows. The two reasons
+ * to carry no location are deliberately indistinguishable in the output: both mean "this run cannot say
+ * where", which is the whole claim a reader needs.
  */
 function observedResult(row: AttemptRow): SarifResult {
   const message = { text: `observed execution reported ${row.testCaseId} ${row.testCaseInstanceId} as ${row.status} (${row.failureClassification}) on the ${row.executionSurface} surface, provenance ${row.provenance}` };
-  return row.location === undefined
-    ? { ruleId: "observed-failure", level: "error", message }
-    : { ruleId: "observed-failure", level: "error", message, locations: [{ physicalLocation: { artifactLocation: { uri: artifactUri(row.location.file) }, ...(row.location.line === undefined ? {} : { region: { startLine: row.location.line } }) } }] };
+  const result: SarifResult = { ruleId: "observed-failure", level: "error", message };
+  if (row.location === undefined) return result;
+  const uri = artifactUri(row.location.file);
+  if (uri === undefined) return result;
+  const { line } = row.location;
+  return { ...result, locations: [{ physicalLocation: { artifactLocation: { uri }, ...(line === undefined ? {} : { region: { startLine: line } }) } }] };
 }
 
 /**

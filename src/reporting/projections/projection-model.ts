@@ -43,6 +43,8 @@ export type AttemptRow = Readonly<{
    *  can tell a runtime-observed row from an `agent-draft` one. This is NOT a credit filter: see
    *  `provenanceOf`'s comment for why this reducer carries the fact instead of acting on it. */
   provenance: string;
+  /** Where the spec that produced this row lives, when the join found it. A PATH, not a URI reference —
+   *  see {@link ProjectionLocation}, which is where the difference and its consequences are recorded. */
   location?: ProjectionLocation;
 }>;
 

@@ -105,13 +105,29 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * site that re-derives the decision loses the `..${sep}` marker and the cross-drive rejection that
  * primitive exists to carry. It also keeps a leading `/` and a drive letter out of the emitted path
  * altogether -- it rejects a relative result that `isAbsolute` -- which is the guarantee `artifactUri`
- * leans on when it says a scheme-like first segment cannot arrive.
+ * leans on when it says a scheme-like first segment cannot arrive. `resolve` NORMALIZES on the way
+ * through, so no `.` or `..` segment survives into the returned path either (measured: `../secret.spec.ts`
+ * under `rootDir: "/repo/e2e"` becomes `secret.spec.ts`, not `e2e/../secret.spec.ts`) -- which matters
+ * because a dot segment is spelled entirely in unreserved characters and would therefore pass through
+ * percent-encoding untouched, to be resolved away by whoever read the URI.
+ *
+ * **A LONE SURROGATE yields no location, and that is this module's question rather than the renderer's.**
+ * An unpaired UTF-16 surrogate cannot be encoded as UTF-8, so no URI can spell it -- `encodeURIComponent`
+ * THROWS `URIError` on one. It reaches here without any filesystem being involved: this payload is
+ * registered BINARY content that nothing schema-validates, `\ud800` is a LEGAL JSON escape, and
+ * `JSON.parse` restores it verbatim on every platform (a Windows filename can hold one, but the origin
+ * does not depend on that). Refused alongside containment and the `line` guard because the question this
+ * function has answered fail-closed every other time it was asked is the same one: no location rather
+ * than a wrong one. `sarif.ts` separately refuses to THROW on one -- a different question, since its
+ * contract is over a public type any caller can build -- and the two agree on the outcome, so they are
+ * one policy with two enforcement points rather than two policies.
  */
 function runRootRelativePath(runRoot: string, rootDir: string | undefined, file: unknown): string | undefined {
   if (rootDir === undefined || typeof file !== "string" || file.length === 0) return undefined;
   const absolute = resolve(rootDir, file);
   if (!isPathWithin(runRoot, absolute)) return undefined;
   const relativePath = manifestRelativePath(runRoot, absolute);
+  if (!relativePath.isWellFormed()) return undefined;
   // A spec resolving to the run root ITSELF is not a file position: this would be the empty string,
   // which SARIF would accept as a uri-reference (empty encodes to empty) and no reader could act on.
   return relativePath.length === 0 ? undefined : relativePath;

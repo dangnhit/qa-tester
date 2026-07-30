@@ -134,6 +134,32 @@ describe("renderSarif", () => {
     expect(resolved.pathname.split("/").map(decodeURIComponent)).toEqual(["", "repo", ...file.split("/")]);
   });
 
+  /**
+   * TOTALITY. `renderSarif` is a pure function over `ProjectionModel` — an EXPORTED type any caller can
+   * construct — so a hole in its domain is a latent crash, not a theoretical one. `encodeURIComponent`
+   * throws `URIError` on an unpaired UTF-16 surrogate, and one reaches a real export without any
+   * filesystem being involved: a sanitized runner report is registered BINARY content that nothing
+   * schema-validates, `\ud800` is a LEGAL JSON escape, and `JSON.parse` restores it verbatim on every
+   * platform. Measured end to end from the real read path, the throw surfaced through
+   * `program.ts`'s final `else` as the bare string `URI malformed` at exit `ABORTED_OR_INTERNAL`,
+   * naming no spec file and no artifact — an internal error where the truth is a data problem.
+   *
+   * The location is OMITTED rather than neutralized to `�`, and that is not a disagreement with
+   * `junit.ts`'s `escapeXml` — see `artifactUri`'s TSDoc for why one field is mandatory and the other
+   * optional. The RESULT still has to survive: a location is an annotation on a result, never a gate on
+   * whether it exists, so asserting only "does not throw" would let a renderer that silently dropped
+   * the whole failure pass.
+   */
+  it("does not throw on a spec filename carrying a lone surrogate, and omits the location rather than naming a file that does not exist", () => {
+    const render = (): string => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800name.spec.ts")] }));
+
+    expect(render).not.toThrow();
+
+    const observed = parseSarif(render()).runs[0].results.find((result) => result.ruleId === "observed-failure");
+    expect(observed).toBeDefined();
+    expect(observed?.locations).toBeUndefined();
+  });
+
   it("emits one result per failing verdict and per finding, and none for a passing verdict", () => {
     const sarif = parseSarif(renderSarif(model({ findings: [{ ruleId: "open-bug", level: "warning", id: "BUG-2", message: "open bug BUG-2, severity Minor" }] })));
     expect(sarif.runs[0].results.map((result) => [result.ruleId, result.level]))
