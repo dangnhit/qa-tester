@@ -344,6 +344,20 @@ describe("specLocationsByEntryIdentity", () => {
   });
 
   /**
+   * A spec resolving to the run root ITSELF has no file position to report: the rebased URI would be the
+   * empty string, which SARIF accepts as a `uri-reference` and no reader can act on. Refused rather than
+   * emitted, so a code-scanning UI never receives a location pointing at nothing in particular.
+   */
+  it("emits no location for a spec that resolves to the run root itself, which names no file", () => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir: "/repo/e2e" },
+      suites: [{ title: "s", specs: [{ title: "[qa:TC-0/REV-0/INST-0@api] the root", ok: false, id: "spec-0", file: "..", line: 1, column: 1, tests: [] }] }],
+    };
+
+    expect(specLocationsByEntryIdentity(runRoot, [report]).size).toBe(0);
+  });
+
+  /**
    * `rootDir` is read per REPORT, not once for the batch: a run holding two observed executions can
    * hold two reports under two different Playwright configs, and each report's specs must rebase
    * against that report's own root.
