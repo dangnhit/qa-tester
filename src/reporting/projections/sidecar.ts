@@ -11,9 +11,21 @@ export function projectionChecksum(bytes: Uint8Array): string {
 
 /**
  * Binds a derived file to the exact gate it projects. The projection is NOT a registered artifact — a
- * finalized run is closed — so this sidecar is the only thing that lets a reader prove which gate, and
- * which source artifacts, a given XML or SARIF file came from. Without it the file would be a
- * self-certifying channel: a hand-edited XML would be indistinguishable from a real one.
+ * finalized run is closed — so this sidecar is the only thing that names which gate, and which source
+ * artifacts, a given XML or SARIF file was projected from.
+ *
+ * **What it enforces, stated as what is enforced.** Neither file is signed. The sidecar is unsigned JSON
+ * written beside the projection by the same command, into the same directory, with the same permissions,
+ * so anyone who can edit `qa-junit.xml` can recompute the sha256 and rewrite the sidecar to match. With
+ * only the two files in hand, a hand-edited XML IS indistinguishable from a real one, and any wording
+ * here that suggests otherwise would be describing a mechanism this code does not have. What the pair
+ * genuinely provides is INTEGRITY OF THE PAIR — a projection corrupted in transit, truncated by a CI
+ * artifact store, or edited by someone who did not think to update the sidecar no longer matches its
+ * `projectionSha256` — and a POINTER: `runId`, `gate.artifactId`, `gate.sha256` and `sourceArtifacts`
+ * name artifacts inside a run workspace whose manifest is itself checksummed and re-verified on every
+ * read (`inspect-workspace-state.ts`). A reader who still has that workspace can check the sidecar's
+ * claims against it, and THAT check is what turns consistency into authenticity. A reader who has only
+ * the two files cannot, and should not be told they can.
  *
  * It takes the BYTES and hashes them here rather than accepting a caller-computed digest, and that is
  * the whole point of the parameter: a sidecar that could be handed a checksum would be able to describe

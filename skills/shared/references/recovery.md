@@ -358,6 +358,15 @@ catch-all mapping is `program.ts:298-341`):
     that loop runs to completion, or throws, **before either the projection or the sidecar is written**
     (`export-projection.ts:191-199`). A projection written and then a refused sidecar would leave a file
     on disk that nothing vouches for — the exact state the sidecar exists to make impossible.
+    **What this refusal does not cover, stated so an operator is not misled about it:** the guard
+    resolves *symlinks*, and a **hard link** at either output path defeats it — `realpath` has no target
+    to follow for one, so a path whose inode *is* a registered artifact reads as outside the results root
+    and `writeFile`'s `O_TRUNC` overwrites it in place, leaving that run `CHECKSUM_MISMATCH` forever
+    while the export exits `0`. Confirmed by execution; it needs the output placed on the same
+    filesystem as the run. A filed follow-up moves the containment check to open time (`O_NOFOLLOW` plus
+    an `fstat` rejecting `nlink > 1` on the descriptor about to be written), which is also what closes
+    the window between this check and the writes. Until then, write projections to a directory a
+    would-be attacker cannot pre-populate.
   - an `--out` (or its sidecar) **whose destination cannot be resolved at all** — a dangling symlink or a
     symlink loop (`export-projection.ts:150`). This is a deliberate refusal, not a bug: the guard's job
     is to *prove* the write lands outside the runs, and "I could not work out where this goes" is not a

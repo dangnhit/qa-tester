@@ -176,13 +176,23 @@ have contributed are missing from lane-2 rows it covers, not the results, the ga
 run's recorded coverage credit. The same detail is also written to stderr, not only the JSON result, so
 it surfaces in a CI log even when nobody parses stdout (`program.ts:290-294`).
 
-**The sidecar and what it proves.** `<out>.provenance.json` is written only after its projection is
-written successfully, and binds a hash of the projection's own bytes (`projectionSha256`) to the run it
-was projected from: the gate artifact's id, sha256, and recommendation, every other artifact the gate was
-derived from (id, sha256, type), the `reduced` flag, the producer version, and the generation timestamp.
-It is what lets a later reader confirm a `qa-junit.xml` sitting in a CI artifact store actually came from
-the run it claims to, and was not hand-edited afterward — the checksum is of the file the sidecar sits
-beside, not of anything the run itself produced.
+**The sidecar, and what it does and does not prove.** `<out>.provenance.json` is written only after its
+projection is written successfully, and binds a hash of the projection's own bytes (`projectionSha256`)
+to the run it was projected from: the gate artifact's id, sha256, and recommendation, every other
+artifact the gate was derived from (id, sha256, type), the `reduced` flag, the producer version, and the
+generation timestamp. The checksum is of the file the sidecar sits beside, not of anything the run itself
+produced.
+
+**Neither file is signed, so the two alone prove consistency, not authenticity.** The sidecar is plain
+JSON written by the same command into the same directory with the same permissions as the projection, so
+anyone who can edit `qa-junit.xml` can recompute its sha256 and rewrite the sidecar to match. Holding
+only the two files, you can detect a projection that was corrupted in transit, truncated by an artifact
+store, or edited by someone who did not think to update the sidecar — and nothing more. What makes the
+pair mean something is the third thing it points at: `runId`, `gate.artifactId`, `gate.sha256` and
+`sourceArtifacts` name artifacts inside a run workspace whose manifest is checksummed and re-verified on
+every read. Check the sidecar against that workspace — `qa-skill validate --root <path> --run-id <id>`
+reopens and re-verifies it — and the claim becomes one an editor of the two files cannot forge. Treat a
+projection and its sidecar arriving without the run behind them as consistent, not as vouched for.
 
 **A protected-environment run produces a reduced projection.** When the run's release gate carries
 `protectedEnvironment: true`, `export` carries that through as `reduced: true` on both the printed result

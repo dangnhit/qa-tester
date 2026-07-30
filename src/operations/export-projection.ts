@@ -112,7 +112,30 @@ async function readRunnerReports(
 }
 
 /**
- * Refuses before anything is written unless EVERY output lands outside the results root.
+ * Refuses before anything is written unless every output path can be RESOLVED to a location outside the
+ * results root. What that does and does not cover is set out below; the short version is that it
+ * resolves symlinks and does not see hard links.
+ *
+ * **NOT COVERED: a HARD LINK at either output path. Confirmed by execution, and open.** `realpath` has
+ * no target to follow for a hard link — it answers with the path it was given — so `isRealPathWithin`
+ * returns `false` for a path whose INODE is a registered artifact inside `qa-results/`, this guard waves
+ * it through, and `writeFile`'s `O_TRUNC` overwrites that inode in place. The consequence is the
+ * symlink attack's exactly: the victim run is `CHECKSUM_MISMATCH` forever and the export exits 0. The
+ * extra precondition is same-filesystem placement (and, on Linux with the default
+ * `fs.protected_hardlinks=1`, permission to link the target; unrestricted on macOS). This is NOT
+ * TOCTOU-shaped and `O_NOFOLLOW` does not address it — `O_NOFOLLOW` refuses a symlink and cannot see a
+ * second name for an inode. The fix is to ask the containment question AT OPEN TIME, against the file
+ * descriptor about to be written: `O_NOFOLLOW` plus an `fstat` rejecting `nlink > 1`. Filed as its own
+ * task; the doc says so here rather than claiming a coverage this function does not have.
+ *
+ * **ALSO NOT COVERED: the window between this check and the writes.** Every path is resolved here, at
+ * the first statement of the operation, and the writes happen after `readRegisteredArtifacts()` and
+ * every runner-report read — the slowest stretch of the operation. A symlink planted at an output path
+ * during that window is followed. Checking each path immediately before its own write would narrow the
+ * window but reopen a worse hole: a projection written and then a refused sidecar leaves bytes on disk
+ * that nothing vouches for. Correctness ordering and TOCTOU exposure pull in opposite directions here,
+ * and only the open-time check above resolves both — which is the second reason that follow-up is
+ * framed as "check at open time" rather than "add `O_NOFOLLOW`".
  *
  * **Every output, not just `--out`.** The sidecar's path is DERIVED from the projection's by
  * concatenation, so a guard on `--out` alone says nothing about it — and being derived is what makes it
@@ -180,7 +203,10 @@ async function assertOutputsAreOutsideTheRuns(closedRuns: string, outputs: reado
  * whether or not it is the one being projected. Overwriting a registered file is worse still: that run
  * is `CHECKSUM_MISMATCH` forever. So BOTH of this operation's outputs — the projection and the sidecar
  * derived from its name — are checked against the whole results root, symlinks resolved, and BOTH are
- * checked before EITHER is written. See `assertOutputsAreOutsideTheRuns`.
+ * checked before EITHER is written. Two routes are NOT covered and are named where the check lives, not
+ * here: a hard link at an output path, and the window between the check and the writes. See
+ * `assertOutputsAreOutsideTheRuns` for both, and read this heading as what the guard enforces rather
+ * than as an unconditional guarantee.
  */
 export async function exportProjection(options: Readonly<{ root: string; runId: string; format: string; outPath: string }>): Promise<ExportProjectionResult> {
   if (!isFormat(options.format)) throw new QaSkillsError(`Unsupported projection format ${options.format}: use junit or sarif`, "INVALID_ARTIFACT");
