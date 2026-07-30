@@ -64,15 +64,23 @@ export function renderSarif(model: ProjectionModel): string {
     runs: [{
       tool: { driver: { name: "qa-skills", version: runtimeVersion, informationUri: "https://github.com/dangnhit/qa-tester", rules: ruleIds.map((id) => ({ id })) } },
       automationDetails: { id: model.runId },
-      // No `versionControlProvenance` here — see the long comment this decision earned in
-      // `sarif.test.ts`'s "never invents a repository location" test. In short: the SARIF schema
-      // requires `versionControlDetails.repositoryUri` (format: uri, non-empty), `ProjectionModel`
-      // carries no repository URL anywhere, and this renderer does not read the filesystem or git to
-      // find one — so there is no value here that would not misdescribe whichever repository a CI
-      // consumer is actually scanning. The brief's fallback (`{ revisionId: ... }` alone, no
-      // `repositoryUri`) was tried and FAILS the official schema too: `repositoryUri` is REQUIRED, so
-      // omitting it is exactly as invalid as `repositoryUri: ""`. The schema is the authority, not the
-      // plan, and what it actually requires here cannot be honestly supplied from this model.
+      // `versionControlProvenance` is NOT used, even though it is SARIF's named field for exactly this
+      // fact. Its item type, `versionControlDetails`, REQUIRES `repositoryUri` (format: uri, non-empty)
+      // -- verified by compiling the vendored schema, not assumed: both `repositoryUri: ""` and omitting
+      // `repositoryUri` while keeping only `revisionId` fail validation (the latter with "must have
+      // required property 'repositoryUri'"). `ProjectionModel` carries no repository URL anywhere -- not
+      // on `anchor`, not on any artifact -- and this renderer reads no filesystem or git to find one, so
+      // there is no honest value for that required field.
+      //
+      // But `commitSha`/`specTreeSha256` ARE facts the run verified -- the lane-2 git anchor, re-resolved
+      // after the runner exits and the run refused if the spec tree moved (ADR-0010) -- so dropping them
+      // entirely would repeat, in the other direction, the exact mistake `observedResult` above exists to
+      // avoid marking rather than dropping an anomalous provenance. `run.properties` is SARIF's own
+      // propertyBag (`additionalProperties: true`), the sanctioned home for a verified fact with no clean
+      // named field; an unrecognized property is inert to a consumer that does not look for it. Emitted
+      // only when `model.anchor` exists: a run with no observed execution has no verified revision, and an
+      // empty or zero-filled bag would be exactly the fabrication this task exists to avoid.
+      ...(model.anchor === undefined ? {} : { properties: { commitSha: model.anchor.commitSha, specTreeSha256: model.anchor.specTreeSha256 } }),
       results,
     }],
   };

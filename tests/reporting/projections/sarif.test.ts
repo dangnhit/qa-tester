@@ -37,6 +37,7 @@ type SarifDoc = {
   runs: [{
     automationDetails: { id: string };
     versionControlProvenance?: { repositoryUri: string; revisionId: string }[];
+    properties?: { commitSha: string; specTreeSha256: string };
     results: SarifResult[];
   }];
 };
@@ -48,7 +49,14 @@ describe("renderSarif", () => {
     const ajv = new Ajv({ strict: false, allErrors: true });
     addFormats(ajv);
     expect(ajv.compile(schema)(JSON.parse(renderSarif(model({
-      findings: [{ ruleId: "open-bug", level: "error", id: "BUG-1", message: "open bug BUG-1, severity Critical" }],
+      // Two open bugs sharing "open-bug" as their ruleId (an ordinary run shape: more than one open bug
+      // is common) make `tool.driver.rules`'s de-duplication LOAD-BEARING for this test: the schema's
+      // `reportingDescriptor` array has `uniqueItems: true`, so two identical `{ "id": "open-bug" }`
+      // entries would fail validation if the renderer's `[...new Set(...)]` were ever deleted.
+      findings: [
+        { ruleId: "open-bug", level: "error", id: "BUG-1", message: "open bug BUG-1, severity Critical" },
+        { ruleId: "open-bug", level: "warning", id: "BUG-3", message: "open bug BUG-3, severity Minor" },
+      ],
       attempts: [{ lane: "observed-entry", id: "E-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", durationMs: 5, provenance: "runtime-observed", location: { file: "specs/checkout.spec.ts", line: 42 } }],
       anchor: { commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) },
     }))))).toBe(true);
@@ -112,5 +120,17 @@ describe("renderSarif", () => {
     expect(withAnchor.runs[0].automationDetails.id).toBe("RUN-1");
     expect(withAnchor.runs[0].versionControlProvenance).toBeUndefined();
     expect(parseSarif(renderSarif(model())).runs[0].versionControlProvenance).toBeUndefined();
+  });
+
+  // Human ruling (fix round 1): dropping the verified anchor entirely went one step further than the
+  // schema finding justified. `commitSha`/`specTreeSha256` are facts the run VERIFIED (the lane-2 git
+  // anchor, re-resolved after the runner exits, ADR-0010) -- not an invented `physicalLocation` -- so they
+  // belong in `run.properties`, SARIF's sanctioned propertyBag (`additionalProperties: true`) for a
+  // verified fact with no clean named field, rather than being thrown away with the field that DOES
+  // require an unavailable `repositoryUri`.
+  it("carries the verified git anchor in run.properties when one exists, and omits it when there is none", () => {
+    const withAnchor = parseSarif(renderSarif(model({ anchor: { commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) } })));
+    expect(withAnchor.runs[0].properties).toEqual({ commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) });
+    expect(parseSarif(renderSarif(model())).runs[0].properties).toBeUndefined();
   });
 });
