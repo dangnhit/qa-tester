@@ -106,6 +106,14 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
  *  registers an evidence-gap artifact with authored text as its own id. This module enforces nothing
  *  here either; that guarantee lives entirely in the one producer, not in this reducer.
  *
+ *  **`obligationId` reaches `findings` too, and it is the one with no protection at either end** — the
+ *  same `ingest-coverage-obligation.ts:19-24` verbatim registration named above, arriving here through
+ *  `coverage.requiredMissing` and `coverage.optionalGaps` as a `finding.id` and inside a
+ *  `finding.message`, on top of the `REQUIRED_COVERAGE_COMPLETE` reason. So of the two unpatterned ids
+ *  a reader might worry about, `evidenceGapId` is the one a producer guards and `obligationId` is the
+ *  one nothing reduces or shapes on any path. That is not only a prose risk: `junit.ts`'s `escapeXml`
+ *  handles XML-illegal control characters because THIS field is where one arrives.
+ *
  *  The drift test in tests/reporting/projections/projection-model.test.ts pins this list against the
  *  rules `evaluateReleaseGate` actually emits, so a seventh rule cannot silently inherit "safe". */
 export const identifierOnlyGateRules = [
