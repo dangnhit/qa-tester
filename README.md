@@ -77,6 +77,7 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill approval record --root <path> --run-id <id> --plan-artifact-id <id> --approved-by <identity>` | Persist an immutable human approval bound to the exact pending plan checksum. |
 | `qa-skill attestation record --root <path> --run-id <id> --obligation-id <id> --method <keyboard\|screen-reader\|cognitive-manual> --attested-by <identity> --statement <text>` | Persist a person's immutable Human Attestation that a manual accessibility evaluation was carried out, bound to the exact obligation checksum. An agent cannot author one. |
 | `qa-skill validate --root <path> --run-id <id> [--profile <name>]` | Reopen and validate checksums, relationships, schemas, and an optional Artifact Profile. |
+| `qa-skill export --root <path> --run-id <id> --format <junit\|sarif> --out <path>` | Project a finalized run's release gate into a JUnit XML or SARIF 2.1.0 file for CI, writing a provenance sidecar to `<out>.provenance.json`. See [Consuming the gate in CI](#consuming-the-gate-in-ci). |
 
 Public workflow modes are `plan`, `execute`, `full`, `exploratory`, `retest`, and `regression`. `cleanup` is a linked maintenance-run profile created through the cleanup operation; it is not accepted by the public workflow runner.
 
@@ -90,6 +91,96 @@ Exit codes:
 | `3` | Input, schema, profile, command, or compatibility data is invalid. |
 | `4` | A path, symlink, installer, environment, or side-effect safety rule denied the action. |
 | `5` | Execution aborted or an internal failure occurred. |
+
+## Consuming the gate in CI
+
+`qa-skill export --root <path> --run-id <id> --format junit|sarif --out <path>` projects a **finalized**
+run's persisted release gate into a JUnit XML or a SARIF 2.1.0 file, writes a provenance sidecar to
+`<out>.provenance.json`, and prints a JSON result (`format`, `outPath`, `sidecarPath`,
+`projectionSha256`, `recommendation`, `reduced`, `unreadableRunnerReports`) to stdout. It exits `0` on
+success — **including when `recommendation` is `NOT_READY`** — because exporting itself succeeded; the
+verdict travels in the projection and the sidecar, never in this exit code. Refusals exit `3`; a
+`--run-id` that does not exist exits `5`. The full breakdown, with file:line citations, is in
+[`recovery.md`](skills/shared/references/recovery.md#qa-skill-export).
+
+A minimal pipeline that runs the gate and always uploads its projections:
+
+```yaml
+- id: qa
+  continue-on-error: true
+  run: |
+    set -o pipefail
+    npx qa-skill workflow run --input workflow-input.json | tee qa-run.json
+- if: always()
+  run: |
+    RUN_ID=$(jq -r .runId qa-run.json)
+    npx qa-skill export --root . --run-id "$RUN_ID" --format junit --out qa-junit.xml
+    npx qa-skill export --root . --run-id "$RUN_ID" --format sarif --out qa.sarif
+- if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: qa.sarif
+- if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: qa-run-artifacts
+    path: |
+      qa-run.json
+      qa-junit.xml
+      qa-junit.xml.provenance.json
+      qa.sarif
+      qa.sarif.provenance.json
+- if: steps.qa.outcome == 'failure'
+  run: exit 1
+```
+
+**The pitfall this exists to teach:** `workflow run` exits `1` on `NOT_READY`
+(`src/cli/exit-codes.ts:39`), the exact outcome the gate exists to report. GitHub's own default for a
+step with no `if:` of its own is `success()` — it runs only when nothing earlier failed — so a `qa` step
+that fails on a `NOT_READY` gate would, by that default alone, skip every plain step after it: the export
+calls, the SARIF upload, the artifact upload. The pipeline would lose its projections in precisely the
+case they exist for, and lose them silently. `if: always()` on each of those steps overrides that
+default and runs them regardless. `continue-on-error: true` on the `qa` step, together with reading
+`steps.qa.outcome` (the result *before* `continue-on-error` is applied) rather than `steps.qa.conclusion`
+(which `continue-on-error` masks to `success`) in the final step, is the other half: it keeps that step's
+own failure from being what fails the job, so one deliberate final step — placed after the artifacts
+already exist — is what fails it instead.
+
+**A second pitfall, found only by running this end to end: `| tee` can swallow the first pitfall's exit
+code.** `cmd | tee file; echo $?` reports `tee`'s exit status, not `cmd`'s — measured locally: without
+`set -o pipefail`, the sequence above reports exit `0` for a `workflow run` that actually exited `1`.
+GitHub's own default shell on Linux and macOS is `bash -e {0}` (no `pipefail`) unless a step or job sets
+`shell: bash` explicitly, which adds `-eo pipefail`. Relying on that default being set somewhere else in
+the workflow is fragile, so the `set -o pipefail` line above is not decorative: without it,
+`steps.qa.outcome` reads `success` for a `NOT_READY` run, `continue-on-error` never has anything to
+catch, and the final `if: steps.qa.outcome == 'failure'` step never fires — the exact silent-green
+failure this whole section exists to prevent, reintroduced one layer up.
+
+**The sidecar and what it proves.** `<out>.provenance.json` is written only after its projection is
+written successfully, and binds a hash of the projection's own bytes (`projectionSha256`) to the run it
+was projected from: the gate artifact's id, sha256, and recommendation, every other artifact the gate was
+derived from (id, sha256, type), the `reduced` flag, the producer version, and the generation timestamp.
+It is what lets a later reader confirm a `qa-junit.xml` sitting in a CI artifact store actually came from
+the run it claims to, and was not hand-edited afterward — the checksum is of the file the sidecar sits
+beside, not of anything the run itself produced.
+
+**A protected-environment run produces a reduced projection.** When the run's release gate carries
+`protectedEnvironment: true`, `export` carries that through as `reduced: true` on both the printed result
+and the sidecar. Identifiers, statuses, severities, execution surfaces, counts, and any spec location a
+lane-2 entry joined all survive reduction unchanged; only free-form authored or telemetry-derived text is
+stripped — an evidence gap's `reason`, a shared-blocker's quoted `affectedClaim`. Check `reduced` before
+treating an absent explanation as a missing one: it may be a redaction, not a gap in the run.
+
+**A SARIF result with no `locations` is one the run has no honest file position for, not an omission.**
+A result carries a location only when it is a lane-2 (Runtime-Observed Execution) failure whose spec file
+was actually joined from that execution's sanitized runner report — the only case where a real path
+inside a committed spec tree exists to name. Every other result — a failing gate rule, an open-bug or
+unmet-coverage finding, a lane-1 browser-driven attempt — is emitted without one, because inventing a
+location from a test case name or a change diff would assert more than the run knows. This has a real
+consequence for a SARIF consumer: GitHub's code scanning documentation states that a result needs a
+location for GitHub to display it at all, so a location-less result uploads successfully but does not
+appear as an inline annotation — the JUnit output is the projection that shows every gate rule and every
+attempt regardless of whether either carries a file position.
 
 ## Skill use
 

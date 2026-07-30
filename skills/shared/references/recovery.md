@@ -320,3 +320,72 @@ resume finishes it.
 Before reporting success or failure to the user, read `outcome`, `validation.valid` (and its
 `diagnostics` when invalid), and `releaseRecommendation` from the JSON body. Do not infer the situation
 from the exit code alone.
+
+## `qa-skill export`
+
+```
+qa-skill export --root <path> --run-id <id> --format junit|sarif --out <path>
+```
+
+Projects a **finalized** run's already-persisted release gate into a JUnit XML or SARIF 2.1.0 file for
+CI, and writes a provenance sidecar to `<out>.provenance.json` (`src/operations/export-projection.ts`).
+No second gate derivation happens here: the gate this projects is the one `readRegisteredArtifacts()`
+already verified when it opened the run (`run-workspace.ts:448-450` throws `ARTIFACT_BINDING` on any
+diagnostic) — re-deriving it a second time to cross-check would repeat the exact defect the
+`VALID_ARTIFACTS` incident records, one call site later.
+
+Exit codes (`src/cli/exit-codes.ts`; the command's own action is `src/cli/program.ts:277-295`, the
+catch-all mapping is `program.ts:298-341`):
+
+- **`0` `SUCCESS`** — the projection and sidecar were written. This includes a `NOT_READY` gate:
+  exporting succeeded, and the verdict is on `recommendation` in the printed JSON and in the sidecar,
+  never on the exit code. `qa-skill workflow run` is the command that carries a `NOT_READY` gate as its
+  own exit `1` (`exit-codes.ts:39`); `export` deliberately does not repeat that meaning on a second
+  command — one exit code with two meanings would be worse than two commands with one each.
+- **`3` `INVALID_INPUT`** — a refusal. Every `QaSkillsError` this command can throw carries a code other
+  than `LIVE_LOCK`/`SPEC_TREE_DIRTY` or the `SAFETY_DENIED` set, so all of them fall to the catch-all's
+  `else` branch (`program.ts:325`). Four distinct causes land here:
+  - an unsupported `--format` — anything but exactly `junit` or `sarif` (`export-projection.ts:186`).
+  - a run with **no release gate** — only a finalized `full` or `regression` run registers one; `plan`,
+    `execute`, `exploratory`, and `retest` runs never do (`projection-model.ts:138`).
+  - an `--out` (or its derived `<out>.provenance.json` sidecar) that **resolves inside the results
+    root** — a run workspace is closed and checksummed, and a file landing under any run's `inputs/` or
+    `evidence/` either invalidates a registered artifact (`CHECKSUM_MISMATCH`, forever) or orphans the
+    run (`ORPHAN_FILE`) (`export-projection.ts:153`). Both outputs are checked against the whole results
+    root, symlinks resolved, before either is written — not just `--out` alone, and not one-at-a-time.
+  - an `--out` (or its sidecar) **whose destination cannot be resolved at all** — a dangling symlink or a
+    symlink loop (`export-projection.ts:150`). This is a deliberate refusal, not a bug: the guard's job
+    is to *prove* the write lands outside the runs, and "I could not work out where this goes" is not a
+    proof. It has a real availability cost — an `--out` that used to be a symlink to a not-yet-created
+    file *outside* `qa-results/` worked before this guard existed and refuses now — but failing open
+    would cost a run instead of a write.
+- **`5` `ABORTED_OR_INTERNAL`** — a `--run-id` that does not exist. `RunWorkspace.open` calls `realpath`
+  on the run's resolved path unguarded (`run-workspace.ts:137-139`), and `assertRealpathWithin` reaches a
+  bare `realpath` on a path that does not exist (`core/fs.ts:128-130`), which raises a raw Node `ENOENT`
+  — not a `QaSkillsError` — so the catch-all's fallback maps it to `ABORTED_OR_INTERNAL`
+  (`program.ts:340`), not `INVALID_INPUT`. **This is not a quirk of `export`**: `validate`, `approval
+  record`, and `attestation record` all behave identically, and `execute-observed-playwright.ts:343-346`
+  already states the ruling for the whole family — a `--root`/`--run-id` pair that does not resolve
+  surfaces as the raw filesystem error `RunWorkspace.open`'s `realpath` throws. A filed follow-up tracks
+  giving `RunWorkspace.open` its own typed refusal for a missing run; special-casing `export` alone to
+  answer `3` here would put one command out of step with every sibling that opens a run.
+- **`2` `BLOCKED`** — reachable the same way every other run-scoped command reaches it, not through
+  anything specific to exporting. `RunWorkspace.open` acquires a process lock for any run that is not yet
+  terminal (`run-workspace.ts:144`), and a genuinely live second process already holding that lock raises
+  `LIVE_LOCK` (`core/run-lock.ts:46`), which the catch-all maps to `BLOCKED` (`program.ts:321`). A
+  finalized run never takes this path — `open` never acquires a lock for one — so this is only reachable
+  by exporting a run that is still mid-execution while another process has it open; wait for that process
+  to finish or stop it, per [Live lock](#live-lock-live_lock) above.
+
+An agent producing CI artifacts from only this bundle needs one call per format, against the same
+finalized `--run-id`:
+
+```bash
+qa-skill export --root <path> --run-id <id> --format junit --out qa-junit.xml
+qa-skill export --root <path> --run-id <id> --format sarif --out qa.sarif
+```
+
+Both calls succeed or refuse identically for the same run — the only difference is the file each
+renders. See [Consuming the gate in CI](../../../README.md#consuming-the-gate-in-ci) in the README for
+the sidecar's contents, the reduced-projection behavior under a protected environment, and why a SARIF
+result can carry no `locations`.
