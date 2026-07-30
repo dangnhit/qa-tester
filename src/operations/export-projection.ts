@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { open, readFile, rm, type FileHandle } from "node:fs/promises";
+import { lstat, open, readFile, rm, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { QaSkillsError } from "../core/errors.js";
@@ -190,9 +190,25 @@ type OpenOutput = Readonly<{ path: string; handle: FileHandle; created: boolean 
  * What this flag adds on POSIX is the guarantee that no name is resolved twice: without it, a path that
  * is a symlink at open time yields the TARGET's descriptor, and a swap between the path guard's
  * `realpath` and that open would redirect the write. Windows keeps the path guard (which already refuses
- * a symlink resolving INTO a run) and keeps the `nlink` question below, which is asked everywhere.
+ * a symlink resolving INTO a run), and it still ASKS the `nlink` question below — but asking is not
+ * answering: nothing here has measured what NTFS reports, and on exFAT, FAT32 and many network shares
+ * `nlink` is simply 1 because the filesystem has no hard links to count.
  */
 const openNoFollow: number = fsConstants.O_NOFOLLOW ?? 0;
+
+/**
+ * `O_NONBLOCK` (4 on darwin, measured; likewise absent on Windows) changes nothing for a regular file —
+ * a 300,000-byte write through a descriptor carrying it lands in full, measured — and everything for a
+ * FIFO: opening one for WRITING blocks until a reader appears, indefinitely.
+ *
+ * That block matters because this operation opens at the TOP. An attacker who can create a name at
+ * either output path — the same capability the hard-link and symlink guards exist to defend against, and
+ * `<out>.provenance.json` needs no influence over the caller's argument at all — could otherwise hang
+ * `qa-skill export` forever, before any diagnostic is produced and where `process.exit` cannot help.
+ * With this flag the open answers `ENXIO` immediately (0 ms, measured) and `openOutput` turns that into
+ * the same shape refusal a FIFO WITH a reader gets from the `isFile` check.
+ */
+const openNonBlocking: number = fsConstants.O_NONBLOCK ?? 0;
 
 /**
  * Opens one output for writing WITHOUT `O_TRUNC`, and reports whether it had to create it.
@@ -205,7 +221,18 @@ const openNoFollow: number = fsConstants.O_NOFOLLOW ?? 0;
  * **`O_CREAT|O_EXCL` first, plain open second, and the distinction is the residue policy.** The two-step
  * is not a race workaround; it is how this operation learns whether the file is one it may clean up.
  * `O_EXCL` also refuses to follow a symlink by POSIX rule, so a linked path reaches the second open,
- * where `O_NOFOLLOW` turns it into `ELOOP` and a refusal that names what happened.
+ * where `O_NOFOLLOW` turns it into `ELOOP` and a refusal that names what happened. `O_NOFOLLOW` on the
+ * FIRST open is therefore redundant on any POSIX system — it is kept because a security property should
+ * not rest on one platform honouring one clause of a specification, and it costs nothing.
+ *
+ * **A non-regular `--out` is refused by SHAPE, here, not diagnosed later.** Neither `O_NOFOLLOW` nor
+ * `nlink` sees a FIFO or a device node — measured: a FIFO with a reader opens, `isFile()` false,
+ * `nlink` 1 — so both containment guards wave it through. What happens next is worse than an error, and
+ * was measured by removing this check: `truncate(0)` no-ops silently, `writeFile` streams the whole
+ * projection into the pipe, the sidecar lands on disk as an ordinary file, and the export exits 0
+ * CERTIFYING bytes that no longer exist anywhere a reader can check them. A non-seekable destination is
+ * not supported at all — the sidecar is a SECOND file derived from this one's name, and a stream has no
+ * second file. Asked at open because the shape of an already-open descriptor cannot change afterwards.
  *
  * The availability cost is real and deliberate: an operator whose `--out` is a symlink to a file
  * elsewhere OUTSIDE `qa-results/` used to be written through, and is now refused. That is what buys the
@@ -213,16 +240,43 @@ const openNoFollow: number = fsConstants.O_NOFOLLOW ?? 0;
  * name resolved a second time in between.
  */
 async function openOutput(path: string): Promise<OpenOutput> {
+  const creating = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | openNoFollow | openNonBlocking;
+  let opened: Readonly<{ handle: FileHandle; created: boolean }>;
   try {
-    return { path, handle: await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | openNoFollow, 0o666), created: true };
+    opened = { handle: await open(path, creating, 0o666), created: true };
   } catch (error: unknown) {
+    // Passed through rather than falling on to the second open, which would answer a DIFFERENT question
+    // about the same path: a read-only parent directory yields `EACCES` here and `ENOENT` there
+    // (measured), and only the first is the true diagnosis.
     if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    opened = { handle: await openExistingOutput(path), created: false };
   }
   try {
-    return { path, handle: await open(path, fsConstants.O_WRONLY | openNoFollow), created: false };
+    const shape = await opened.handle.stat();
+    if (!shape.isFile()) {
+      throw new QaSkillsError(`Refusing to write ${path}: it is not a regular file. A projection is written beside a provenance sidecar derived from its name, so a FIFO, socket or device node cannot be an export destination — there is no second file to put the sidecar in, and a stream cannot be truncated or written at an offset. Export to an ordinary file.`, "INVALID_ARTIFACT");
+    }
+  } catch (error: unknown) {
+    // The refusal above, or a failed `fstat`, is what the caller must see; a failure to close a handle
+    // nobody will use cannot be allowed to replace it.
+    try { await opened.handle.close(); } catch { /* Superseded by the error being rethrown. */ }
+    throw error;
+  }
+  return { path, handle: opened.handle, created: opened.created };
+}
+
+/** The second open, for a path that already exists. Two errno cases become typed refusals because their
+ *  raw form names a mechanism rather than a decision the operator can act on; everything else is passed
+ *  through as the filesystem reported it. */
+async function openExistingOutput(path: string): Promise<FileHandle> {
+  try {
+    return await open(path, fsConstants.O_WRONLY | openNoFollow | openNonBlocking);
   } catch (error: unknown) {
     if (error instanceof Error && "code" in error && error.code === "ELOOP") {
       throw new QaSkillsError(`Refusing to write ${path}: it is a symbolic link, and this export writes only through a path it opened itself. Following it would mean the destination that was proved and the destination that is written were resolved at two different moments. Name the target directly.`, "INVALID_ARTIFACT");
+    }
+    if (error instanceof Error && "code" in error && error.code === "ENXIO") {
+      throw new QaSkillsError(`Refusing to write ${path}: it is not a regular file — opening it did not reach a writable file at all, which for an output path means a FIFO with no reader, or a device with nothing behind it. Export to an ordinary file.`, "INVALID_ARTIFACT");
     }
     throw error;
   }
@@ -263,6 +317,11 @@ async function openOutputs(projectionPath: string, sidecarPath: string): Promise
  * The availability cost: an operator who deliberately hard-links their `--out` to somewhere else is
  * refused. There is no way to tell that apart from the attack, because the inode is the same object in
  * both stories.
+ *
+ * **The question is asked on every platform; the ANSWER is only as good as the filesystem.** `nlink` is
+ * measured here on APFS only. Nothing has measured NTFS, and exFAT, FAT32 and many network mounts have
+ * no hard links to count and report `1` unconditionally — where they are mounted, this refusal cannot
+ * fire and the path guard above is the whole of the containment story.
  */
 async function assertOutputsHaveOneName(outputs: readonly OpenOutput[]): Promise<void> {
   for (const output of outputs) {
@@ -273,37 +332,110 @@ async function assertOutputsHaveOneName(outputs: readonly OpenOutput[]): Promise
   }
 }
 
-/** Truncates and writes at offset 0 — the `O_TRUNC` that `openOutput` deliberately withheld, applied
- *  once both outputs have been proven. Explicit rather than implied by a `writeFile`, so the moment the
- *  victim's bytes become forfeit is a statement someone can point at. */
+/**
+ * Truncates, then writes EVERY byte or throws — the `O_TRUNC` that `openOutput` deliberately withheld,
+ * applied once both outputs have been proven.
+ *
+ * **`handle.writeFile`, not `handle.write`, and the difference is not stylistic.** A single
+ * `handle.write` issues one `pwrite` and REPORTS a short count without throwing: measured, a
+ * 100,000-byte buffer under `ulimit -f 20` resolves with `bytesWritten = 20480`. POSIX permits that at a
+ * resource limit and at `ENOSPC`, and network filesystems do it in practice. Ignoring the count is how a
+ * truncated projection gets a sidecar certifying bytes it does not contain — silent corruption, exit 0,
+ * in the operation whose entire purpose is integrity. `handle.writeFile` is the same loop `fs.writeFile`
+ * ran before this operation moved to descriptors, so this restores that contract rather than
+ * re-deriving it: measured under the same limit, it raises `EFBIG` — loud, and non-zero at the CLI.
+ *
+ * **It writes from the handle's CURRENT position, which is why this function may be called at most once
+ * per handle.** `truncate(0)` does not move the position, and nothing has written through these handles
+ * before, so the position is 0. That invariant is not left to trust: "overwrites an existing `--out`
+ * completely" hashes the file on disk against the checksum this operation reports, and a write that
+ * started anywhere but 0 makes those two disagree.
+ */
 async function writeOpened(output: OpenOutput, bytes: Buffer): Promise<void> {
   await output.handle.truncate(0);
-  await output.handle.write(bytes, 0, bytes.byteLength, 0);
+  await output.handle.writeFile(bytes);
 }
 
 /**
- * THE RESIDUE POLICY: this operation removes exactly the files it created, and only when it did not
- * finish writing them.
+ * Whether the file behind this output is STILL the empty one this call created — the only thing the
+ * residue policy is entitled to remove.
  *
- * `O_CREAT` creates, and the creation happens at the top of the operation — long before the run has been
+ * `created` records that this call won the `O_CREAT|O_EXCL` race, and nothing more. It does not say the
+ * bytes at that name are still this call's, and by the time a refusal is reached they may not be: a
+ * concurrent export sharing the same `--out` opens the very same inode, writes its projection through
+ * it, and returns success with a checksum to ITS caller — all inside this call's read stretch. Removing
+ * by path alone would delete that finished export. Two questions rule it out:
+ *
+ * - **`size === 0`**, asked of the DESCRIPTOR. Bytes are not this call's to discard, whoever wrote them.
+ *   This is the clause that saves the concurrent export, and it is also why a write that fails PART WAY
+ *   leaves its partial bytes behind: the failure is loud, and deleting is the more dangerous answer.
+ * - **identity**, `lstat` of the path against the same descriptor's `dev`/`ino`. Never unlink a file
+ *   that merely inherited the NAME — the mistake this operation is careful not to make about writing.
+ *
+ * A residual window remains between these questions and the `unlink`: a concurrent writer could add
+ * bytes in that gap and lose them. It is two syscalls wide rather than the whole read stretch, and
+ * closing it needs an `funlinkat` POSIX does not provide. Any failure to answer means `false` — when
+ * unsure, leave the file alone.
+ */
+async function isStillTheEmptyFileWeCreated(output: OpenOutput): Promise<boolean> {
+  try {
+    const opened = await output.handle.stat();
+    if (opened.size !== 0) return false;
+    const named = await lstat(output.path);
+    return named.dev === opened.dev && named.ino === opened.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE RESIDUE POLICY: on any exit other than success, this operation removes the files it created AND
+ * has left empty — nothing else, ever.
+ *
+ * `O_CREAT` creates, and the creation happens at the top of the operation, long before the run has been
  * read or either output proven. Every path that leads out of here other than success therefore leaves an
- * empty file it has no business leaving, so it takes it back. The converse half matters just as much: a
- * file that ALREADY existed is never removed. Deleting an operator's previous export because the OTHER
- * output turned out to be a hard link would make this guard destructive in its own right — and its bytes
- * are intact precisely because nothing truncated them (see `openOutput`), so there is nothing to repair.
+ * empty file it has no business leaving, so it takes that back. `isStillTheEmptyFileWeCreated` states
+ * what "its own" means and why the obvious reading of it — "the path I created" — is wrong. The two
+ * consequences worth naming here:
  *
- * A partial success — projection written, sidecar write then failing on ENOSPC — is treated as a
- * failure, which is the same policy read from the other end: a newly created projection is removed
- * rather than left without a sidecar, and a pre-existing one keeps the new bytes it was already given,
- * exactly as the `writeFile` pair before it would have left them.
+ * - **A file that already existed is neither emptied nor removed.** Its bytes survive because nothing
+ *   truncated them (`openOutput` withholds `O_TRUNC`), and deleting an operator's previous export
+ *   because the OTHER output turned out to be a hard link would make this guard destructive in its own
+ *   right.
+ * - **A write that failed part way keeps its partial bytes**, and the failure is loud (`writeOpened`
+ *   writes every byte or throws). That is the same answer `fs.writeFile` gave before this operation
+ *   moved to descriptors.
  *
- * Handles are closed BEFORE the removal, because Windows cannot be relied on to unlink a name that still
- * has an open handle, and POSIX does not care about the order.
+ * **Nothing here may replace the error the operation is already carrying.** This runs in a `finally`, so
+ * a throw from a cleanup step becomes the error the operator sees, and a refusal disappears behind an
+ * `EACCES` from `unlink`. Each removal is therefore attempted independently and its failure absorbed —
+ * one failing removal must neither mask the refusal nor cancel the other file's. The cost is honest: an
+ * un-removable created file stays on disk, which is residue, and residue is the lesser harm next to a
+ * lost diagnosis. A CLOSE failure is different, and is absorbed only on the failing path: on the
+ * SUCCEEDING path it is the only signal that bytes reported as written may not have reached the disk, so
+ * it is raised after every handle has been closed.
+ *
+ * Handles close BEFORE any removal, unconditionally: Windows cannot be relied on to unlink a name that
+ * still has an open handle, and POSIX does not care about the order.
  */
 async function releaseOutputs(outputs: readonly OpenOutput[], completed: boolean): Promise<void> {
-  for (const output of outputs) await output.handle.close();
-  if (completed) return;
-  for (const output of outputs) if (output.created) await rm(output.path, { force: true });
+  const removable: string[] = [];
+  let closeFailure: Error | undefined;
+  for (const output of outputs) {
+    if (!completed && output.created && await isStillTheEmptyFileWeCreated(output)) removable.push(output.path);
+    try {
+      await output.handle.close();
+    } catch (error: unknown) {
+      // Normalized rather than rethrown raw so the FIRST failure survives while later handles still get
+      // closed. `close` rejects with a Node `Error`; the fallback exists so a non-Error rejection cannot
+      // become a thrown non-error.
+      closeFailure ??= error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  for (const path of removable) {
+    try { await rm(path, { force: true }); } catch { /* Residue is the lesser harm; see above. */ }
+  }
+  if (completed && closeFailure !== undefined) throw closeFailure;
 }
 
 /**
@@ -343,10 +475,18 @@ async function releaseOutputs(outputs: readonly OpenOutput[], completed: boolean
  * that stretch no longer redirects anything: the write goes to the descriptor, not to the name. On
  * Windows one clause of that is unavailable — see `openNoFollow`, which says exactly which.
  *
+ * **Every byte lands, or the export fails loudly.** `writeOpened` uses a call that loops until the whole
+ * buffer is written; a single `pwrite` reports a SHORT count without throwing, and the state that
+ * produces — a truncated projection with a sidecar certifying bytes it does not contain — is precisely
+ * the one the sidecar exists to make impossible. `projectionSha256` is therefore never returned for
+ * bytes that did not reach the file.
+ *
  * **A refusal leaves the filesystem as it found it.** Opening early means an empty file may exist at
- * either output path before the run has even been read, so every exit other than success removes exactly
- * the files this call created — and only those. `releaseOutputs` states that policy in full; the half
- * worth naming here is that an existing `--out` is neither deleted nor emptied by a refused export.
+ * either output path before the run has even been read, so every exit other than success removes those
+ * empty files. It removes NOTHING else — not a file that already existed, not a file another export
+ * finished writing through the same name, not a different file that took the name over.
+ * `isStillTheEmptyFileWeCreated` says how those are told apart and what window remains; `releaseOutputs`
+ * says why a cleanup failure is absorbed rather than raised.
  *
  * What is NOT claimed: that a hard-linked output is distinguished from a legitimate one.
  * `assertOutputsHaveOneName` refuses every second-named output, an operator's deliberate one included,

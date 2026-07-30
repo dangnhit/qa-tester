@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { chmod, link, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -106,6 +110,42 @@ async function finalizedRun(observations: readonly Observation[] = [observation(
   await workspace.finalize("execute");
   await workspace.close();
   return { root, runId: workspace.runId };
+}
+
+const runCommand = promisify(execFile);
+/** POSIX only, and non-root: a root process ignores both `ulimit -f` and a read-only directory, so a
+ *  test that depends on either would pass for the wrong reason there. */
+const canFeelFilesystemLimits = process.platform !== "win32" && process.getuid?.() !== 0;
+
+/**
+ * Runs ONE export in a child process under a real `RLIMIT_FSIZE`, and reports what that export returned
+ * or threw. A short write cannot be induced from inside this process — Node exposes no `setrlimit` — and
+ * mocking `FileHandle.write` to return a partial count would only prove the mock, so the limit is set by
+ * the shell the way an operator's `ulimit` or a container quota would set it. `blocks` is 512-byte units:
+ * `1` sits below the ~1 KB JUnit projection these fixtures produce, so the first `pwrite` lands 512 bytes
+ * and the next one raises `EFBIG`.
+ */
+async function exportUnderFileSizeLimit(options: Readonly<{ root: string; runId: string; outPath: string; blocks: number }>): Promise<Record<string, unknown>> {
+  const scratch = await mkdtemp(join(tmpdir(), "qa-export-child-")); roots.push(scratch);
+  // `.mts`, not `.ts`: outside a package with `"type": "module"` tsx transforms a `.ts` file as CJS and
+  // rejects the top-level await below. The extension is what makes this file ESM wherever it is written.
+  const child = join(scratch, "child.mts");
+  const moduleUrl = pathToFileURL(resolve("src/operations/export-projection.ts")).href;
+  await writeFile(child, [
+    `import { exportProjection } from ${JSON.stringify(moduleUrl)};`,
+    `const [root, runId, outPath] = process.argv.slice(2) as [string, string, string];`,
+    `try {`,
+    `  const result = await exportProjection({ root, runId, format: "junit", outPath });`,
+    `  process.stderr.write(JSON.stringify({ ok: true, ...result }));`,
+    `} catch (error: unknown) {`,
+    `  process.stderr.write(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));`,
+    `}`,
+  ].join("\n"), "utf8");
+  // Reported on stderr, not stdout: stdout is a file under `ulimit -f` only when redirected, but a pipe
+  // is not, and using the same channel for both keeps the limit off the reporting path either way.
+  const script = `ulimit -f ${options.blocks}; exec ./node_modules/.bin/tsx '${child}' '${options.root}' '${options.runId}' '${options.outPath}'`;
+  const { stderr } = await runCommand("/bin/sh", ["-c", script]);
+  return JSON.parse(stderr) as Record<string, unknown>;
 }
 
 /** A run with no release gate at all: the shape `exportProjection` must refuse. */
@@ -511,6 +551,197 @@ describe("exportProjection", () => {
     await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/symbolic link/i);
 
     expect(await readFile(target, "utf8")).toBe("ORIGINAL");
+  });
+
+  /**
+   * A SHORT WRITE. `fs.writeFile` — the call this operation used to make — loops until every byte lands.
+   * `FileHandle.write` issues one `pwrite` and REPORTS a partial count without throwing (measured: a
+   * 100,000-byte buffer under `ulimit -f 20` returns `bytesWritten=20480` and resolves). POSIX permits
+   * that at a resource limit or at `ENOSPC`, and network filesystems do it in practice.
+   *
+   * The consequence is the one this operation exists to prevent: a sidecar that certifies bytes the
+   * projection does not contain. So the assertion is the sidecar's ABSENCE, not the rejection —
+   * unhandled, the projection was written truncated (no closing `</testsuites>`), the sidecar was
+   * written truncated mid-JSON, and the returned `projectionSha256` named bytes no file held.
+   */
+  it.runIf(canFeelFilesystemLimits)("fails loudly when the write is cut short, never certifying bytes that did not land", async () => {
+    const { root, runId } = await finalizedRun();
+    const outPath = join(root, "short.xml");
+
+    const outcome = await exportUnderFileSizeLimit({ root, runId, outPath, blocks: 1 });
+
+    expect(outcome).toMatchObject({ ok: false });
+    expect(String(outcome.error)).toMatch(/EFBIG|file too large/i);
+    await expect(readFile(`${outPath}.provenance.json`, "utf8")).rejects.toThrow(/ENOENT/);
+  }, 30_000);
+
+  /**
+   * TWO EXPORTS SHARING ONE `--out`, the successful one running entirely inside the failing one's read
+   * stretch. A `created` flag records only that this call won the `O_CREAT|O_EXCL` race — never that the
+   * bytes at that name are still this call's — so a residue removal that goes by PATH deletes whatever
+   * happens to be there. That is the same mistake in reverse as the one this operation gets right about
+   * writing: a name is not an identity.
+   *
+   * `readRegisteredArtifacts` is a clock again, restored from inside so the inner export and the outer
+   * one both run the real read.
+   */
+  it("does not delete a concurrent export's finished outputs when its own export is refused", async () => {
+    const finalized = await finalizedRun();
+    const unfinalized = await unfinalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-shared-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    let concurrent: Awaited<ReturnType<typeof exportProjection>> | undefined;
+
+    const clock = vi.spyOn(RunWorkspace.prototype, "readRegisteredArtifacts")
+      .mockImplementation(async function (this: RunWorkspace) {
+        clock.mockRestore();
+        concurrent = await exportProjection({ root: finalized.root, runId: finalized.runId, format: "junit", outPath });
+        return this.readRegisteredArtifacts();
+      });
+    try {
+      await expect(exportProjection({ root: unfinalized.root, runId: unfinalized.runId, format: "junit", outPath }))
+        .rejects.toThrow(/release gate/i);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // The finished export's BYTES, and the sidecar that certifies them, both survive the other's failure.
+    expect(createHash("sha256").update(await readFile(outPath)).digest("hex")).toBe(concurrent?.projectionSha256);
+    const sidecar = JSON.parse(await readFile(`${outPath}.provenance.json`, "utf8")) as Record<string, unknown>;
+    expect(sidecar.projectionSha256).toBe(concurrent?.projectionSha256);
+  });
+
+  /**
+   * The other half of "the file it created": a DIFFERENT file that took over the name. Here the created
+   * output is unlinked during the read stretch and an unrelated file put in its place, so this call's
+   * descriptor still reports `size === 0` — it points at the inode it made, now nameless — while the
+   * PATH names someone else's bytes. Only comparing the descriptor's `dev`/`ino` against the path tells
+   * those apart, which is the same distinction this operation already makes about writing: a name is not
+   * an identity.
+   */
+  it("does not delete an unrelated file that took over its --out name during the export", async () => {
+    const { root, runId } = await unfinalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-renamed-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+
+    const clock = vi.spyOn(RunWorkspace.prototype, "readRegisteredArtifacts")
+      .mockImplementation(async function (this: RunWorkspace) {
+        clock.mockRestore();
+        await rm(outPath, { force: true });
+        await writeFile(outPath, "NOT THIS EXPORT'S FILE", "utf8");
+        return this.readRegisteredArtifacts();
+      });
+    try {
+      await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/release gate/i);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(await readFile(outPath, "utf8")).toBe("NOT THIS EXPORT'S FILE");
+  });
+
+  /**
+   * The third way the name can stop being this call's: it can stop existing. Asking whether the path is
+   * still the file we created involves an `lstat`, and an `lstat` of a deleted path throws — from inside
+   * a `finally`, where a throw becomes the error the operator reads instead of the refusal. Being unable
+   * to answer means "leave it alone", not "fail the answer".
+   */
+  it("still reports its own refusal when its created output has vanished by cleanup time", async () => {
+    const { root, runId } = await unfinalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-vanished-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+
+    const clock = vi.spyOn(RunWorkspace.prototype, "readRegisteredArtifacts")
+      .mockImplementation(async function (this: RunWorkspace) {
+        clock.mockRestore();
+        await rm(outPath, { force: true });
+        return this.readRegisteredArtifacts();
+      });
+    try {
+      await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/release gate/i);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  /**
+   * A cleanup that cannot run must not become the error the operator sees. Making the output's directory
+   * read-only during the read stretch leaves the two created files un-removable; the refusal that the
+   * operation actually reached is `release gate`, and an `EACCES` from `unlink` would bury it.
+   */
+  it.runIf(canFeelFilesystemLimits)("reports its own refusal, not a cleanup failure, when a created output cannot be removed", async () => {
+    const { root, runId } = await unfinalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-unremovable-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+
+    const clock = vi.spyOn(RunWorkspace.prototype, "readRegisteredArtifacts")
+      .mockImplementation(async function (this: RunWorkspace) {
+        clock.mockRestore();
+        await chmod(outside, 0o500);
+        return this.readRegisteredArtifacts();
+      });
+    try {
+      await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/release gate/i);
+    } finally {
+      clock.mockRestore();
+      await chmod(outside, 0o700);
+    }
+  });
+
+  /**
+   * A FIFO passes both containment guards — `O_NOFOLLOW` refuses neither FIFOs nor device nodes, and
+   * `nlink` is 1 for both (measured) — and then `truncate(0)` silently no-ops and the positional write
+   * raises a bare `ESPIPE`. A non-seekable `--out` is NOT supported: the sidecar is a second file derived
+   * from the first, and a stream has no second file. So it is refused by SHAPE, at open, and named.
+   */
+  it.runIf(process.platform !== "win32")("refuses a FIFO at --out by shape, rather than dying on a positional write", async () => {
+    const { root, runId } = await finalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-fifo-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await runCommand("mkfifo", [outPath]);
+    // Non-blocking, because opening a FIFO for reading blocks until a WRITER appears — the mirror of the
+    // block this operation has to avoid on the other side.
+    const reader = await open(outPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    try {
+      await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/regular file/i);
+    } finally {
+      await reader.close();
+    }
+  });
+
+  /**
+   * The same FIFO with NO reader. Opening one for writing BLOCKS until a reader appears, and this
+   * operation now opens at the top — so an attacker who can create a name at either output path could
+   * hang `qa-skill export` indefinitely, before any diagnostic. `O_NONBLOCK` turns that into an immediate
+   * `ENXIO` (measured: 0 ms), which is reported as the same shape refusal. The test would time out rather
+   * than fail if the open ever blocked again.
+   */
+  it.runIf(process.platform !== "win32")("refuses a FIFO with no reader immediately, instead of blocking forever on open", async () => {
+    const { root, runId } = await finalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-fifo-hang-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await runCommand("mkfifo", [outPath]);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/regular file/i);
+  }, 10_000);
+
+  /**
+   * The first open's non-`EEXIST` re-throw, which nothing pinned. A read-only parent directory answers
+   * `EACCES` to the creating open and `ENOENT` to the second one (measured), so passing the first error
+   * through rather than falling on to the second is the difference between a true diagnosis and a
+   * misleading one. Left as a raw filesystem error deliberately: it is not a containment refusal, and it
+   * is the same answer every sibling command gives for an unusable path.
+   */
+  it.runIf(canFeelFilesystemLimits)("surfaces the real reason --out could not be created, not the one the fallback open would give", async () => {
+    const { root, runId } = await finalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-readonly-")); roots.push(outside);
+    await chmod(outside, 0o500);
+    try {
+      await expect(exportProjection({ root, runId, format: "junit", outPath: join(outside, "junit.xml") }))
+        .rejects.toThrow(/EACCES/);
+    } finally {
+      await chmod(outside, 0o700);
+    }
   });
 
   /**
