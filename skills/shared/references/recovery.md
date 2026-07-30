@@ -352,7 +352,12 @@ catch-all mapping is `program.ts:298-341`):
     root** — a run workspace is closed and checksummed, and a file landing under any run's `inputs/` or
     `evidence/` either invalidates a registered artifact (`CHECKSUM_MISMATCH`, forever) or orphans the
     run (`ORPHAN_FILE`) (`export-projection.ts:153`). Both outputs are checked against the whole results
-    root, symlinks resolved, before either is written — not just `--out` alone, and not one-at-a-time.
+    root, symlinks resolved — not just `--out` alone. `assertOutputsAreOutsideTheRuns` is a sequential
+    loop over the two candidates that throws on the first failing one it finds, not a check of both at
+    once (`export-projection.ts:141-156`) — but the guarantee that actually matters holds regardless:
+    that loop runs to completion, or throws, **before either the projection or the sidecar is written**
+    (`export-projection.ts:191-199`). A projection written and then a refused sidecar would leave a file
+    on disk that nothing vouches for — the exact state the sidecar exists to make impossible.
   - an `--out` (or its sidecar) **whose destination cannot be resolved at all** — a dangling symlink or a
     symlink loop (`export-projection.ts:150`). This is a deliberate refusal, not a bug: the guard's job
     is to *prove* the write lands outside the runs, and "I could not work out where this goes" is not a

@@ -156,6 +156,26 @@ the workflow is fragile, so the `set -o pipefail` line above is not decorative: 
 catch, and the final `if: steps.qa.outcome == 'failure'` step never fires — the exact silent-green
 failure this whole section exists to prevent, reintroduced one layer up.
 
+**A bracketed provenance in a row's name is a label, not an exclusion.** `qa-junit.xml` can contain a
+testcase named `[agent-draft] TC-1 INST-1` — `renderJUnit` prefixes any attempt's name with
+`[<provenance>] ` whenever that provenance does not credit coverage (`junit.ts:34-37`); the SARIF
+renderer has no field of its own for provenance, so it names the row's own provenance in
+`message.text` instead, unconditionally, whether or not that row credits coverage (`sarif.ts:36-40`).
+Neither renderer drops the row. This is deliberate, not an omission a future pass should "fix": a
+projection is a **report**, and a report "describes what the run recorded rather than what earned
+credit" (`generate-qa-report.ts:39-41`) — filtering on `creditsCoverage` here would hide exactly what
+the run recorded, the failure mode that decision already rules out for the JUnit/SARIF split itself. So
+`[agent-draft] TC-1 INST-1` means the attempt happened and is reported, but earned no coverage credit
+for whatever it targeted; it is not missing, and it is not a run that quietly downgraded a real result.
+
+**A non-empty `unreadableRunnerReports` means one registered payload degraded, not that the export
+failed.** Each entry names one registered `runner-report` evidence bundle that did not parse as a
+sanitized runner report — `payload is not valid JSON`, or `payload is not a JSON object` — by artifact
+id and relative path. The export still exits `0`; only the spec locations that specific report would
+have contributed are missing from lane-2 rows it covers, not the results, the gate verdict, or the
+run's recorded coverage credit. The same detail is also written to stderr, not only the JSON result, so
+it surfaces in a CI log even when nobody parses stdout (`program.ts:290-294`).
+
 **The sidecar and what it proves.** `<out>.provenance.json` is written only after its projection is
 written successfully, and binds a hash of the projection's own bytes (`projectionSha256`) to the run it
 was projected from: the gate artifact's id, sha256, and recommendation, every other artifact the gate was
