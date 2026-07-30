@@ -69,6 +69,44 @@ describe("buildProjectionModel", () => {
     expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt], runnerReports: [] }).anchor).toBeUndefined();
   });
 
+  /**
+   * A second batch, because a run can hold several. `executeObservedPlaywright` mints a fresh
+   * `executionId` per invocation with no uniqueness guard, and each invocation re-resolves its OWN
+   * anchor, refusing only if the spec tree moved during THAT execution — `semantic-rules.ts`'s
+   * `testResultBatchRule` states in place that it "does not touch `commitSha` or `specTreeSha256`". So
+   * two batches carrying different revisions are both valid, and `renderSarif` promotes `model.anchor`
+   * into `run.properties` as a fact standing over EVERY result in the document.
+   *
+   * Both directions are asserted, because only the pair discriminates: agreement must still emit the
+   * anchor (otherwise omitting it always would pass), and disagreement must omit it.
+   */
+  const secondBatch = (over: Readonly<Record<string, unknown>>): ProjectionArtifact => ({
+    record: { id: "batch-2", sha256: "f".repeat(64), type: "test-result-batch", provenance: "runtime-observed" },
+    value: {
+      artifactType: "test-result-batch", executionId: "EX-2", commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64),
+      entries: [{ entryId: "E-3", testCaseId: "TC-4", testCaseRevisionId: "REV-4", testCaseInstanceId: "INST-4", status: "PASSED", failureClassification: "NONE", executionSurface: "api", steps: [] }],
+      ...over,
+    },
+  });
+
+  it("carries the anchor when two observed executions agree on it", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batch, secondBatch({})], runnerReports: [] });
+    expect(model.anchor).toEqual({ commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) });
+  });
+
+  it.each([
+    ["commitSha", { commitSha: "9".repeat(40) }],
+    ["specTreeSha256", { specTreeSha256: "7".repeat(64) }],
+  ])("omits the anchor when two observed executions disagree on %s, rather than promoting the first", (_field, drift) => {
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batch, secondBatch(drift)], runnerReports: [] });
+    expect(model.anchor).toBeUndefined();
+  });
+
+  it("omits the anchor when a second batch carries no anchor fields at all", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batch, secondBatch({ commitSha: undefined, specTreeSha256: undefined })], runnerReports: [] });
+    expect(model.anchor).toBeUndefined();
+  });
+
   it("carries each row's own record provenance, so a runtime-observed row is distinguishable from a runtime-executed one", () => {
     const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt, batch], runnerReports: [] });
     expect(model.attempts.map((row) => [row.id, row.provenance])).toEqual([

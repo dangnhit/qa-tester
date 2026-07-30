@@ -133,4 +133,17 @@ describe("renderSarif", () => {
     expect(withAnchor.runs[0].properties).toEqual({ commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) });
     expect(parseSarif(renderSarif(model())).runs[0].properties).toBeUndefined();
   });
+
+  /**
+   * `tool.driver.version` reads the version off the MODEL, not off the imported `runtimeVersion`. The
+   * two are identical in production — `exportProjection` passes `runtimeVersion` in as
+   * `producerVersion` — which is exactly what makes the difference untestable without a model whose
+   * `producerVersion` is deliberately something else. The sidecar records `model.producerVersion` for
+   * these same bytes, so a document sourcing it elsewhere is a surface on which the projection and the
+   * sidecar that vouches for it can disagree.
+   */
+  it("names the model's own producerVersion, not a version read from anywhere else", () => {
+    const sarif = JSON.parse(renderSarif(model({ producerVersion: "9.9.9-test" }))) as { runs: [{ tool: { driver: { version: string } } }] };
+    expect(sarif.runs[0].tool.driver.version).toBe("9.9.9-test");
+  });
 });

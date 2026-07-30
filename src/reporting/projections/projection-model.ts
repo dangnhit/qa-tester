@@ -42,6 +42,8 @@ export type ProjectionModel = Readonly<{
   gate: Readonly<{ artifactId: string; sha256: string; recommendation: string; verdicts: readonly Readonly<{ rule: string; passed: boolean; reason: string }>[] }>;
   attempts: readonly AttemptRow[];
   findings: readonly FindingRow[];
+  /** The run's single verified git anchor, or absent when it has none. See {@link agreedAnchor} for
+   *  what "single" means when a run carries more than one Runtime-Observed Execution. */
   anchor?: Readonly<{ commitSha: string; specTreeSha256: string }>;
   sourceArtifacts: readonly Readonly<{ id: string; sha256: string; type: string }>[];
 }>;
@@ -111,6 +113,39 @@ export const identifierOnlyGateRules = [
   "REQUIRED_COVERAGE_COMPLETE",
   "NO_OPEN_PRODUCT_DEFECT_FOR_READY",
 ] as const;
+
+/**
+ * The run's git anchor, emitted ONLY when every `test-result-batch` agrees on both halves of it.
+ *
+ * A run can legitimately hold SEVERAL Runtime-Observed Executions — `executeObservedPlaywright` mints a
+ * fresh `executionId` per invocation with no uniqueness guard — and each one re-resolves its own
+ * `commitSha`/`specTreeSha256` independently, refusing only if the spec tree moved DURING that
+ * execution. Nothing binds two batches to the same anchor: `semantic-rules.ts`'s `testResultBatchRule`
+ * says so in place ("This rule does not touch `commitSha` or `specTreeSha256` either"), because
+ * confirming a commit needs git and semantic rules are pure over registered artifacts. So HEAD advancing
+ * between two executions yields two batches with DIFFERENT `commitSha`, both valid.
+ *
+ * Taking `batches[0]` would then promote one execution's revision into `renderSarif`'s `run.properties`
+ * as a fact about the WHOLE run, standing over results derived from both — an anchor describing only the
+ * first. `run.properties` is where this ends up precisely because a `commitSha` there is a fact the run
+ * VERIFIED; a value that describes only some of the results is not that fact, and a SARIF consumer has
+ * no way to tell the difference. Omission is the honest answer: a consumer that does not find the
+ * property looks no further, whereas one that finds a wrong revision resolves every location against it.
+ *
+ * `undefined` therefore means "this run has no single verified revision", covering three cases a reader
+ * need not distinguish: no observed execution at all, a batch missing either field, and two batches that
+ * disagree. All three are the same claim — nothing here can be asserted about the whole run.
+ */
+function agreedAnchor(batches: readonly ProjectionArtifact[]): Readonly<{ commitSha: string; specTreeSha256: string }> | undefined {
+  const first = batches[0]?.value;
+  if (first === undefined) return undefined;
+  const commitSha = str(first.commitSha);
+  const specTreeSha256 = str(first.specTreeSha256);
+  if (commitSha === undefined || specTreeSha256 === undefined) return undefined;
+  return batches.every((batch) => str(batch.value.commitSha) === commitSha && str(batch.value.specTreeSha256) === specTreeSha256)
+    ? { commitSha, specTreeSha256 }
+    : undefined;
+}
 
 /** A reduced reason states the same verdict with a count instead of a quotation. */
 export function reducedVerdictReason(verdict: Readonly<{ rule: string; reason: string }>, ruleInputs: Readonly<Record<string, unknown>>): string {
@@ -226,9 +261,7 @@ export function buildProjectionModel(input: Readonly<{
     });
   });
 
-  const anchorSource = batches[0]?.value;
-  const commitSha = anchorSource === undefined ? undefined : str(anchorSource.commitSha);
-  const specTreeSha256 = anchorSource === undefined ? undefined : str(anchorSource.specTreeSha256);
+  const anchor = agreedAnchor(batches);
 
   return {
     runId: input.runId,
@@ -243,7 +276,7 @@ export function buildProjectionModel(input: Readonly<{
     },
     attempts: [...driven, ...observed],
     findings,
-    ...(commitSha === undefined || specTreeSha256 === undefined ? {} : { anchor: { commitSha, specTreeSha256 } }),
+    ...(anchor === undefined ? {} : { anchor }),
     sourceArtifacts,
   };
 }

@@ -1,4 +1,3 @@
-import { runtimeVersion } from "../../installer/manifest.js";
 import type { AttemptRow, ProjectionModel } from "./projection-model.js";
 
 /** One SARIF `result`. `locations` is present only when `observedResult` below actually joined one. */
@@ -62,7 +61,11 @@ export function renderSarif(model: ProjectionModel): string {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [{
-      tool: { driver: { name: "qa-skills", version: runtimeVersion, informationUri: "https://github.com/dangnhit/qa-tester", rules: ruleIds.map((id) => ({ id })) } },
+      // `model.producerVersion`, not the imported `runtimeVersion`. Identical in production — the one
+      // production caller passes `runtimeVersion` in — but the sidecar records `model.producerVersion`
+      // for these same bytes, so reading the version from anywhere else is a surface on which the
+      // document and the sidecar that vouches for it could disagree, with nothing gained.
+      tool: { driver: { name: "qa-skills", version: model.producerVersion, informationUri: "https://github.com/dangnhit/qa-tester", rules: ruleIds.map((id) => ({ id })) } },
       automationDetails: { id: model.runId },
       // `versionControlProvenance` is NOT used, even though it is SARIF's named field for exactly this
       // fact. Its item type, `versionControlDetails`, REQUIRES `repositoryUri` (format: uri, non-empty)
@@ -77,9 +80,13 @@ export function renderSarif(model: ProjectionModel): string {
       // entirely would repeat, in the other direction, the exact mistake `observedResult` above exists to
       // avoid marking rather than dropping an anomalous provenance. `run.properties` is SARIF's own
       // propertyBag (`additionalProperties: true`), the sanctioned home for a verified fact with no clean
-      // named field; an unrecognized property is inert to a consumer that does not look for it. Emitted
-      // only when `model.anchor` exists: a run with no observed execution has no verified revision, and an
-      // empty or zero-filled bag would be exactly the fabrication this task exists to avoid.
+      // named field; an unrecognized property is inert to a consumer that does not look for it.
+      //
+      // Emitted only when `model.anchor` exists, and `buildProjectionModel`'s `agreedAnchor` is what
+      // decides that: a run with no observed execution has no verified revision, and a run whose several
+      // executions resolved DIFFERENT revisions has no single one either. The bag stands over every
+      // result in this document, so a value true of only some of them would be exactly the fabrication
+      // this task exists to avoid — as would an empty or zero-filled one.
       ...(model.anchor === undefined ? {} : { properties: { commitSha: model.anchor.commitSha, specTreeSha256: model.anchor.specTreeSha256 } }),
       results,
     }],
