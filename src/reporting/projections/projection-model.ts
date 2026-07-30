@@ -73,13 +73,31 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
   return record.provenance ?? "agent-draft";
 }
 
-/** Every gate rule whose `reason` is composed in code from IDENTIFIERS ONLY — bug ids, obligation ids —
- *  and therefore survives a reduced projection unchanged.
+/** Every gate rule whose `reason` is composed in code from IDENTIFIERS ONLY, and therefore survives a
+ *  reduced projection unchanged. `NO_SHARED_BLOCKERS` is deliberately absent: it is the only reason
+ *  unsafe BY DESIGN — its composition interpolates `sharedBlockers` directly, one of whose five sources
+ *  (the `.map(...)` lines at release-gate.ts:279-283) is `Evidence gap <id> affects <affectedClaim>`,
+ *  and `affectedClaim` is a free-form string in evidence-gap.schema.json:15 — authored text, not an
+ *  identifier.
  *
- *  `NO_SHARED_BLOCKERS` is deliberately absent. Its reason interpolates `sharedBlockers`, one of whose
- *  five sources is `Evidence gap <id> affects <affectedClaim>` (release-gate.ts:278-288), and
- *  `affectedClaim` is a free-form string in evidence-gap.schema.json:15 — authored text, not an
- *  identifier. It is the ONLY reason that can carry authored text, and the reduced mode recomposes it.
+ *  The six rules below are identifier-only, but not all for the same reason, and the difference matters:
+ *  - `NO_OPEN_BLOCKER_OR_CRITICAL`, `NO_UNTRIAGED_PRODUCT_BUG`, `NO_OPEN_PRODUCT_DEFECT_FOR_READY`
+ *    interpolate `bugId`, which bug-report.schema.json:12 constrains to `^BUG-[A-Z0-9-]+$` — enforced BY
+ *    SCHEMA: no lowercase, no space, no punctuation a sentence needs.
+ *  - `REQUIRED_HIGH_RISK_PASSED` and `REQUIRED_COVERAGE_COMPLETE` interpolate `obligationId`, which
+ *    coverage-obligation.schema.json:12 leaves as `{"type": "string", "minLength": 1}` — no pattern —
+ *    and which `ingest-coverage-obligation.ts` registers verbatim from an agent-authored draft, unedited.
+ *    These two are identifier-only BY CONVENTION ONLY (every authoring template names the field like an
+ *    id, e.g. `artifact-drafts.ts`'s `"COV-PLACEHOLDER-1"`); nothing in code stops an authored sentence
+ *    from reaching this reducer today.
+ *  - `VALID_ARTIFACTS` composes no identifier at all: its reason is one of two static strings.
+ *
+ *  A related but separate risk lives outside this list: `findings` (below) carries `evidenceGapId`
+ *  directly as `finding.id` and inside `finding.message`. `evidenceGapId` also has no schema pattern
+ *  (evidence-gap.schema.json:9), but unlike `obligationId` it IS protected in code today — the sole
+ *  producer, `src/evidence/collector.ts:41-42`, always stamps it via `createEntityId()`, so no live path
+ *  registers an evidence-gap artifact with authored text as its own id. This module enforces nothing
+ *  here either; that guarantee lives entirely in the one producer, not in this reducer.
  *
  *  The drift test in tests/reporting/projections/projection-model.test.ts pins this list against the
  *  rules `evaluateReleaseGate` actually emits, so a seventh rule cannot silently inherit "safe". */

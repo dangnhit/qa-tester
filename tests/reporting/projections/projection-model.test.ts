@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildProjectionModel, type ProjectionArtifact } from "../../../src/reporting/projections/projection-model.js";
+import { buildProjectionModel, identifierOnlyGateRules, type ProjectionArtifact } from "../../../src/reporting/projections/projection-model.js";
 import { evaluateReleaseGate } from "../../../src/reporting/release-gate.js";
-import { identifierOnlyGateRules } from "../../../src/reporting/projections/projection-model.js";
 
 const gateArtifact: ProjectionArtifact = {
   record: { id: "gate-1", sha256: "a".repeat(64), type: "release-gate" },
@@ -90,7 +89,8 @@ const withFindings = (protectedEnvironment: boolean): ProjectionArtifact => ({
       coverage: { requiredMissing: ["COV-1"], optionalGaps: ["COV-2"], requiredHighRisk: [] },
       bugs: [{ bugId: "BUG-1", triageStatus: "TRIAGED", severity: "Critical", open: true },
              { bugId: "BUG-2", triageStatus: "TRIAGED", severity: "Minor", open: true },
-             { bugId: "BUG-3", triageStatus: "TRIAGED", severity: "Major", open: false }],
+             { bugId: "BUG-3", triageStatus: "TRIAGED", severity: "Major", open: false },
+             { bugId: "BUG-4", triageStatus: "TRIAGED", severity: "Blocker", open: true }],
       sharedBlockers: ["Evidence gap GAP-1 affects the checkout total shown to a signed-in buyer"],
     },
     verdicts: [
@@ -106,11 +106,12 @@ const gapArtifact: ProjectionArtifact = {
 };
 
 describe("projection findings", () => {
-  it("emits one finding per open bug, unmet requirement, optional gap and evidence gap, and none for a closed bug", () => {
+  it("emits one finding per open bug, unmet requirement, optional gap and evidence gap; escalates Blocker and Critical to error; and skips a closed bug", () => {
     const model = buildProjectionModel({ ...base, artifacts: [withFindings(false), gapArtifact] });
     expect(model.findings.map((finding) => [finding.ruleId, finding.level, finding.id])).toEqual([
       ["open-bug", "error", "BUG-1"],
       ["open-bug", "warning", "BUG-2"],
+      ["open-bug", "error", "BUG-4"],
       ["required-coverage-unmet", "error", "COV-1"],
       ["optional-coverage-gap", "warning", "COV-2"],
       ["evidence-gap", "warning", "GAP-1"],
