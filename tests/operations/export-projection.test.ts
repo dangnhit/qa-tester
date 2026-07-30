@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { runtimeVersion } from "../../src/installer/manifest.js";
@@ -187,11 +187,16 @@ describe("exportProjection", () => {
     expect(sarif.runs[0].results.map((entry) => entry.ruleId)).toContain("evidence-gap");
   });
 
-  it("refuses a run that was never finalized, naming the missing gate", async () => {
+  it("refuses a run that was never finalized, naming the missing gate, and leaves no empty outputs behind", async () => {
     const { root, runId } = await unfinalizedRun();
 
     await expect(exportProjection({ root, runId, format: "sarif", outPath: join(root, "x.sarif") }))
       .rejects.toThrow(/release gate/i);
+
+    // Both outputs are opened before the run is read, so any refusal AFTER that point has empty files
+    // of its own to take back. The residue policy is not specific to a containment refusal, and this is
+    // the ordinary failure that proves it.
+    expect(await readdir(root)).toEqual(["qa-results"]);
   });
 
   /**
@@ -252,6 +257,41 @@ describe("exportProjection", () => {
     await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow();
 
     await expect(readFile(`${outPath}.provenance.json`, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  /**
+   * `O_TRUNC` is deliberately withheld at open — it would empty the file before anything could refuse
+   * the write — so the truncation has to be performed explicitly at write time instead. Nothing else in
+   * this file would notice if it went missing: every other case writes to a path with no bytes at it.
+   * Hashing the file on disk against the checksum the operation REPORTS is the exact assertion, because
+   * a trailing tail of the previous export makes those two disagree.
+   */
+  it("overwrites an existing --out completely, leaving no bytes of a longer previous export behind", async () => {
+    const { root, runId } = await finalizedRun();
+    const outPath = join(root, "qa-junit.xml");
+    await writeFile(outPath, "X".repeat(50_000), "utf8");
+
+    const result = await exportProjection({ root, runId, format: "junit", outPath });
+
+    const bytes = await readFile(outPath);
+    expect(bytes.toString("utf8")).not.toContain("XXX");
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(result.projectionSha256);
+  });
+
+  /**
+   * The mirror of "leaves no sidecar behind when the projection itself cannot be written": here the
+   * PROJECTION opens fine — creating an empty file — and the sidecar's open is the one that fails. Both
+   * outputs or neither, at the open step too, or an unwritable sidecar would leave a bare empty file
+   * where an operator's CI will look for a projection.
+   */
+  it("removes the projection file it had just created when the sidecar cannot even be opened", async () => {
+    const { root, runId } = await finalizedRun();
+    const outPath = join(root, "unopenable.xml");
+    await mkdir(`${outPath}.provenance.json`);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow();
+
+    await expect(readFile(outPath, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
   it("refuses an --out that would land inside the finalized run it is reading", async () => {
@@ -373,6 +413,140 @@ describe("exportProjection", () => {
 
     expect(await readdir(inputs)).not.toContain("sidecar-through-a-link.json");
     await expect(readFile(outPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  /**
+   * A HARD LINK at `--out`, onto a REGISTERED artifact. No path check can see this one: `realpath` has
+   * nothing to resolve for a second name, so it answers with the path it was handed, and every
+   * path-shaped guard — this operation's included — correctly concludes the destination lies OUTSIDE the
+   * results root. The bytes at that destination are nonetheless a checksummed artifact's, and a write
+   * lands on the inode, not on the name. Only a question asked of the DESCRIPTOR sees it.
+   *
+   * The assertion that matters is the victim's bytes, not the rejection: a guard that rejected for some
+   * unrelated reason while the overwrite still happened would pass a rejection-only test, which is
+   * exactly how Phase 8a's round-1 symlink guard shipped with its bypass live.
+   */
+  it("refuses an --out that is a hard link onto a registered artifact, leaving that artifact's bytes intact", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const registered = (await readdir(inputs))[0]!;
+    const before = await readFile(join(inputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-hardlink-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await link(join(inputs, registered), outPath);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/second name|hard link/i);
+
+    expect(await readFile(join(inputs, registered), "utf8")).toBe(before);
+    // Both descriptors are proven before either is written, so the refused projection leaves no sidecar.
+    await expect(readFile(`${outPath}.provenance.json`, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  /**
+   * The same attack through the DERIVED path, which needs no influence over the caller's argument at
+   * all, and against a run this export never opened. The projection is proven at the same moment as the
+   * sidecar, so refusing the sidecar must also mean no projection on disk — a projection nothing vouches
+   * for is the state the sidecar exists to make impossible.
+   */
+  it("refuses when the derived sidecar path is a hard link onto another run's registered artifact, and writes no projection either", async () => {
+    const { root, runId } = await finalizedRun();
+    const other = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+    const otherRunId = other.runId;
+    await other.close();
+    const otherInputs = join(root, "qa-results", otherRunId, "inputs");
+    const registered = (await readdir(otherInputs))[0]!;
+    const before = await readFile(join(otherInputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-sidecar-hardlink-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await link(join(otherInputs, registered), `${outPath}.provenance.json`);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/second name|hard link/i);
+
+    expect(await readFile(join(otherInputs, registered), "utf8")).toBe(before);
+    await expect(readFile(outPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  /**
+   * THE RESIDUE POLICY, both halves at once. `O_TRUNC` would empty the projection at OPEN time — before
+   * any `fstat` could refuse the sidecar — so the operation must not use it: an existing `--out` keeps
+   * its bytes through a refusal. And the file this operation CREATED (the sidecar's, here already taken)
+   * is not the one it may delete: unlinking an operator's pre-existing file because a different output
+   * was refused would make the guard destructive in its own right.
+   */
+  it("neither empties nor deletes an existing --out when the sidecar is refused", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const registered = (await readdir(inputs))[0]!;
+    const before = await readFile(join(inputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-residue-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await writeFile(outPath, "PREVIOUS EXPORT", "utf8");
+    await link(join(inputs, registered), `${outPath}.provenance.json`);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/second name|hard link/i);
+
+    expect(await readFile(outPath, "utf8")).toBe("PREVIOUS EXPORT");
+    expect(await readFile(join(inputs, registered), "utf8")).toBe(before);
+  });
+
+  /**
+   * The operation writes only through a path it opened ITSELF. A symlink at `--out` whose target lies
+   * outside the results root passes the path guard — legitimately, the write would land outside — and
+   * `writeFile` used to follow it. `O_NOFOLLOW` refuses it instead, and the cost is real and deliberate:
+   * an operator whose `--out` is a symlink to a file elsewhere now gets a refusal. That cost buys the
+   * property the hard-link check depends on — the descriptor proven is the descriptor written, with no
+   * name resolved twice.
+   *
+   * Gated: MEASURED, `fs.constants.O_NOFOLLOW` is 256 on darwin and absent on Windows, so this
+   * refusal cannot exist there. (`tests/operations` is not in the Windows CI job today either.)
+   */
+  it.runIf(process.platform !== "win32")("refuses a symlinked --out rather than writing through it, even when the link target is outside the runs", async () => {
+    const { root, runId } = await finalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-nofollow-")); roots.push(outside);
+    const target = join(outside, "target.xml");
+    await writeFile(target, "ORIGINAL", "utf8");
+    const outPath = join(outside, "junit.xml");
+    await symlink(target, outPath);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/symbolic link/i);
+
+    expect(await readFile(target, "utf8")).toBe("ORIGINAL");
+  });
+
+  /**
+   * THE WINDOW between the guard and the writes, which Phase 8a widened by correctly moving the guard to
+   * the first statement of the operation — ahead of `readRegisteredArtifacts` and every runner-report
+   * read. `readRegisteredArtifacts` is used here as a CLOCK, not as a mock: it is the first thing the
+   * operation does after the guard, so planting the symlink from inside it plants it squarely in the
+   * window, and the real implementation still runs.
+   *
+   * The export SUCCEEDS here, and that is the correct outcome rather than a missed refusal: the bytes go
+   * to the descriptor opened before the guard's answer could go stale, which by then is an unlinked
+   * inode. Someone else moved the name; nothing followed them. The victim's bytes are the assertion.
+   */
+  it.runIf(process.platform !== "win32")("does not follow a symlink planted at --out after the path guard has already passed it", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const registered = (await readdir(inputs))[0]!;
+    const before = await readFile(join(inputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-window-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+
+    const attacker = vi.spyOn(RunWorkspace.prototype, "readRegisteredArtifacts")
+      .mockImplementation(async function (this: RunWorkspace) {
+        await rm(outPath, { force: true });
+        await symlink(join(inputs, registered), outPath);
+        // Restored from inside, so the call below is the real read: the spy is a clock, not a stub.
+        attacker.mockRestore();
+        return this.readRegisteredArtifacts();
+      });
+    try {
+      await exportProjection({ root, runId, format: "junit", outPath });
+    } finally {
+      attacker.mockRestore();
+    }
+
+    expect(await readFile(join(inputs, registered), "utf8")).toBe(before);
   });
 });
 

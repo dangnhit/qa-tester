@@ -345,34 +345,48 @@ catch-all mapping is `program.ts:298-341`):
 - **`3` `INVALID_INPUT`** — a refusal. Every `QaSkillsError` this command can throw carries a code other
   than `LIVE_LOCK`/`SPEC_TREE_DIRTY` or the `SAFETY_DENIED` set, so all of them fall to the catch-all's
   `else` branch (`program.ts:325`). Four distinct causes land here:
-  - an unsupported `--format` — anything but exactly `junit` or `sarif` (`export-projection.ts:186`).
+  - an unsupported `--format` — anything but exactly `junit` or `sarif` (`export-projection.ts:351`).
   - a run with **no release gate** — only a finalized `full` or `regression` run registers one; `plan`,
     `execute`, `exploratory`, and `retest` runs never do (`projection-model.ts:138`).
   - an `--out` (or its derived `<out>.provenance.json` sidecar) that **resolves inside the results
     root** — a run workspace is closed and checksummed, and a file landing under any run's `inputs/` or
     `evidence/` either invalidates a registered artifact (`CHECKSUM_MISMATCH`, forever) or orphans the
-    run (`ORPHAN_FILE`) (`export-projection.ts:153`). Both outputs are checked against the whole results
+    run (`ORPHAN_FILE`) (`export-projection.ts:166`). Both outputs are checked against the whole results
     root, symlinks resolved — not just `--out` alone. `assertOutputsAreOutsideTheRuns` is a sequential
     loop over the two candidates that throws on the first failing one it finds, not a check of both at
-    once (`export-projection.ts:141-156`) — but the guarantee that actually matters holds regardless:
+    once (`export-projection.ts:154-170`) — but the guarantee that actually matters holds regardless:
     that loop runs to completion, or throws, **before either the projection or the sidecar is written**
-    (`export-projection.ts:191-199`). A projection written and then a refused sidecar would leave a file
+    (`export-projection.ts:379-380`). A projection written and then a refused sidecar would leave a file
     on disk that nothing vouches for — the exact state the sidecar exists to make impossible.
-    **What this refusal does not cover, stated so an operator is not misled about it:** the guard
-    resolves *symlinks*, and a **hard link** at either output path defeats it — `realpath` has no target
-    to follow for one, so a path whose inode *is* a registered artifact reads as outside the results root
-    and `writeFile`'s `O_TRUNC` overwrites it in place, leaving that run `CHECKSUM_MISMATCH` forever
-    while the export exits `0`. Confirmed by execution; it needs the output placed on the same
-    filesystem as the run. A filed follow-up moves the containment check to open time (`O_NOFOLLOW` plus
-    an `fstat` rejecting `nlink > 1` on the descriptor about to be written), which is also what closes
-    the window between this check and the writes. Until then, write projections to a directory a
-    would-be attacker cannot pre-populate.
+  - an `--out` (or its sidecar) that is a **hard link** — its bytes already answer to more than one name
+    (`export-projection.ts:271`). This is the one shape no path check can see: `realpath` has no target
+    to follow for a second name, so a path whose inode *is* a registered artifact resolves as being
+    outside the results root, and a write lands on the inode rather than on the name. The question is
+    therefore asked of the **file descriptor about to be written** — opened without `O_TRUNC`, `fstat`ed,
+    refused when `nlink > 1` — and asked of *both* descriptors before *either* is truncated. Withholding
+    `O_TRUNC` is what makes the refusal non-destructive: an existing `--out` still holds every byte it
+    held before, because nothing emptied it at open time. The cost is that a *deliberately* hard-linked
+    `--out` is refused too; a descriptor cannot say where its other names are, so the attack and the
+    convenience are the same object. Export to a path this command can create for itself.
+  - an `--out` (or its sidecar) that **is itself a symbolic link** (`export-projection.ts:225`). The
+    export writes only through a path it opened itself (`O_NOFOLLOW`), because following a link would
+    mean the destination that was proved and the destination that is written were resolved at two
+    different moments — the window this whole design closes. Availability cost, deliberately paid: an
+    `--out` symlinked to a file elsewhere used to be written through and now refuses. Name the target
+    directly. **`O_NOFOLLOW` does not exist on Windows**, so this particular refusal is POSIX-only there;
+    the results-root check above still resolves symlinks on every platform, and so does the hard-link
+    check.
   - an `--out` (or its sidecar) **whose destination cannot be resolved at all** — a dangling symlink or a
-    symlink loop (`export-projection.ts:150`). This is a deliberate refusal, not a bug: the guard's job
+    symlink loop (`export-projection.ts:164`). This is a deliberate refusal, not a bug: the guard's job
     is to *prove* the write lands outside the runs, and "I could not work out where this goes" is not a
     proof. It has a real availability cost — an `--out` that used to be a symlink to a not-yet-created
     file *outside* `qa-results/` worked before this guard existed and refuses now — but failing open
     would cost a run instead of a write.
+
+  **A refusal leaves nothing behind.** Both outputs are opened at the top of the operation, before the
+  run is read, so a refusal for *any* reason — including a missing release gate — may find empty files it
+  created moments earlier. It removes exactly those and nothing else (`export-projection.ts:303-307`): a
+  file that already existed at either path is never deleted, and never emptied, by a refused export.
 - **`5` `ABORTED_OR_INTERNAL`** — a `--run-id` that does not exist. `RunWorkspace.open` calls `realpath`
   on the run's resolved path unguarded (`run-workspace.ts:137-139`), and `assertRealpathWithin` reaches a
   bare `realpath` on a path that does not exist (`core/fs.ts:128-130`), which raises a raw Node `ENOENT`

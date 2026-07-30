@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { open, readFile, rm, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { QaSkillsError } from "../core/errors.js";
@@ -113,36 +114,26 @@ async function readRunnerReports(
 
 /**
  * Refuses before anything is written unless every output path can be RESOLVED to a location outside the
- * results root. What that does and does not cover is set out below; the short version is that it
- * resolves symlinks and does not see hard links.
+ * results root. This is the PATH half of the containment question, and it is kept alongside the
+ * descriptor half in `assertOutputsHaveOneName` because neither subsumes the other:
  *
- * **NOT COVERED: a HARD LINK at either output path. Confirmed by execution, and open.** `realpath` has
- * no target to follow for a hard link — it answers with the path it was given — so `isRealPathWithin`
- * returns `false` for a path whose INODE is a registered artifact inside `qa-results/`, this guard waves
- * it through, and `writeFile`'s `O_TRUNC` overwrites that inode in place. The consequence is the
- * symlink attack's exactly: the victim run is `CHECKSUM_MISMATCH` forever and the export exits 0. The
- * extra precondition is same-filesystem placement (and, on Linux with the default
- * `fs.protected_hardlinks=1`, permission to link the target; unrestricted on macOS). This is NOT
- * TOCTOU-shaped and `O_NOFOLLOW` does not address it — `O_NOFOLLOW` refuses a symlink and cannot see a
- * second name for an inode. The fix is to ask the containment question AT OPEN TIME, against the file
- * descriptor about to be written: `O_NOFOLLOW` plus an `fstat` rejecting `nlink > 1`. Filed as its own
- * task; the doc says so here rather than claiming a coverage this function does not have.
+ * - Only this one sees an ordinary, link-free `--out` that simply points inside `qa-results/`. That path
+ *   opens to a perfectly innocent descriptor with one name; an `fstat` has nothing to object to, because
+ *   a descriptor knows nothing about where its path was.
+ * - Only the descriptor half sees a HARD LINK. `realpath` has no target to follow for a second name — it
+ *   answers with the path it was given — so this function correctly reports `false` for a path whose
+ *   INODE is a registered artifact. That answer is about the NAME, and a write lands on the inode.
  *
- * **ALSO NOT COVERED: the window between this check and the writes.** Every path is resolved here, at
- * the first statement of the operation, and the writes happen after `readRegisteredArtifacts()` and
- * every runner-report read — the slowest stretch of the operation. A symlink planted at an output path
- * during that window is followed. Checking each path immediately before its own write would narrow the
- * window but reopen a worse hole: a projection written and then a refused sidecar leaves bytes on disk
- * that nothing vouches for. Correctness ordering and TOCTOU exposure pull in opposite directions here,
- * and only the open-time check above resolves both — which is the second reason that follow-up is
- * framed as "check at open time" rather than "add `O_NOFOLLOW`".
+ * Both run, in that order, and the ordering is deliberate: this one produces the specific refusals an
+ * operator can act on (`inside <results root>`, `destination could not be resolved`), so it gets to
+ * speak first about a path it can already condemn.
  *
  * **Every output, not just `--out`.** The sidecar's path is DERIVED from the projection's by
  * concatenation, so a guard on `--out` alone says nothing about it — and being derived is what makes it
  * the easier of the two to attack: it needs no influence over the caller's argument at all. A symlink
- * planted at `<out>.provenance.json` pointing into a run would be followed by `writeFile` (which opens
- * `O_CREAT|O_TRUNC` with no `O_NOFOLLOW`), overwriting a registered artifact and leaving that run
- * `CHECKSUM_MISMATCH` forever, or creating one and leaving it `ORPHAN_FILE`.
+ * planted at `<out>.provenance.json` pointing into a run was once followed by the `writeFile` this
+ * operation used (`O_CREAT|O_TRUNC`, no `O_NOFOLLOW`), overwriting a registered artifact and leaving
+ * that run `CHECKSUM_MISMATCH` forever, or creating one and leaving it `ORPHAN_FILE`.
  *
  * **Every output before ANY write**, which is a stronger claim than checking each just before its own
  * write. A projection written and then a refused sidecar would leave a projection on disk that nothing
@@ -178,6 +169,143 @@ async function assertOutputsAreOutsideTheRuns(closedRuns: string, outputs: reado
   }
 }
 
+/** One output this operation holds open for the whole of its run, and whether the open CREATED it —
+ *  which is the only thing that entitles the operation to remove it again (see `releaseOutputs`). */
+type OpenOutput = Readonly<{ path: string; handle: FileHandle; created: boolean }>;
+
+/**
+ * `node -p "require('fs').constants.O_NOFOLLOW"` answers `256` on darwin (Node 25.8.0) — MEASURED. The
+ * constant is documented as unavailable on Windows, where no such open flag exists, and that half is NOT
+ * measured here: this repo has no Windows machine, and `tests/operations` is not in the Windows CI job.
+ * `?? 0` therefore states a platform truth rather than guarding a type, and the code below is written so
+ * an absent constant degrades rather than producing a malformed flag word.
+ *
+ * **What Windows loses is narrower than it first looks, and this too was measured** — by forcing this
+ * constant to `0` and re-running the suite. Only ONE test goes red: the refusal of an `--out` that is
+ * ALREADY a symlink when the operation opens it. The test that plants a symlink DURING the read stretch
+ * still passes, because `O_CREAT|O_EXCL` had already created the file and pinned its inode; a name
+ * changed afterwards cannot reach a descriptor. So the TOCTOU window is closed on every platform by the
+ * open, not by this flag.
+ *
+ * What this flag adds on POSIX is the guarantee that no name is resolved twice: without it, a path that
+ * is a symlink at open time yields the TARGET's descriptor, and a swap between the path guard's
+ * `realpath` and that open would redirect the write. Windows keeps the path guard (which already refuses
+ * a symlink resolving INTO a run) and keeps the `nlink` question below, which is asked everywhere.
+ */
+const openNoFollow: number = fsConstants.O_NOFOLLOW ?? 0;
+
+/**
+ * Opens one output for writing WITHOUT `O_TRUNC`, and reports whether it had to create it.
+ *
+ * **No `O_TRUNC`, and that is the whole ordering constraint.** `O_TRUNC` empties the file AT OPEN, which
+ * is before any `fstat` could refuse it — a refused write would then leave the victim's bytes already
+ * gone, and the guard would have done the attacker's work. The truncation is deferred to `writeOpened`,
+ * after both descriptors are proven, so a refusal anywhere leaves every existing byte untouched.
+ *
+ * **`O_CREAT|O_EXCL` first, plain open second, and the distinction is the residue policy.** The two-step
+ * is not a race workaround; it is how this operation learns whether the file is one it may clean up.
+ * `O_EXCL` also refuses to follow a symlink by POSIX rule, so a linked path reaches the second open,
+ * where `O_NOFOLLOW` turns it into `ELOOP` and a refusal that names what happened.
+ *
+ * The availability cost is real and deliberate: an operator whose `--out` is a symlink to a file
+ * elsewhere OUTSIDE `qa-results/` used to be written through, and is now refused. That is what buys the
+ * property everything else here depends on — the descriptor proven is the descriptor written, with no
+ * name resolved a second time in between.
+ */
+async function openOutput(path: string): Promise<OpenOutput> {
+  try {
+    return { path, handle: await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | openNoFollow, 0o666), created: true };
+  } catch (error: unknown) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+  }
+  try {
+    return { path, handle: await open(path, fsConstants.O_WRONLY | openNoFollow), created: false };
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error && error.code === "ELOOP") {
+      throw new QaSkillsError(`Refusing to write ${path}: it is a symbolic link, and this export writes only through a path it opened itself. Following it would mean the destination that was proved and the destination that is written were resolved at two different moments. Name the target directly.`, "INVALID_ARTIFACT");
+    }
+    throw error;
+  }
+}
+
+/** Both outputs, or neither: if the second cannot be opened, the first is released — closed, and removed
+ *  if this call created it — before the failure propagates. Returned as a tuple because this operation
+ *  has exactly two outputs and the property being defended is about exactly those two. */
+async function openOutputs(projectionPath: string, sidecarPath: string): Promise<readonly [OpenOutput, OpenOutput]> {
+  const projection = await openOutput(projectionPath);
+  try {
+    return [projection, await openOutput(sidecarPath)];
+  } catch (error: unknown) {
+    await releaseOutputs([projection], false);
+    throw error;
+  }
+}
+
+/**
+ * Refuses unless every open descriptor is the ONLY name for its inode.
+ *
+ * A hard link is not a redirection that something could resolve; it IS the file, under a second name, so
+ * `realpath` has nothing to follow and the path guard above answers — correctly, about the name — that
+ * the destination lies outside the runs. Ask the same question of the DESCRIPTOR and the answer changes:
+ * `nlink > 1` means these bytes are reachable by another name, and one of those names may be a
+ * registered artifact inside a closed run. Refusing every second-named output is the conservative
+ * reading, because a descriptor cannot say WHERE its other names are.
+ *
+ * **Asked of all outputs immediately before the first write, not at open.** Opening happens at the top
+ * of the operation, ahead of the whole read stretch; asking there would age the answer by exactly the
+ * window this design exists to close. Asking here keeps Phase 8a's ordering intact — both outputs proven
+ * before either is written — while making the answer as fresh as the descriptors allow. Nothing can
+ * substitute a different file in between: a descriptor names an inode, and renaming or replacing the
+ * PATH after this point cannot reach it. What remains is an attacker who links a name onto a file this
+ * operation itself just created; reaching that requires write access to a run directory, which already
+ * permits creating an orphan outright.
+ *
+ * The availability cost: an operator who deliberately hard-links their `--out` to somewhere else is
+ * refused. There is no way to tell that apart from the attack, because the inode is the same object in
+ * both stories.
+ */
+async function assertOutputsHaveOneName(outputs: readonly OpenOutput[]): Promise<void> {
+  for (const output of outputs) {
+    const { nlink } = await output.handle.stat();
+    if (nlink > 1) {
+      throw new QaSkillsError(`Refusing to write ${output.path}: its bytes already answer to ${nlink} names (a hard link), so writing here may overwrite a registered artifact reached by one of the others and leave that run CHECKSUM_MISMATCH forever. No path check can see this, because a second name for an inode is not a redirection — it is the file. Export to a path this command can create for itself.`, "INVALID_ARTIFACT");
+    }
+  }
+}
+
+/** Truncates and writes at offset 0 — the `O_TRUNC` that `openOutput` deliberately withheld, applied
+ *  once both outputs have been proven. Explicit rather than implied by a `writeFile`, so the moment the
+ *  victim's bytes become forfeit is a statement someone can point at. */
+async function writeOpened(output: OpenOutput, bytes: Buffer): Promise<void> {
+  await output.handle.truncate(0);
+  await output.handle.write(bytes, 0, bytes.byteLength, 0);
+}
+
+/**
+ * THE RESIDUE POLICY: this operation removes exactly the files it created, and only when it did not
+ * finish writing them.
+ *
+ * `O_CREAT` creates, and the creation happens at the top of the operation — long before the run has been
+ * read or either output proven. Every path that leads out of here other than success therefore leaves an
+ * empty file it has no business leaving, so it takes it back. The converse half matters just as much: a
+ * file that ALREADY existed is never removed. Deleting an operator's previous export because the OTHER
+ * output turned out to be a hard link would make this guard destructive in its own right — and its bytes
+ * are intact precisely because nothing truncated them (see `openOutput`), so there is nothing to repair.
+ *
+ * A partial success — projection written, sidecar write then failing on ENOSPC — is treated as a
+ * failure, which is the same policy read from the other end: a newly created projection is removed
+ * rather than left without a sidecar, and a pre-existing one keeps the new bytes it was already given,
+ * exactly as the `writeFile` pair before it would have left them.
+ *
+ * Handles are closed BEFORE the removal, because Windows cannot be relied on to unlink a name that still
+ * has an open handle, and POSIX does not care about the order.
+ */
+async function releaseOutputs(outputs: readonly OpenOutput[], completed: boolean): Promise<void> {
+  for (const output of outputs) await output.handle.close();
+  if (completed) return;
+  for (const output of outputs) if (output.created) await rm(output.path, { force: true });
+}
+
 /**
  * Projects a finalized run's release gate into a CI-readable file, beside a provenance sidecar.
  *
@@ -202,11 +330,27 @@ async function assertOutputsAreOutsideTheRuns(closedRuns: string, outputs: reado
  * (`inspect-workspace-state.ts:542`) on every later read of THAT run — an export that bricked a run,
  * whether or not it is the one being projected. Overwriting a registered file is worse still: that run
  * is `CHECKSUM_MISMATCH` forever. So BOTH of this operation's outputs — the projection and the sidecar
- * derived from its name — are checked against the whole results root, symlinks resolved, and BOTH are
- * checked before EITHER is written. Two routes are NOT covered and are named where the check lives, not
- * here: a hard link at an output path, and the window between the check and the writes. See
- * `assertOutputsAreOutsideTheRuns` for both, and read this heading as what the guard enforces rather
- * than as an unconditional guarantee.
+ * derived from its name — are proved before EITHER is written, and proved twice over, because one
+ * question cannot cover both shapes of the attack:
+ *
+ * 1. `assertOutputsAreOutsideTheRuns` asks it of the PATHS, symlinks resolved, against the whole results
+ *    root. Only this sees an `--out` that simply points inside `qa-results/`.
+ * 2. `assertOutputsHaveOneName` asks it of the DESCRIPTORS about to be written. Only this sees a hard
+ *    link, which no `realpath` can perceive because a second name for an inode is the file itself.
+ *
+ * Between them the two routes Phase 8a left open are closed. The descriptors are opened at the top,
+ * beside the path guard and ahead of the read stretch, so a symlink planted at an output path during
+ * that stretch no longer redirects anything: the write goes to the descriptor, not to the name. On
+ * Windows one clause of that is unavailable — see `openNoFollow`, which says exactly which.
+ *
+ * **A refusal leaves the filesystem as it found it.** Opening early means an empty file may exist at
+ * either output path before the run has even been read, so every exit other than success removes exactly
+ * the files this call created — and only those. `releaseOutputs` states that policy in full; the half
+ * worth naming here is that an existing `--out` is neither deleted nor emptied by a refused export.
+ *
+ * What is NOT claimed: that a hard-linked output is distinguished from a legitimate one.
+ * `assertOutputsHaveOneName` refuses every second-named output, an operator's deliberate one included,
+ * because a descriptor cannot say where its other names are.
  */
 export async function exportProjection(options: Readonly<{ root: string; runId: string; format: string; outPath: string }>): Promise<ExportProjectionResult> {
   if (!isFormat(options.format)) throw new QaSkillsError(`Unsupported projection format ${options.format}: use junit or sarif`, "INVALID_ARTIFACT");
@@ -215,28 +359,40 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
   const workspace = await RunWorkspace.open(options.root, options.runId);
   try {
     await assertOutputsAreOutsideTheRuns(dirname(workspace.path), [outPath, sidecarPath]);
-    const artifacts = await workspace.readRegisteredArtifacts();
-    const { reports, unreadable } = await readRunnerReports(workspace, artifacts);
-    // `resolve(options.root)`, not the realpath'd `dirname(dirname(workspace.path))`, and the choice is
-    // deliberate. This value is what a joined spec location is expressed RELATIVE TO, so it must be the
-    // same directory a SARIF consumer resolves `artifactLocation.uri` against — the checkout the
-    // operator named, which in `README.md`'s pipeline is `--root .`. It is also the spelling most likely
-    // to match the `config.rootDir` recorded in a sanitized runner report, because Playwright resolves
-    // its config path rather than realpath'ing it. Resolved but not realpath'd, both sides are then
-    // compared the way they were produced; where the two spellings genuinely differ,
-    // `spec-locations.ts` emits no location rather than a wrong one.
-    const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), runRoot: resolve(options.root), artifacts, runnerReports: reports });
-    const rendered = Buffer.from(options.format === "junit" ? renderJUnit(model) : renderSarif(model), "utf8");
-    // The projection is written first and the sidecar second, so a sidecar never describes bytes that
-    // do not exist. The reverse order would leave a provenance claim about a missing file.
-    await writeFile(outPath, rendered);
-    await writeFile(sidecarPath, renderSidecar(model, options.format, rendered), "utf8");
-    return {
-      format: options.format, outPath, sidecarPath,
-      projectionSha256: projectionChecksum(rendered),
-      recommendation: model.gate.recommendation, reduced: model.reduced,
-      unreadableRunnerReports: unreadable,
-    };
+    // Opened HERE, beside the path guard, rather than at the writes: everything below this line is the
+    // slow stretch, and a descriptor obtained before it cannot be redirected during it.
+    const [projection, sidecar] = await openOutputs(outPath, sidecarPath);
+    let completed = false;
+    try {
+      const artifacts = await workspace.readRegisteredArtifacts();
+      const { reports, unreadable } = await readRunnerReports(workspace, artifacts);
+      // `resolve(options.root)`, not the realpath'd `dirname(dirname(workspace.path))`, and the choice is
+      // deliberate. This value is what a joined spec location is expressed RELATIVE TO, so it must be the
+      // same directory a SARIF consumer resolves `artifactLocation.uri` against — the checkout the
+      // operator named, which in `README.md`'s pipeline is `--root .`. It is also the spelling most likely
+      // to match the `config.rootDir` recorded in a sanitized runner report, because Playwright resolves
+      // its config path rather than realpath'ing it. Resolved but not realpath'd, both sides are then
+      // compared the way they were produced; where the two spellings genuinely differ,
+      // `spec-locations.ts` emits no location rather than a wrong one.
+      const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), runRoot: resolve(options.root), artifacts, runnerReports: reports });
+      const rendered = Buffer.from(options.format === "junit" ? renderJUnit(model) : renderSarif(model), "utf8");
+      // BOTH descriptors proven before EITHER is truncated. Proving each one just before its own write
+      // would leave a projection on disk that nothing vouches for the moment the sidecar is refused.
+      await assertOutputsHaveOneName([projection, sidecar]);
+      // The projection is written first and the sidecar second, so a sidecar never describes bytes that
+      // do not exist. The reverse order would leave a provenance claim about a missing file.
+      await writeOpened(projection, rendered);
+      await writeOpened(sidecar, Buffer.from(renderSidecar(model, options.format, rendered), "utf8"));
+      completed = true;
+      return {
+        format: options.format, outPath, sidecarPath,
+        projectionSha256: projectionChecksum(rendered),
+        recommendation: model.gate.recommendation, reduced: model.reduced,
+        unreadableRunnerReports: unreadable,
+      };
+    } finally {
+      await releaseOutputs([projection, sidecar], completed);
+    }
   } finally {
     await workspace.close();
   }
