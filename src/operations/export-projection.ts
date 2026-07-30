@@ -1,8 +1,8 @@
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { QaSkillsError } from "../core/errors.js";
-import { isPathWithin } from "../core/fs.js";
+import { isRealPathWithin } from "../core/fs.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
 import { runtimeVersion } from "../installer/manifest.js";
@@ -130,10 +130,11 @@ async function readRunnerReports(
  * `VALID_ARTIFACTS` incident cost; a non-fatal, named, machine-readable degradation is not silence.
  * `readRunnerReports` below draws the line between what degrades and what still refuses.
  *
- * **Nothing is written inside `qa-results/<runId>/`.** A finalized run is closed, and an unregistered
- * file under its `inputs/` or `evidence/` directory would raise `ORPHAN_FILE`
- * (`inspect-workspace-state.ts:542`) on every later read — an export that bricked the run it just read.
- * So an `--out` resolving inside the run directory is refused rather than trusted to be harmless.
+ * **Nothing is written inside `qa-results/`.** A finalized run is closed, and an unregistered file under
+ * any run's `inputs/` or `evidence/` directory would raise `ORPHAN_FILE`
+ * (`inspect-workspace-state.ts:542`) on every later read of THAT run — an export that bricked a run,
+ * whether or not it is the one being projected. So an `--out` resolving anywhere inside the results
+ * root is refused rather than trusted to be harmless, symlinks included.
  */
 export async function exportProjection(options: Readonly<{ root: string; runId: string; format: string; outPath: string }>): Promise<ExportProjectionResult> {
   if (!isFormat(options.format)) throw new QaSkillsError(`Unsupported projection format ${options.format}: use junit or sarif`, "INVALID_ARTIFACT");
@@ -141,12 +142,19 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
   const sidecarPath = `${outPath}.provenance.json`;
   const workspace = await RunWorkspace.open(options.root, options.runId);
   try {
-    // The containment test is against the REALPATH of the output's parent directory, not against the
-    // literal argument: `workspace.path` is itself realpath'd (`RunWorkspace.open`), and on macOS a
-    // `/var/folders/...` argument names the same directory as `/private/var/folders/...`. Comparing the
-    // two raw strings would let the most ordinary temp-dir invocation walk straight past this guard.
-    if (isPathWithin(workspace.path, await realpath(dirname(outPath)))) {
-      throw new QaSkillsError(`Refusing to write ${outPath} inside the run workspace: a finalized run is closed, and the projection is a derived file that belongs beside it`, "INVALID_ARTIFACT");
+    // Scoped to the whole `qa-results/` root, not just the run being exported. A projection written
+    // into ANY run's `inputs/` or `evidence/` raises `ORPHAN_FILE` for that run on every later read
+    // (`inspect-workspace-state.ts:542`), so the guard's own justification argues for the wider scope;
+    // and the root is not something this operation has to go looking for — `dirname(workspace.path)`
+    // is it, already realpath'd by `RunWorkspace.open`.
+    //
+    // `isRealPathWithin` rather than a comparison written here: it resolves symlinks at the LEAF as
+    // well as in the parents, so `--out /tmp/junit.xml` where that file is a symlink into a run's
+    // `inputs/` is refused rather than followed. A `realpath(dirname(outPath))` written locally would
+    // miss precisely that, and would also re-derive a decision `core/fs.ts` owns.
+    const closedRuns = dirname(workspace.path);
+    if (await isRealPathWithin(closedRuns, outPath)) {
+      throw new QaSkillsError(`Refusing to write ${outPath} inside ${closedRuns}: a run workspace is closed and checksummed, and a projection written into one would be an unregistered file that invalidates it. A projection belongs beside the run, never inside it.`, "INVALID_ARTIFACT");
     }
     const artifacts = await workspace.readRegisteredArtifacts();
     const { reports, unreadable } = await readRunnerReports(workspace, artifacts);

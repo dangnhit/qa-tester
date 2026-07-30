@@ -151,6 +151,23 @@ describe("specLocationsByEntryIdentity", () => {
     expect(specLocationsByEntryIdentity([report]).get("TC-6/REV-6/INST-6@api")).toEqual({ file: "specs/no-line.spec.ts" });
   });
 
+  /**
+   * SARIF's `region.startLine` is `{"type": "integer", "minimum": 1}` — verified in the vendored
+   * official schema (`fixtures/sarif/sarif-2.1.0-schema.json`), not assumed. A payload carrying `line:
+   * 0` or `line: 1.5` would therefore render a document that fails validation at GitHub's upload, which
+   * is the failure the vendored-schema decision exists to prevent. This payload is the CONTENT of a
+   * binary, so no schema has vetted it before it reaches here.
+   *
+   * The location survives WITHOUT the line rather than being dropped: the file is still a true location
+   * and still points a reader at the right spec. Dropping it would discard a fact that is correct
+   * because a neighbouring one is not.
+   */
+  it.each([[0, "zero"], [-3, "negative"], [1.5, "fractional"], [Number.NaN, "NaN"], [Number.POSITIVE_INFINITY, "infinite"]])(
+    "keeps the file but drops a %s line, which SARIF's startLine cannot carry", (line) => {
+      const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-L/REV-L/INST-L@api] bad line", ok: false, id: "spec-l", file: "specs/bad-line.spec.ts", line, column: 1, tests: [] }] }] };
+      expect(specLocationsByEntryIdentity([report]).get("TC-L/REV-L/INST-L@api")).toEqual({ file: "specs/bad-line.spec.ts" });
+    });
+
   it("skips a duplicate identity claimed by two specs, rather than resolving to whichever came first", () => {
     const report: Readonly<Record<string, unknown>> = {
       suites: [{
@@ -174,6 +191,28 @@ describe("specLocationsByEntryIdentity", () => {
     const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [runnerReport] });
     expect(model.attempts.find((row) => row.id === "E-1")?.location).toEqual({ file: "specs/checkout.spec.ts", line: 42 });
     expect(model.attempts.find((row) => row.id === "E-2")?.location).toBeUndefined();
+  });
+
+  /**
+   * The ruling in `buildProjectionModel`'s location comment, pinned. Reduction strips AUTHORED TEXT; a
+   * spec path is committed spec-tree content, covered by the `specTreeSha256`/`commitSha` anchor the
+   * reduced model still carries, so it is not the class of thing reduction exists to remove. Asserted
+   * alongside the reduction that IS applied to the same model, so a future change that started
+   * stripping locations could not pass by also breaking reduction.
+   */
+  it("keeps a joined location under reduction, where authored text is stripped", () => {
+    const protectedGate: ProjectionArtifact = {
+      ...gateArtifact,
+      value: {
+        ...gateArtifact.value, protectedEnvironment: true,
+        ruleInputs: { artifactsValid: true, coverage: { requiredMissing: [], optionalGaps: [], requiredHighRisk: [] }, bugs: [], sharedBlockers: ["Evidence gap GAP-1 affects the checkout total shown to a signed-in buyer"] },
+        verdicts: [{ rule: "NO_SHARED_BLOCKERS", passed: false, reason: "Shared blockers: Evidence gap GAP-1 affects the checkout total shown to a signed-in buyer." }],
+      },
+    };
+    const model = buildProjectionModel({ ...base, artifacts: [protectedGate, batchWithTaggedEntry], runnerReports: [runnerReport] });
+    expect(model.reduced).toBe(true);
+    expect(model.attempts.find((row) => row.id === "E-1")?.location).toEqual({ file: "specs/checkout.spec.ts", line: 42 });
+    expect(JSON.stringify(model)).not.toContain("checkout total shown to a signed-in buyer");
   });
 
   it("attaches no location at all when the reports were never passed in", () => {

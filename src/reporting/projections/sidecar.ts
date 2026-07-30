@@ -19,10 +19,11 @@ export function projectionChecksum(bytes: Uint8Array): string {
  * the whole point of the parameter: a sidecar that could be handed a checksum would be able to describe
  * bytes it never saw, which is precisely the claim it exists to make impossible.
  *
- * `reduced` is the ONLY field naming the protected-environment condition. The spec's sample sidecar
- * listed `protectedEnvironment` beside it; that is one bit under two names, and two names for one bit
- * is a drift surface — the pair can only ever disagree by being wrong. `reduced` is the one that says
- * what the file actually is.
+ * `reduced` is the ONLY field naming the protected-environment condition, and no `protectedEnvironment`
+ * sits beside it. One bit under two names is a drift surface: the pair carries no information the
+ * single field does not, and can only ever differ by being wrong. `reduced` is the name that says what
+ * the FILE is — this is a record about a projection, not a copy of the gate's environment label, and a
+ * reader asking whether the run was protected has `gate.artifactId`/`gate.sha256` to go and ask.
  *
  * Nothing here is derived a second time: `gate`, `sourceArtifacts`, `reduced`, `producerVersion` and
  * `generatedAt` are copied off the model, which copied them off the persisted gate artifact.

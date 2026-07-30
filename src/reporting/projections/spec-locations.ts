@@ -88,7 +88,19 @@ export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Re
       // `noUncheckedIndexedAccess` still types a capture group access as possibly `undefined`.
       const key = specLocationKey({ testCaseId: match[1] ?? "", testCaseRevisionId: match[2] ?? "", testCaseInstanceId: match[3] ?? "", executionSurface: match[4] ?? "" });
       if (found.has(key)) { ambiguous.add(key); continue; }
-      found.set(key, typeof spec.line === "number" ? { file, line: spec.line } : { file });
+      // A POSITIVE INTEGER, not merely a number. `renderSarif` puts this straight into
+      // `region.startLine`, which the official schema types `{"type": "integer", "minimum": 1}`
+      // (verified in the vendored `fixtures/sarif/sarif-2.1.0-schema.json`), so `0`, `-3`, `1.5`, `NaN`
+      // and `Infinity` each render a document that GitHub's code-scanning upload rejects outright --
+      // the whole projection lost to one bad field. This value is the CONTENT of a registered binary,
+      // which nothing schema-validates (`inspect-workspace-state.ts:324` returns before
+      // `validateArtifact`), so this is the only place the constraint can be enforced.
+      //
+      // A bad line drops the LINE, never the location: the file is still a true location, and
+      // discarding a correct fact because a neighbouring one is wrong would tell a reader less than the
+      // run actually knows.
+      const line = typeof spec.line === "number" && Number.isInteger(spec.line) && spec.line >= 1 ? spec.line : undefined;
+      found.set(key, line === undefined ? { file } : { file, line });
     }
   }
   for (const key of ambiguous) found.delete(key);

@@ -207,6 +207,17 @@ export function buildProjectionModel(input: Readonly<{
       if (id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined || executionSurface === undefined) return [];
       // Lane 1 never reaches this branch at all -- a driven attempt has no spec file to join, and this
       // lookup only ever runs for a lane-2 row.
+      //
+      // **A LOCATION SURVIVES REDUCTION**, deliberately, and is the one thing on this row that is not
+      // re-examined when `reduced` is true. Everything reduction strips is AUTHORED TEXT -- a gap's
+      // `reason`, a blocker's `affectedClaim`, free-form prose a person wrote into an artifact. A spec
+      // path is not that: it is a path inside the committed spec tree, the same tree
+      // `specTreeSha256` checksums and `commitSha` names, and this model already carries BOTH of those
+      // on `anchor` under reduction. Withholding `specs/checkout.spec.ts` while publishing the commit
+      // that contains it would protect nothing -- the path is derivable from the anchor by anyone who
+      // can read the repository, and unreadable to anyone who cannot. The question was not live before
+      // the export operation existed, because no location ever reached a real projection; it is now,
+      // so the answer is written here rather than left to be inferred from the absence of a branch.
       const location = locations.get(specLocationKey({ testCaseId, testCaseRevisionId, testCaseInstanceId, executionSurface }));
       return [{
         lane: "observed-entry" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface, durationMs: durationOf(entry), provenance,

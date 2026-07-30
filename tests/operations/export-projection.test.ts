@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,39 +20,41 @@ const testCase = { artifactType: "test-case", schemaVersion: "2.0.0", producerVe
 /**
  * The bytes lane 2 actually registers as the sanitized runner report — shaped exactly as
  * `sanitizeRunnerReport` writes them (src/observed/sanitize-report.ts:124-134), with one spec tagged
- * with the identity `observedEntry` below reports. This payload is what the export operation must read
- * off disk: it is registered as a BINARY, so `readRegisteredArtifacts` never parses it into any
+ * with the identity the matching batch entry reports. This payload is what the export operation must
+ * read off disk: it is registered as a BINARY, so `readRegisteredArtifacts` never parses it into any
  * artifact's `.value` (`inspect-workspace-state.ts:324` returns early for any record with a mediaType).
  */
-const sanitizedReport = JSON.stringify({
+const reportTagging = (testCaseId: string, file: string, line: number): string => JSON.stringify({
   sanitization: { policy: "qa-skills/observed-runner-report/v1", removed: [], note: "" },
   suites: [{
-    title: "checkout.spec.ts",
-    specs: [{ title: "[qa:TC-CHECKOUT/REV-1/INSTANCE-1@api] pays with a card", ok: false, id: "spec-1", file: "specs/checkout.spec.ts", line: 42, column: 3, tests: [] }],
+    title: file,
+    specs: [{ title: `[qa:${testCaseId}/REV-1/INSTANCE-1@api] pays with a card`, ok: false, id: `spec-${testCaseId}`, file, line, column: 3, tests: [] }],
   }],
 }, null, 2);
 
-/**
- * A finalized run carrying both lanes' shapes: one registered test case, one Runtime-Observed Execution
- * (a `runner-report` evidence bundle plus the `test-result-batch` whose failing entry cites it), one
- * operational Evidence Gap — which is what drives the gate to NOT_READY through `NO_SHARED_BLOCKERS` —
- * and the release gate `generateQaReport` derives from all of it.
- *
- * `report` is the sanitized report's bytes, parameterised only so the malformed-payload cases can
- * register something unparseable through the very same registration path a real run uses.
- */
-async function finalizedRun(report: string = sanitizedReport): Promise<{ root: string; runId: string }> {
-  const root = await mkdtemp(join(tmpdir(), "qa-export-")); roots.push(root);
-  const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
-  const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
+const sanitizedReport = reportTagging("TC-CHECKOUT", "specs/checkout.spec.ts", 42);
+
+/** One Runtime-Observed Execution to register: its own test case, its own `runner-report` evidence
+ *  bundle, and the `test-result-batch` whose failing entry cites that bundle. A run may hold several
+ *  (an external suite run per surface, say), which is why `finalizedRun` takes a list. */
+type Observation = Readonly<{ suffix: string; testCaseId: string; evidenceId: string; report: string }>;
+
+const observation = (over: Partial<Observation> = {}): Observation => ({
+  suffix: "1", testCaseId: "TC-CHECKOUT", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", report: sanitizedReport, ...over,
+});
+
+async function registerObservation(workspace: RunWorkspace, entry: Observation): Promise<void> {
+  const value = { ...testCase, testCaseId: entry.testCaseId };
+  const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value, relationships: [] });
+  const executionId = `EXEC-${entry.suffix}`;
   const bundle = await workspace.registerEvidenceBundle({
-    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(report, "utf8"), mediaType: "application/json", captureType: "runner-report" }],
+    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(entry.report, "utf8"), mediaType: "application/json", captureType: "runner-report" }],
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
       artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0",
-      evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
-      subject: { kind: "observed-execution", executionId: "EXEC-1" },
+      evidenceId: entry.evidenceId, runId: workspace.runId,
+      subject: { kind: "observed-execution", executionId },
       kind: "runner-report", capturedAt: "2026-07-29T00:01:00.000Z",
       sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "application/json",
       binaryArtifactIds: binaries.map((binary) => binary.id),
@@ -64,11 +66,25 @@ async function finalizedRun(report: string = sanitizedReport): Promise<{ root: s
     type: "test-result-batch", provenance: "runtime-observed", relationships: [registeredCase.id, bundle.descriptor.id],
     value: {
       artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "0.1.0",
-      executionId: "EXEC-1", runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64),
+      executionId, runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64),
       startedAt: "2026-07-29T00:00:00.000Z", finishedAt: "2026-07-29T00:01:00.000Z",
-      entries: [{ entryId: "E-1", testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", steps: [{ stepId: "S1", status: "FAILED", durationMs: 500 }], evidenceArtifactIds: [bundle.descriptor.id] }],
+      entries: [{ entryId: `E-${entry.suffix}`, testCaseId: entry.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", steps: [{ stepId: "S1", status: "FAILED", durationMs: 500 }], evidenceArtifactIds: [bundle.descriptor.id] }],
     },
   });
+}
+
+/**
+ * A finalized run carrying both lanes' shapes: one or more Runtime-Observed Executions, one operational
+ * Evidence Gap — which is what drives the gate to NOT_READY through `NO_SHARED_BLOCKERS` — and the
+ * release gate `generateQaReport` derives from all of it.
+ *
+ * The observations are parameterised so a case can register a second execution, or an unparseable
+ * payload, through the very same registration path a real run uses.
+ */
+async function finalizedRun(observations: readonly Observation[] = [observation()]): Promise<{ root: string; runId: string }> {
+  const root = await mkdtemp(join(tmpdir(), "qa-export-")); roots.push(root);
+  const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+  for (const entry of observations) await registerObservation(workspace, entry);
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
     value: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
@@ -142,7 +158,7 @@ describe("exportProjection", () => {
     ["a payload that is not JSON at all", "{ password123 is not json", "payload is not valid JSON"],
     ["a payload that parses to something other than an object", "[]", "payload is not a JSON object"],
   ])("still writes the projection when a registered runner report is unreadable (%s), and names what it could not read", async (_label, payload, reason) => {
-    const { root, runId } = await finalizedRun(payload);
+    const { root, runId } = await finalizedRun([observation({ report: payload })]);
     const outPath = join(root, "degraded.sarif");
 
     const result = await exportProjection({ root, runId, format: "sarif", outPath });
@@ -165,11 +181,37 @@ describe("exportProjection", () => {
       .rejects.toThrow(/release gate/i);
   });
 
+  /**
+   * The name promises an ORDERING, so the ordering is what is asserted: the run id names no run at all,
+   * so if the format check did not come first, `RunWorkspace.open`'s `realpath` would answer ENOENT
+   * instead. Getting the format message back is the proof that nothing was opened.
+   */
   it("refuses an unsupported format before opening anything", async () => {
-    const { root, runId } = await finalizedRun();
+    const { root } = await finalizedRun();
 
-    await expect(exportProjection({ root, runId, format: "tap", outPath: join(root, "x.tap") }))
+    await expect(exportProjection({ root, runId: "RUN-DOES-NOT-EXIST", format: "tap", outPath: join(root, "x.tap") }))
       .rejects.toThrow(/junit or sarif/i);
+  });
+
+  /**
+   * A run may register more than one Runtime-Observed Execution — an external suite run per surface, or
+   * a second suite entirely — and each carries its own sanitized report. The loop over sources was only
+   * ever exercised with zero or one before this test, so nothing proved a SECOND report was read at all
+   * rather than the first one winning.
+   */
+  it("reads every registered runner report, not just the first, when a run holds two observed executions", async () => {
+    const { root, runId } = await finalizedRun([
+      observation(),
+      observation({ suffix: "2", testCaseId: "TC-SEARCH", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", report: reportTagging("TC-SEARCH", "specs/search.spec.ts", 7) }),
+    ]);
+    const outPath = join(root, "two.sarif");
+
+    await exportProjection({ root, runId, format: "sarif", outPath });
+
+    const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
+    const located = sarif.runs[0].results.filter((entry) => entry.ruleId === "observed-failure")
+      .flatMap((entry) => entry.locations ?? []).map((location) => location.physicalLocation.artifactLocation.uri);
+    expect(located.sort()).toEqual(["specs/checkout.spec.ts", "specs/search.spec.ts"]);
   });
 
   it("writes nothing inside the run workspace", async () => {
@@ -203,8 +245,68 @@ describe("exportProjection", () => {
     const { root, runId } = await finalizedRun();
 
     await expect(exportProjection({ root, runId, format: "junit", outPath: join(root, "qa-results", runId, "inputs", "sneak.xml") }))
-      .rejects.toThrow(/inside the run workspace/i);
+      .rejects.toThrow(/inside .*qa-results/i);
     expect(await readdir(join(root, "qa-results", runId, "inputs"))).not.toContain("sneak.xml");
+  });
+
+  /**
+   * The guard covers the whole results root, not just the run being exported. A projection landing in
+   * ANOTHER run's `inputs/` raises `ORPHAN_FILE` for THAT run on every later read
+   * (`inspect-workspace-state.ts:542`) — it would brick a run this export never even opened, which is
+   * strictly worse than bricking the one it did.
+   */
+  it("refuses an --out inside a different run's workspace, not just the one being exported", async () => {
+    const { root, runId } = await finalizedRun();
+    const other = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+    const otherRunId = other.runId;
+    await other.close();
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath: join(root, "qa-results", otherRunId, "inputs", "sneak.xml") }))
+      .rejects.toThrow(/inside .*qa-results/i);
+    expect(await readdir(join(root, "qa-results", otherRunId, "inputs"))).not.toContain("sneak.xml");
+  });
+
+  /**
+   * A symlink AT THE LEAF, pointing at a REGISTERED artifact file. `--out` names a path outside the
+   * results root whose own inode is a symlink into a closed run, so a guard that resolved only the
+   * output's PARENT directory would see an innocent temp directory and write straight through the link
+   * — overwriting a checksummed artifact and leaving the run permanently CHECKSUM_MISMATCH.
+   * `isRealPathWithin` resolves the candidate itself first (`nearestExistingParent` lstats it before
+   * walking up), which is the whole reason the guard delegates to `core/fs.ts` rather than calling
+   * `realpath(dirname(...))` here.
+   */
+  it("refuses an --out that is a symlink onto a registered artifact, not just one syntactically inside", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const registered = (await readdir(inputs))[0]!;
+    const before = await readFile(join(inputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-link-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await symlink(join(inputs, registered), outPath);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/inside .*qa-results/i);
+    expect(await readFile(join(inputs, registered), "utf8")).toBe(before);
+  });
+
+  /**
+   * The same attack with a symlink whose target does not exist yet — `writeFile` would CREATE it inside
+   * the run. Containment holds, but by a different route and with a different message: `lstat` sees the
+   * link, `realpath` cannot resolve its missing target, and the raw ENOENT propagates (exit 5) instead
+   * of the guard's own refusal (exit 3). Pinned as the property that actually matters — nothing is
+   * created inside the run — rather than on the message, and disclosed as the one input shape where the
+   * refusal is less legible than it should be. Resolving a dangling link cleanly would mean hand-rolling
+   * a `readlink` walk in `core/fs.ts`, which is the kind of local containment logic `fa6c60c` records
+   * the cost of; refusing loudly is the safe half of the trade.
+   */
+  it("still creates nothing inside a run workspace when --out is a dangling symlink into one", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-dangling-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await symlink(join(inputs, "through-a-link.xml"), outPath);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow();
+    expect(await readdir(inputs)).not.toContain("through-a-link.xml");
   });
 });
 

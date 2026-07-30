@@ -80,7 +80,7 @@ describe("qa-skill export", () => {
   // tell a refusal by this command apart from Commander answering "unknown command" with the same 3.
   it.each([
     ["an unknown format", (built: { root: string; runId: string }) => ["export", "--root", built.root, "--run-id", built.runId, "--format", "tap", "--out", join(built.root, "x.tap")], /junit or sarif/i],
-    ["an --out inside the run workspace", (built: { root: string; runId: string }) => ["export", "--root", built.root, "--run-id", built.runId, "--format", "junit", "--out", join(built.root, "qa-results", built.runId, "inputs", "x.xml")], /inside the run workspace/i],
+    ["an --out inside the run workspace", (built: { root: string; runId: string }) => ["export", "--root", built.root, "--run-id", built.runId, "--format", "junit", "--out", join(built.root, "qa-results", built.runId, "inputs", "x.xml")], /inside .*qa-results/i],
   ])("exits 3 for %s", async (_label, argv, message) => {
     const built = await notReadyRun();
 

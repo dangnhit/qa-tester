@@ -20,8 +20,9 @@ const nativePathSemantics: PathSemantics = { relative, isAbsolute, sep };
  *
  *  Exported so that a decision of the form "does this resolved path lie under this root" shares this
  *  one implementation instead of re-deriving a POSIX-only one. Callers: `resolveWithin`,
- *  `assertPathWithin` and `assertRealpathWithin` below; `test-data/hooks.ts`'s `contained`; and
- *  `run-workspace.ts`'s decision of whether a registration source is inside the workspace.
+ *  `assertPathWithin`, `assertRealpathWithin` and `isRealPathWithin` below; `test-data/hooks.ts`'s
+ *  `contained`; and `run-workspace.ts`'s decision of whether a registration source is inside the
+ *  workspace.
  *
  *  Three places make a related decision and deliberately do NOT call this, so the list above is not
  *  a claim that no other prefix test exists:
@@ -73,6 +74,35 @@ export function resolveWithin(root: string, candidate: string): string {
   const resolvedCandidate = resolve(resolvedRoot, candidate);
   if (isPathWithin(resolvedRoot, resolvedCandidate)) return resolvedCandidate;
   throw new QaSkillsError(`Path traversal or escape is not allowed: ${candidate}`, "PATH_ESCAPE");
+}
+
+/**
+ * True when `candidate` — or, when it does not exist yet, its nearest existing ancestor — REALLY lands
+ * inside `root`, symlinks followed.
+ *
+ * The predicate half of `assertPathWithin`: same resolution, same `isPathWithin` comparison, no
+ * refusal. It exists because those two answer opposite questions. `assertPathWithin` serves a caller
+ * that must refuse a path for being OUTSIDE a root; this serves one that must refuse a path for being
+ * INSIDE one (`export-projection.ts`, which will not write a derived file into a closed run workspace).
+ * Inverting an assertion by catching its throw would make the common case — a path legitimately outside
+ * — travel by exception, and would conflate `PATH_ESCAPE` with `SYMLINK_ESCAPE` as if both meant "fine".
+ *
+ * It shares `nearestExistingParent` rather than resolving the leaf itself, and that sharing is the
+ * point: `lstat`ping the candidate BEFORE walking up is what makes a symlink AT THE LEAF resolve to its
+ * target instead of being treated as a not-yet-existing file inside its (innocent) parent directory. A
+ * hand-rolled `realpath(dirname(candidate))` misses exactly that case, and `fa6c60c` is this repo's
+ * record of what a containment call site that re-derives the decision instead of delegating costs.
+ *
+ * A DANGLING symlink THROWS rather than answering: `lstat` sees the link, `realpath` cannot resolve its
+ * missing target, and the `ENOENT` propagates. That is the safe direction — a caller refusing a path for
+ * being inside a root gets a refusal either way, and never a `false` that would wave the write through
+ * to a target the link would have created. It is shared with `assertPathWithin`, which behaves the same
+ * way for the same reason, so the two do not disagree about what an unresolvable path means.
+ */
+export async function isRealPathWithin(root: string, candidate: string): Promise<boolean> {
+  const existing = await nearestExistingParent(resolve(candidate));
+  const [realRoot, realExisting] = await Promise.all([realpath(root), realpath(existing)]);
+  return isPathWithin(realRoot, realExisting);
 }
 
 /** Ensures a target or its nearest existing parent does not escape through a symlink. */
