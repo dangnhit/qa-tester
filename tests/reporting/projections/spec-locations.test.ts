@@ -28,7 +28,7 @@ const drivenAttempt: ProjectionArtifact = {
 };
 
 // Task 1's `batch` fixture, with the first entry's identity set to TC-1/REV-1/INST-1 on the `api`
-// surface -- matching the tag `evidenceArtifact` carries below -- per the brief's Step 2 instructions.
+// surface -- matching the tag `runnerReport` carries below -- per the brief's Step 2 instructions.
 const batchWithTaggedEntry: ProjectionArtifact = {
   record: { id: "batch-1", sha256: "c".repeat(64), type: "test-result-batch", provenance: "runtime-observed" },
   value: {
@@ -40,99 +40,81 @@ const batchWithTaggedEntry: ProjectionArtifact = {
   },
 };
 
-// Shaped exactly as measured from `sanitizeRunnerReport` (src/observed/sanitize-report.ts:99-105,124-134):
+// A PAYLOAD, not an artifact: these are the parsed bytes of a registered sanitized runner report, which
+// the impure edge reads off disk (`src/operations/export-projection.ts`) because they are registered as
+// a binary and no artifact's `.value` ever carries them. Shaped exactly as measured from
+// `sanitizeRunnerReport` (src/observed/sanitize-report.ts:99-105,124-134):
 // `{ suites: [ { title, file?, line?, column?, suites?: [...], specs?: [{ title, ok, id, file, line, column, tests }] } ] }`.
 // One suite, two specs: one tagged matching `batchWithTaggedEntry`'s first entry, one not.
-const evidenceArtifact: ProjectionArtifact = {
-  record: { id: "evidence-1", sha256: "f".repeat(64), type: "evidence", provenance: "runtime" },
-  value: {
-    sanitization: { policy: "qa-skills/observed-runner-report/v1", removed: [], note: "" },
-    suites: [
-      {
-        title: "checkout.spec.ts",
-        specs: [
-          { title: "[qa:TC-1/REV-1/INST-1@api] pays with a card", ok: false, id: "spec-1", file: "specs/checkout.spec.ts", line: 42, column: 3, tests: [] },
-          { title: "an untagged spec that also ran", ok: true, id: "spec-2", file: "specs/checkout.spec.ts", line: 58, column: 3, tests: [] },
-        ],
-      },
-    ],
-  },
+const runnerReport: Readonly<Record<string, unknown>> = {
+  sanitization: { policy: "qa-skills/observed-runner-report/v1", removed: [], note: "" },
+  suites: [
+    {
+      title: "checkout.spec.ts",
+      specs: [
+        { title: "[qa:TC-1/REV-1/INST-1@api] pays with a card", ok: false, id: "spec-1", file: "specs/checkout.spec.ts", line: 42, column: 3, tests: [] },
+        { title: "an untagged spec that also ran", ok: true, id: "spec-2", file: "specs/checkout.spec.ts", line: 58, column: 3, tests: [] },
+      ],
+    },
+  ],
 };
 
 describe("specLocationsByEntryIdentity", () => {
   it("finds a tagged spec's file and line", () => {
-    expect(specLocationsByEntryIdentity([evidenceArtifact]).get("TC-1/REV-1/INST-1@api"))
+    expect(specLocationsByEntryIdentity([runnerReport]).get("TC-1/REV-1/INST-1@api"))
       .toEqual({ file: "specs/checkout.spec.ts", line: 42 });
   });
 
   it("returns nothing for an untagged spec, rather than guessing which entry it belongs to", () => {
-    expect(specLocationsByEntryIdentity([evidenceArtifact]).size).toBe(1);
+    expect(specLocationsByEntryIdentity([runnerReport]).size).toBe(1);
   });
 
   it("returns an empty map when the run registered no sanitized report at all", () => {
     expect(specLocationsByEntryIdentity([]).size).toBe(0);
   });
 
-  it("ignores a non-evidence artifact even when its payload happens to hold a tagged spec", () => {
-    // `gateArtifact.record.type` is already "release-gate"; only `value` is swapped for the tagged payload.
-    const disguised: ProjectionArtifact = { ...gateArtifact, value: evidenceArtifact.value };
-    expect(specLocationsByEntryIdentity([disguised]).size).toBe(0);
-  });
-
-  // The measured shape that matters most: a REAL registered `evidence` artifact's `value` is the
-  // descriptor `registerEvidenceBundle` builds (execute-observed-playwright.ts:386-398) -- subject,
-  // kind, binaryArtifactIds, binaryArtifacts, provenance -- never the sanitized report's `suites`. The
-  // sanitized report is the referenced BINARY's file content, which `RunWorkspace.readRegisteredArtifacts`
-  // never exposes as any artifact's parsed `.value` (media artifacts keep no `.value`, `inspect-workspace-
-  // state.ts:324`). This traversal must not crash or fabricate a match against that shape; it must simply
-  // find nothing, exactly as it does for any other evidence-typed payload with no `suites` key.
-  it("finds nothing in an evidence descriptor that carries no sanitized report at all", () => {
-    const descriptor: ProjectionArtifact = {
-      record: { id: "evidence-1", sha256: "f".repeat(64), type: "evidence", provenance: "runtime" },
-      value: {
-        artifactType: "evidence", schemaVersion: "3.0.0", evidenceId: "EV-1", runId: "RUN-1",
-        subject: { kind: "observed-execution", executionId: "EX-1" }, kind: "runner-report", capturedAt: base.generatedAt,
-        sha256: "f".repeat(64), relativePath: "evidence/1-report.json", mediaType: "application/json",
-        binaryArtifactIds: ["bin-1"], binaryArtifacts: [{ id: "bin-1", relativePath: "evidence/1-report.json", sha256: "f".repeat(64), mediaType: "application/json" }],
-        provenance: { captureType: "runner-report", runner: "playwright", runnerVersion: "1.61.0", exitCode: 0, capturedAt: base.generatedAt },
-      },
+  // The measured shape that matters most, kept from Task 5 with only its framing corrected. A REAL
+  // registered `evidence` artifact's `value` is the descriptor `registerEvidenceBundle` builds
+  // (execute-observed-playwright.ts:386-398) -- subject, kind, binaryArtifactIds, binaryArtifacts,
+  // provenance -- never the sanitized report's `suites`, which live in the referenced BINARY's file
+  // content. Handing this function that descriptor by mistake must find nothing rather than crash or
+  // fabricate a match. (Which payloads are ACTUALLY read is now decided by `runnerReportSources` in
+  // `src/operations/export-projection.ts`, where the "only an evidence artifact, and only a
+  // runner-report one" filter moved along with the file read; its own tests pin that.)
+  it("finds nothing in an evidence descriptor handed to it in place of the report it references", () => {
+    const descriptor: Readonly<Record<string, unknown>> = {
+      artifactType: "evidence", schemaVersion: "3.0.0", evidenceId: "EV-1", runId: "RUN-1",
+      subject: { kind: "observed-execution", executionId: "EX-1" }, kind: "runner-report", capturedAt: base.generatedAt,
+      sha256: "f".repeat(64), relativePath: "evidence/1-report.json", mediaType: "application/json",
+      binaryArtifactIds: ["bin-1"], binaryArtifacts: [{ id: "bin-1", relativePath: "evidence/1-report.json", sha256: "f".repeat(64), mediaType: "application/json" }],
+      provenance: { captureType: "runner-report", runner: "playwright", runnerVersion: "1.61.0", exitCode: 0, capturedAt: base.generatedAt },
     };
     expect(specLocationsByEntryIdentity([descriptor]).size).toBe(0);
   });
 
   it("recurses into a suite nested inside a suite to find a spec several describe blocks deep", () => {
-    const nested: ProjectionArtifact = {
-      record: { id: "evidence-2", sha256: "1".repeat(64), type: "evidence", provenance: "runtime" },
-      value: {
+    const nested: Readonly<Record<string, unknown>> = {
+      suites: [{
+        title: "checkout.spec.ts",
         suites: [{
-          title: "checkout.spec.ts",
+          title: "checkout flow",
           suites: [{
-            title: "checkout flow",
-            suites: [{
-              title: "card payment",
-              specs: [{ title: "[qa:TC-9/REV-9/INST-9@api] deeply nested", ok: false, id: "spec-9", file: "specs/deep.spec.ts", line: 7, column: 5, tests: [] }],
-            }],
+            title: "card payment",
+            specs: [{ title: "[qa:TC-9/REV-9/INST-9@api] deeply nested", ok: false, id: "spec-9", file: "specs/deep.spec.ts", line: 7, column: 5, tests: [] }],
           }],
         }],
-      },
+      }],
     };
     expect(specLocationsByEntryIdentity([nested]).get("TC-9/REV-9/INST-9@api")).toEqual({ file: "specs/deep.spec.ts", line: 7 });
   });
 
   it("ignores a malformed suite node rather than crashing", () => {
-    const malformed: ProjectionArtifact = {
-      record: { id: "evidence-3", sha256: "2".repeat(64), type: "evidence", provenance: "runtime" },
-      value: { suites: ["not a suite", null, 42] },
-    };
-    expect(specLocationsByEntryIdentity([malformed]).size).toBe(0);
+    expect(specLocationsByEntryIdentity([{ suites: ["not a suite", null, 42] }]).size).toBe(0);
   });
 
   it("treats a spec with no title at all exactly like an untagged spec", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-3b", sha256: "7".repeat(64), type: "evidence", provenance: "runtime" },
-      value: { suites: [{ title: "s", specs: [{ ok: false, id: "spec-notitle", file: "specs/notitle.spec.ts", line: 1, column: 1, tests: [] }] }] },
-    };
-    expect(specLocationsByEntryIdentity([artifact]).size).toBe(0);
+    const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ ok: false, id: "spec-notitle", file: "specs/notitle.spec.ts", line: 1, column: 1, tests: [] }] }] };
+    expect(specLocationsByEntryIdentity([report]).size).toBe(0);
   });
 
   // The guard this proves: `typeof spec.title === "string"`. Without it, `RegExp#exec` coerces its
@@ -142,73 +124,69 @@ describe("specLocationsByEntryIdentity", () => {
   // never distinguish the guarded implementation from an unguarded one; only a non-string value whose
   // coerced form spells out a tag can.
   it("does not let a non-string title fabricate a location through ToString coercion", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-8", sha256: "8".repeat(64), type: "evidence", provenance: "runtime" },
-      value: {
-        suites: [{
-          title: "s",
-          specs: [{
-            title: ["not really a title", "[qa:TC-X/REV-X/INST-X@api] spurious"],
-            ok: false, id: "spec-8", file: "specs/coerced.spec.ts", line: 1, column: 1, tests: [],
-          }],
+    const report: Readonly<Record<string, unknown>> = {
+      suites: [{
+        title: "s",
+        specs: [{
+          title: ["not really a title", "[qa:TC-X/REV-X/INST-X@api] spurious"],
+          ok: false, id: "spec-8", file: "specs/coerced.spec.ts", line: 1, column: 1, tests: [],
         }],
-      },
+      }],
     };
-    expect(specLocationsByEntryIdentity([artifact]).has("TC-X/REV-X/INST-X@api")).toBe(false);
+    expect(specLocationsByEntryIdentity([report]).has("TC-X/REV-X/INST-X@api")).toBe(false);
   });
 
   it("skips a malformed tag rather than guessing an identity", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-4", sha256: "3".repeat(64), type: "evidence", provenance: "runtime" },
-      value: { suites: [{ title: "s", specs: [{ title: "[qa:BROKEN incomplete tag] does a thing", ok: false, id: "spec-4", file: "specs/broken.spec.ts", line: 1, column: 1, tests: [] }] }] },
-    };
-    expect(specLocationsByEntryIdentity([artifact]).size).toBe(0);
+    const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:BROKEN incomplete tag] does a thing", ok: false, id: "spec-4", file: "specs/broken.spec.ts", line: 1, column: 1, tests: [] }] }] };
+    expect(specLocationsByEntryIdentity([report]).size).toBe(0);
   });
 
   it("skips a tagged spec with no file, rather than attaching a location with nothing to point at", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-5", sha256: "4".repeat(64), type: "evidence", provenance: "runtime" },
-      value: { suites: [{ title: "s", specs: [{ title: "[qa:TC-5/REV-5/INST-5@api] no file", ok: false, id: "spec-5", file: "", line: 1, column: 1, tests: [] }] }] },
-    };
-    expect(specLocationsByEntryIdentity([artifact]).size).toBe(0);
+    const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-5/REV-5/INST-5@api] no file", ok: false, id: "spec-5", file: "", line: 1, column: 1, tests: [] }] }] };
+    expect(specLocationsByEntryIdentity([report]).size).toBe(0);
   });
 
   it("finds a location with no line when the spec carries none", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-6", sha256: "5".repeat(64), type: "evidence", provenance: "runtime" },
-      value: { suites: [{ title: "s", specs: [{ title: "[qa:TC-6/REV-6/INST-6@api] no line", ok: false, id: "spec-6", file: "specs/no-line.spec.ts", column: 1, tests: [] }] }] },
-    };
-    expect(specLocationsByEntryIdentity([artifact]).get("TC-6/REV-6/INST-6@api")).toEqual({ file: "specs/no-line.spec.ts" });
+    const report: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-6/REV-6/INST-6@api] no line", ok: false, id: "spec-6", file: "specs/no-line.spec.ts", column: 1, tests: [] }] }] };
+    expect(specLocationsByEntryIdentity([report]).get("TC-6/REV-6/INST-6@api")).toEqual({ file: "specs/no-line.spec.ts" });
   });
 
   it("skips a duplicate identity claimed by two specs, rather than resolving to whichever came first", () => {
-    const artifact: ProjectionArtifact = {
-      record: { id: "evidence-7", sha256: "6".repeat(64), type: "evidence", provenance: "runtime" },
-      value: {
-        suites: [{
-          title: "s",
-          specs: [
-            { title: "[qa:TC-7/REV-7/INST-7@api] first claim", ok: false, id: "spec-7a", file: "specs/a.spec.ts", line: 1, column: 1, tests: [] },
-            { title: "[qa:TC-7/REV-7/INST-7@api] second claim", ok: false, id: "spec-7b", file: "specs/b.spec.ts", line: 2, column: 1, tests: [] },
-          ],
-        }],
-      },
+    const report: Readonly<Record<string, unknown>> = {
+      suites: [{
+        title: "s",
+        specs: [
+          { title: "[qa:TC-7/REV-7/INST-7@api] first claim", ok: false, id: "spec-7a", file: "specs/a.spec.ts", line: 1, column: 1, tests: [] },
+          { title: "[qa:TC-7/REV-7/INST-7@api] second claim", ok: false, id: "spec-7b", file: "specs/b.spec.ts", line: 2, column: 1, tests: [] },
+        ],
+      }],
     };
-    expect(specLocationsByEntryIdentity([artifact]).has("TC-7/REV-7/INST-7@api")).toBe(false);
+    expect(specLocationsByEntryIdentity([report]).has("TC-7/REV-7/INST-7@api")).toBe(false);
+  });
+
+  it("skips a duplicate identity claimed by two SEPARATE reports, not just two specs in one", () => {
+    const first: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-7/REV-7/INST-7@api] first report", ok: false, id: "a", file: "specs/a.spec.ts", line: 1, column: 1, tests: [] }] }] };
+    const second: Readonly<Record<string, unknown>> = { suites: [{ title: "s", specs: [{ title: "[qa:TC-7/REV-7/INST-7@api] second report", ok: false, id: "b", file: "specs/b.spec.ts", line: 2, column: 1, tests: [] }] }] };
+    expect(specLocationsByEntryIdentity([first, second]).has("TC-7/REV-7/INST-7@api")).toBe(false);
   });
 
   it("attaches the joined location to the matching attempt row and to no other", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry, evidenceArtifact] });
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [runnerReport] });
     expect(model.attempts.find((row) => row.id === "E-1")?.location).toEqual({ file: "specs/checkout.spec.ts", line: 42 });
     expect(model.attempts.find((row) => row.id === "E-2")?.location).toBeUndefined();
   });
 
-  it("never attaches a location to a lane-1 (driven) row, even when an evidence artifact tags its identity", () => {
-    // `evidenceArtifact` tags TC-1/REV-1/INST-1@api; `drivenAttempt` carries the SAME testCaseId/
-    // revision/instance but on lane 1, whose Execution Surface is always hardcoded "browser" -- never
-    // "api". A driven attempt has no spec file at all, and the surface mismatch alone would already
-    // stop the join; this proves the row still carries no `location` key.
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt, evidenceArtifact] });
+  it("attaches no location at all when the reports were never passed in", () => {
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [] });
+    expect(model.attempts.find((row) => row.id === "E-1")?.location).toBeUndefined();
+  });
+
+  it("never attaches a location to a lane-1 (driven) row, even when a report tags its identity", () => {
+    // `runnerReport` tags TC-1/REV-1/INST-1@api; `drivenAttempt` carries the SAME testCaseId/revision/
+    // instance but on lane 1, whose Execution Surface is always hardcoded "browser" -- never "api". A
+    // driven attempt has no spec file at all, and the surface mismatch alone would already stop the
+    // join; this proves the row still carries no `location` key.
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt], runnerReports: [runnerReport] });
     const row = model.attempts.find((candidate) => candidate.id === "ATT-1");
     expect(row).toBeDefined();
     expect(row?.location).toBeUndefined();

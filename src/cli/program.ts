@@ -11,6 +11,7 @@ import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { createRun } from "../operations/create-run.js";
 import { executeObservedPlaywright } from "../operations/execute-observed-playwright.js";
+import { exportProjection } from "../operations/export-projection.js";
 import { ingestArtifact } from "../operations/ingest-artifact.js";
 import { recordHumanApproval } from "../operations/record-human-approval.js";
 import { recordHumanAttestation } from "../operations/record-human-attestation.js";
@@ -271,6 +272,25 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
         if (!result.valid) exitCode = ExitCode.UNMET_OBLIGATIONS;
       } finally {
         await workspace.close();
+      }
+    });
+  program.command("export")
+    .description("Project a finalized run's release gate into a CI-readable file, with a provenance sidecar")
+    .requiredOption("--root <path>", "Project root directory")
+    .requiredOption("--run-id <id>", "Run workspace ID")
+    .requiredOption("--format <format>", "junit or sarif")
+    .requiredOption("--out <path>", "Path to write the projection; the sidecar is written to <out>.provenance.json")
+    .action(async (commandOptions: { root: string; runId: string; format: string; out: string }) => {
+      // Exit stays SUCCESS even when the gate is NOT_READY: exporting succeeded. `workflow run` already
+      // carries the gate's verdict in its exit code (exit-codes.ts:39), and one code with two meanings
+      // is worse than two commands. The verdict is not lost — it is on `recommendation` here, and bound
+      // to the bytes by the sidecar. Refusals reuse INVALID_INPUT through QaSkillsError; no new code.
+      const result = await exportProjection({ root: commandOptions.root, runId: commandOptions.runId, format: commandOptions.format, outPath: commandOptions.out });
+      stdout += `${JSON.stringify(result)}\n`;
+      // A degraded projection announces itself. The result already carries the detail for a machine;
+      // this line is for the person watching a CI log, who would otherwise have no reason to look.
+      if (result.unreadableRunnerReports.length > 0) {
+        stderr += `Note: ${result.unreadableRunnerReports.length} registered payload(s) could not be read as a sanitized runner report, so any spec locations they carried are absent from this projection: ${result.unreadableRunnerReports.map((entry) => `${entry.artifactId} (${entry.relativePath}): ${entry.reason}`).join("; ")}\n`;
       }
     });
   try {

@@ -1,5 +1,5 @@
 import { array, isRecord } from "../../core/values.js";
-import type { ProjectionArtifact, ProjectionLocation } from "./projection-model.js";
+import type { ProjectionLocation } from "./projection-model.js";
 
 /**
  * The identity tag's grammar, copied character-for-character from `report-mapping.ts`'s
@@ -36,6 +36,9 @@ export const specLocationKey = (identity: Readonly<{ testCaseId: string; testCas
  * artifact `value` a `test-result-batch` entry's `evidenceArtifactIds` actually names, which is the
  * descriptor `registerEvidenceBundle` builds (subject/kind/binaryArtifactIds/...), not the sanitized
  * report: `array(undefined)` and a non-record suite node both fall through to `[]` rather than throwing.
+ * Nothing upstream schema-validates these payloads -- they are the CONTENT of a registered binary, and
+ * `validateArtifact` never runs on a binary's bytes -- so this traversal is the only thing standing
+ * between an unexpected shape and a crash.
  */
 function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown>>[] {
   return array(suites).flatMap((node) => isRecord(node)
@@ -45,7 +48,19 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
 
 /**
  * Every spec's `[qa:<testCaseId>/<revisionId>/<instanceId>@<surface>]` location, joined from every
- * `evidence` artifact's sanitized report, keyed by the full four-part identity ({@link specLocationKey}).
+ * sanitized runner report, keyed by the full four-part identity ({@link specLocationKey}).
+ *
+ * **It takes the PARSED REPORTS, not the artifacts that reference them, and that is not a convenience.**
+ * A sanitized runner report is registered as a BINARY (`execute-observed-playwright.ts:379-396`:
+ * `mediaType: "application/json"`), and `inspect-workspace-state.ts:324` returns early for any record
+ * carrying a `mediaType` — so `RunWorkspace.readRegisteredArtifacts` never parses those bytes into any
+ * artifact's `.value`. The `evidence` artifact it DOES expose is only the descriptor
+ * (subject/kind/relativePath/binaryArtifacts/...), which carries no `suites` at all. Handed artifacts,
+ * this function would therefore return an empty map on every real run. Reading the file itself would
+ * put filesystem access in a pure reducer, so the impure edge — `src/operations/export-projection.ts`,
+ * the one place that opens the run — reads and parses the payloads and hands them here. The "which
+ * artifact is a runner report" filter did not disappear with the change of parameter; it moved there
+ * with the read, as `runnerReportSources`, and got narrower on the way.
  *
  * **Excluded, not refused.** Unlike `report-mapping.ts`'s `mapObservedReport` -- which runs at
  * ingestion time and REFUSES the whole run on a malformed or ambiguous tag, because an ambiguous
@@ -59,12 +74,11 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * and picking one is a guess wearing a file path -- worse than no location at all, because a wrong
  * location is indistinguishable from a right one to whoever reads it next.
  */
-export function specLocationsByEntryIdentity(artifacts: readonly ProjectionArtifact[]): ReadonlyMap<string, ProjectionLocation> {
+export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Record<string, unknown>>[]): ReadonlyMap<string, ProjectionLocation> {
   const found = new Map<string, ProjectionLocation>();
   const ambiguous = new Set<string>();
-  for (const artifact of artifacts) {
-    if (artifact.record.type !== "evidence") continue;
-    for (const spec of collectSpecs(artifact.value.suites)) {
+  for (const report of runnerReports) {
+    for (const spec of collectSpecs(report.suites)) {
       const title = typeof spec.title === "string" ? spec.title : "";
       const file = typeof spec.file === "string" && spec.file.length > 0 ? spec.file : undefined;
       const match = identityTagPattern.exec(title);

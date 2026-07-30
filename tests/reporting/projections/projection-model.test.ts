@@ -37,19 +37,19 @@ const base = { runId: "RUN-1", producerVersion: "0.3.0", generatedAt: "2026-07-2
 
 describe("buildProjectionModel", () => {
   it("refuses a run with no release gate, because an unfinalized run has nothing to project", () => {
-    expect(() => buildProjectionModel({ ...base, artifacts: [drivenAttempt] }))
+    expect(() => buildProjectionModel({ ...base, artifacts: [drivenAttempt], runnerReports: [] }))
       .toThrowError(/release gate/i);
   });
 
   it("carries the persisted gate verbatim rather than re-deriving it", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact] });
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact], runnerReports: [] });
     expect(model.gate).toMatchObject({ artifactId: "gate-1", sha256: "a".repeat(64), recommendation: "NOT_READY" });
     expect(model.gate.verdicts).toEqual([{ rule: "REQUIRED_COVERAGE_COMPLETE", passed: false, reason: "Required coverage missing: COV-1." }]);
     expect(model.sourceArtifacts).toEqual([{ id: "tr-1", sha256: "b".repeat(64), type: "test-result" }]);
   });
 
   it("reads a lane-1 attempt as the browser surface and sums its measured step durations", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt] });
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt], runnerReports: [] });
     expect(model.attempts).toEqual([{
       lane: "driven-attempt", id: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1",
       status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "browser", durationMs: 1500,
@@ -58,19 +58,19 @@ describe("buildProjectionModel", () => {
   });
 
   it("reads each lane-2 entry as its own row on the surface the entry itself declares", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batch] });
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batch], runnerReports: [] });
     expect(model.attempts.map((row) => [row.id, row.executionSurface, row.status, row.durationMs]))
       .toEqual([["E-1", "api", "PASSED", 500], ["E-2", "unit", "NOT_RUN", 0]]);
   });
 
   it("carries the git anchor when an observed execution exists, and omits it when none does", () => {
-    expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, batch] }).anchor)
+    expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, batch], runnerReports: [] }).anchor)
       .toEqual({ commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) });
-    expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt] }).anchor).toBeUndefined();
+    expect(buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt], runnerReports: [] }).anchor).toBeUndefined();
   });
 
   it("carries each row's own record provenance, so a runtime-observed row is distinguishable from a runtime-executed one", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt, batch] });
+    const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, drivenAttempt, batch], runnerReports: [] });
     expect(model.attempts.map((row) => [row.id, row.provenance])).toEqual([
       ["ATT-1", "runtime-execution"],
       ["E-1", "runtime-observed"],
@@ -107,7 +107,7 @@ const gapArtifact: ProjectionArtifact = {
 
 describe("projection findings", () => {
   it("emits one finding per open bug, unmet requirement, optional gap and evidence gap; escalates Blocker and Critical to error; and skips a closed bug", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [withFindings(false), gapArtifact] });
+    const model = buildProjectionModel({ ...base, artifacts: [withFindings(false), gapArtifact], runnerReports: [] });
     expect(model.findings.map((finding) => [finding.ruleId, finding.level, finding.id])).toEqual([
       ["open-bug", "error", "BUG-1"],
       ["open-bug", "warning", "BUG-2"],
@@ -119,7 +119,7 @@ describe("projection findings", () => {
   });
 
   it("keeps authored text out of a reduced projection, in findings AND in the one verdict reason that can carry it", () => {
-    const model = buildProjectionModel({ ...base, artifacts: [withFindings(true), gapArtifact] });
+    const model = buildProjectionModel({ ...base, artifacts: [withFindings(true), gapArtifact], runnerReports: [] });
     expect(model.reduced).toBe(true);
     const serialized = JSON.stringify(model);
     expect(serialized).not.toContain("checkout total shown to a signed-in buyer");

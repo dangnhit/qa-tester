@@ -118,8 +118,21 @@ export function reducedVerdictReason(verdict: Readonly<{ rule: string; reason: s
   return `Shared blockers: ${arr(ruleInputs.sharedBlockers).length}.`;
 }
 
+/**
+ * Reduces one finalized run to the model both renderers consume.
+ *
+ * `runnerReports` is REQUIRED, not optional, and the difference is the whole reason it exists. The
+ * sanitized runner reports are registered as BINARIES, so `readRegisteredArtifacts` never parses them
+ * into any artifact's `.value` (`inspect-workspace-state.ts:324`); only the caller that opened the run
+ * can read them off disk. An optional parameter would let a caller silently omit them and get a model
+ * whose lane-2 rows have quietly lost every spec location -- indistinguishable, downstream, from a run
+ * whose specs were never tagged. Required, a caller must say `[]` and mean it. Pass the PARSED payloads
+ * (`src/operations/export-projection.ts` is the one production caller); this reducer reads no files.
+ */
 export function buildProjectionModel(input: Readonly<{
-  runId: string; producerVersion: string; generatedAt: string; artifacts: readonly ProjectionArtifact[];
+  runId: string; producerVersion: string; generatedAt: string;
+  artifacts: readonly ProjectionArtifact[];
+  runnerReports: readonly Readonly<Record<string, unknown>>[];
 }>): ProjectionModel {
   const gateArtifact = input.artifacts.find((artifact) => artifact.record.type === "release-gate");
   if (!gateArtifact) throw new QaSkillsError("This run has no release gate: only a finalized run can be projected", "INVALID_ARTIFACT");
@@ -179,9 +192,9 @@ export function buildProjectionModel(input: Readonly<{
   });
 
   const batches = input.artifacts.filter((artifact) => artifact.record.type === "test-result-batch");
-  // Built once over every artifact, not per entry: the join is a global index from identity to
+  // Built once over every sanitized report, not per entry: the join is a global index from identity to
   // location, keyed on the same full four-part identity every row below already carries.
-  const locations = specLocationsByEntryIdentity(input.artifacts);
+  const locations = specLocationsByEntryIdentity(input.runnerReports);
   // Every entry in one batch shares the manifest record's provenance: lane 2 has no per-entry
   // registration, only the one record the whole `test-result-batch` artifact was registered under.
   const observed: AttemptRow[] = batches.flatMap((artifact) => {
