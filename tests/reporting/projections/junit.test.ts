@@ -180,3 +180,124 @@ describe("renderJUnit output is well-formed XML", () => {
       .toEqual(["VALID_ARTIFACTS", "REQUIRED_COVERAGE_COMPLETE", "TC-1 INST-1", `[agent-draft] TC<1>&"' INST-1`]);
   });
 });
+
+/**
+ * **The checker's own negative assertions, and the reason they exist.**
+ *
+ * Every assertion in the block above is `.not.toThrow()` plus an equality on what came back. Not one of
+ * them fails if `parseXml` stops rejecting things — delete the `Char` scan at `xml-wellformed.ts:59-63`
+ * and all 15 stay green. That is this branch's signature defect, a test that passes with the feature
+ * removed, sitting inside the checker that carries I4's entire guarantee. And it is I4's own structural
+ * point one level up: I4 existed because JUnit had no independent validator the way SARIF has a schema,
+ * and a hand-written validator with no negative assertions is a validator that cannot fail.
+ *
+ * The expat cross-validation is real evidence but it is a development step that does not run in CI, so
+ * nothing but these assertions keeps the checker honest tomorrow.
+ *
+ * Each case asserts the SPECIFIC message, so it reds for the reason named rather than incidentally, and
+ * each names the guard it pins. They do NOT all pin the same guard — that is the point of listing them
+ * separately, and the mutation evidence in the report is per guard rather than one blanket run.
+ */
+describe("parseXml rejects", () => {
+  const character = (code: number): string => String.fromCharCode(code);
+  const declaration = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+  const document = (body: string): string => `${declaration}${body}\n`;
+
+  /** Pins the `Char` scan over the raw document (`xml-wellformed.ts:59-63`) — the guard whose deletion
+   *  left all 15 positive tests green, and the one that carries I4's guarantee that a rendered document
+   *  contains no character XML forbids. Every class the renderer must neutralize is listed. */
+  it.each([
+    ["NUL", 0x00, "U\\+0000"],
+    ["backspace", 0x08, "U\\+0008"],
+    ["vertical tab", 0x0b, "U\\+000B"],
+    ["form feed", 0x0c, "U\\+000C"],
+    ["shift out", 0x0e, "U\\+000E"],
+    ["escape", 0x1b, "U\\+001B"],
+    ["unit separator", 0x1f, "U\\+001F"],
+    ["U+FFFE", 0xfffe, "U\\+FFFE"],
+    ["U+FFFF", 0xffff, "U\\+FFFF"],
+    ["an unpaired high surrogate", 0xd800, "U\\+D800"],
+    ["an unpaired low surrogate", 0xdc00, "U\\+DC00"],
+  ])("a raw %s in the document", (_label, code, named) => {
+    expect(() => parseXml(document(`<r m="a${character(code)}b"/>`)))
+      .toThrow(new RegExp(`XML-illegal character ${named}`));
+  });
+
+  /** Pins the SECOND legality check, in `readReference` — a numeric reference naming a character outside
+   *  `Char` is exactly as illegal as the raw byte, which is the whole reason `escapeXml` replaces rather
+   *  than escapes. This is a different guard from the document scan and survives that guard's deletion,
+   *  because the reference resolves to its character only after the raw scan has already run. */
+  it.each([
+    ["decimal, NUL", "&#0;", "&#0; names U\\+0000"],
+    ["decimal, escape", "&#27;", "&#27; names U\\+001B"],
+    ["hexadecimal, escape", "&#x1b;", "&#x1b; names U\\+001B"],
+    ["hexadecimal, U+FFFF", "&#xFFFF;", "&#xFFFF; names U\\+FFFF"],
+  ])("a numeric character reference to an illegal character (%s)", (_label, reference, named) => {
+    expect(() => parseXml(document(`<r m="a${reference}b"/>`)))
+      .toThrow(new RegExp(`numeric character reference ${named}, which XML forbids`));
+  });
+
+  /** Pins the tag-balancing guards. A checker that accepted these would accept a truncated projection —
+   *  exactly what a CI artifact store cutting a file short produces. */
+  it("a mismatched end tag", () => {
+    expect(() => parseXml(document(`<r><c></d></r>`))).toThrow(/<\/d> closes <c>/);
+  });
+
+  it("an unclosed element", () => {
+    expect(() => parseXml(document(`<r><c/>`))).toThrow(/unclosed element <r>/);
+  });
+
+  it("a second root element", () => {
+    expect(() => parseXml(document(`<r/><s/>`))).toThrow(/only one root element/);
+  });
+
+  /** Pins `readReference`'s parsing. A bare `&` is the classic un-escaped-metacharacter defect, and the
+   *  positive tests can only show that `&amp;` round-trips — never that a raw one is refused. */
+  it("a bare ampersand", () => {
+    expect(() => parseXml(document(`<r m="a&b"/>`))).toThrow(/unterminated entity reference/);
+  });
+
+  it("an entity reference XML does not define", () => {
+    expect(() => parseXml(document(`<r m="a&nbsp;b"/>`))).toThrow(/unknown entity reference &nbsp;/);
+  });
+
+  it("a malformed numeric character reference", () => {
+    expect(() => parseXml(document(`<r m="a&#zz;b"/>`))).toThrow(/malformed numeric character reference &#zz;/);
+  });
+
+  /** Pins the attribute-value rules. `renderJUnit` puts every value it emits inside a double-quoted
+   *  attribute, so these are the guards that make the positive round-trip assertions mean anything. */
+  it("a literal < inside an attribute value", () => {
+    expect(() => parseXml(document(`<r m="a<b"/>`))).toThrow(/a literal < is not allowed in an attribute value/);
+  });
+
+  it("an unquoted attribute value", () => {
+    expect(() => parseXml(document(`<r m=1/>`))).toThrow(/an attribute value must be double-quoted/);
+  });
+
+  it("an unterminated attribute value", () => {
+    expect(() => parseXml(document(`<r m="a`))).toThrow(/unterminated attribute value/);
+  });
+
+  it("the same attribute twice", () => {
+    expect(() => parseXml(document(`<r a="1" a="2"/>`))).toThrow(/duplicate attribute a/);
+  });
+
+  /** Pins the declared hostility to everything outside the grammar `renderJUnit` emits. This is what
+   *  makes a future renderer change that starts emitting text content fail loudly here rather than
+   *  quietly widening what the checker will accept. */
+  it("text content, which this renderer never emits", () => {
+    expect(() => parseXml(document(`<r>hello</r>`))).toThrow(/no text content/);
+  });
+
+  it("a comment, which is legal XML but outside this grammar", () => {
+    expect(() => parseXml(document(`<!-- hi --><r/>`))).toThrow(/comments, CDATA and DTDs are not part of this grammar/);
+  });
+
+  /** The positive control for the whole block: the same construction that every rejection above is a
+   *  one-character mutation of must still be accepted. Without it, a checker that threw unconditionally
+   *  would satisfy every assertion above. */
+  it("but accepts the well-formed document each of those is a mutation of", () => {
+    expect(() => parseXml(document(`<r m="a&amp;b&#10;c"><c/></r>`))).not.toThrow();
+  });
+});
