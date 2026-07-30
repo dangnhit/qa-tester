@@ -11,9 +11,20 @@ export type ProjectionArtifact = Readonly<{
   value: Readonly<Record<string, unknown>>;
 }>;
 
-/** A spec's position, already in the form SARIF reads: `file` is a POSIX path RELATIVE TO THE RUN ROOT,
- *  never the `config.rootDir`-relative `file` the runner reported. `spec-locations.ts` does that rebase
- *  and refuses to emit a location it cannot do it for; see its `runRootRelativeUri`. */
+/**
+ * A spec's position. `file` is a PATH, NOT A URI REFERENCE: a POSIX-separated path RELATIVE TO THE RUN
+ * ROOT, spelled exactly as the filesystem spells it — never the `config.rootDir`-relative `file` the
+ * runner reported, and never percent-encoded. `spec-locations.ts` does that rebase and refuses to emit
+ * a location it cannot do it for; see its `runRootRelativePath`.
+ *
+ * **Decoded on purpose, and the encoding lives at the one boundary that needs it.** A spec filename may
+ * carry a space, an accent, a `%`, or a `#`, and `artifactLocation.uri` is a `uri-reference` that
+ * accepts none of the first three and MISREADS the fourth — so `sarif.ts`'s `artifactUri` percent-
+ * encodes this value per segment as it emits it, and states there what that costs. It is not done here
+ * because this field is not a URI: it is the fact "which file", which a JUnit `file=` attribute, a
+ * Markdown projection, or a log line would each want spelled for a human. `renderJUnit` does not read
+ * it today; a percent-encoded path stored here is a trap for the renderer that does next.
+ */
 export type ProjectionLocation = Readonly<{ file: string; line?: number }>;
 
 export type AttemptRow = Readonly<{

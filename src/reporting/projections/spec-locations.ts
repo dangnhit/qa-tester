@@ -50,8 +50,15 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
 }
 
 /**
- * One spec's `file`, rebased onto the run root and spelled the way SARIF reads `artifactLocation.uri` --
- * or `undefined`, in which case the spec contributes NO location rather than a wrong one.
+ * One spec's `file`, rebased onto the run root as a POSIX-separated PATH -- or `undefined`, in which
+ * case the spec contributes NO location rather than a wrong one.
+ *
+ * **It is a path, not a URI, and that boundary moved deliberately.** This function once claimed to spell
+ * `artifactLocation.uri` itself, which was true of the BASE and the SEPARATOR and false of everything
+ * else: a filename carrying a space, an accent or a `%` is a perfectly good path and not a valid
+ * `uri-reference` at all. Percent-encoding therefore happens where the URI is actually emitted --
+ * `sarif.ts`'s `artifactUri` -- so this reducer's output stays the fact "which file", usable by any
+ * renderer, and only the one renderer that needs a URI pays for one. See `ProjectionLocation`'s TSDoc.
  *
  * **`spec.file` is `config.rootDir`-relative, and this repo's own runtime is the authority for that.**
  * `execute-observed-playwright.ts` resolves the identical field as `resolve(rootDir, file)` when it
@@ -68,7 +75,7 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * about a payload whose shape is already unrecognised, and the runtime's own position is that `file` is
  * meaningless without `rootDir`. Requiring `rootDir` to be ABSOLUTE additionally keeps this reducer free
  * of `process.cwd()`: `resolve(absolute, anything)` never consults it, so the same payload yields the
- * same URI from any working directory.
+ * same path from any working directory.
  *
  * **Containment is the validation, and it is fail-closed.** `file` was previously accepted as any
  * non-empty string, so an absolute path or one spelling `..` segments travelled verbatim into that same
@@ -86,20 +93,28 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * macOS, or a run workspace exported on a different machine from the one that produced it -- therefore
  * yield no locations. That is the fail-closed direction: no location rather than a wrong one.
  *
- * `manifestRelativePath` rather than a local `relative(...)`: a SARIF URI is separator-sensitive in
- * exactly the way a manifest `relativePath` is, and `e2e\checkout.spec.ts` is as broken to GitHub as it
- * is to the manifest reader. `isPathWithin` rather than a local prefix test, for the reason `fa6c60c`
- * records: a containment call site that re-derives the decision loses the `..${sep}` marker and the
- * cross-drive rejection that primitive exists to carry.
+ * `manifestRelativePath` rather than a local `relative(...)`: the SEPARATOR is the one part of the URI
+ * spelling this function does still own, because a SARIF URI is separator-sensitive in exactly the way a
+ * manifest `relativePath` is, and `e2e\checkout.spec.ts` is as broken to GitHub as it is to the manifest
+ * reader. Verified rather than assumed: on `win32` `manifestRelativePath` splits the native relative path
+ * on `\` and rejoins it with `/` (`core/fs.ts`), so `file` is `/`-separated on every platform -- which is
+ * what lets `sarif.ts`'s `artifactUri` split on `/` to find segment boundaries instead of making a second
+ * separator decision of its own.
+ *
+ * `isPathWithin` rather than a local prefix test, for the reason `fa6c60c` records: a containment call
+ * site that re-derives the decision loses the `..${sep}` marker and the cross-drive rejection that
+ * primitive exists to carry. It also keeps a leading `/` and a drive letter out of the emitted path
+ * altogether -- it rejects a relative result that `isAbsolute` -- which is the guarantee `artifactUri`
+ * leans on when it says a scheme-like first segment cannot arrive.
  */
-function runRootRelativeUri(runRoot: string, rootDir: string | undefined, file: unknown): string | undefined {
+function runRootRelativePath(runRoot: string, rootDir: string | undefined, file: unknown): string | undefined {
   if (rootDir === undefined || typeof file !== "string" || file.length === 0) return undefined;
   const absolute = resolve(rootDir, file);
   if (!isPathWithin(runRoot, absolute)) return undefined;
-  const uri = manifestRelativePath(runRoot, absolute);
-  // A spec resolving to the run root ITSELF is not a file position: `uri` would be the empty string,
-  // which SARIF would accept as a uri-reference and no reader could act on.
-  return uri.length === 0 ? undefined : uri;
+  const relativePath = manifestRelativePath(runRoot, absolute);
+  // A spec resolving to the run root ITSELF is not a file position: this would be the empty string,
+  // which SARIF would accept as a uri-reference (empty encodes to empty) and no reader could act on.
+  return relativePath.length === 0 ? undefined : relativePath;
 }
 
 /**
@@ -129,7 +144,7 @@ function runRootRelativeUri(runRoot: string, rootDir: string | undefined, file: 
  * **`runRoot` must be ABSOLUTE**, and is the directory a SARIF consumer resolves `artifactLocation.uri`
  * against — the `--root` the export was invoked with, which is the repository checkout in the pipeline
  * `README.md` documents. The one production caller passes `resolve(options.root)`. See
- * {@link runRootRelativeUri} for what each spec's `file` is rebased FROM, and for what a spec that
+ * {@link runRootRelativePath} for what each spec's `file` is rebased FROM, and for what a spec that
  * cannot be rebased costs.
  *
  * **A duplicate identity poisons the key only when the two occurrences DISAGREE.** Two specs claiming
@@ -159,7 +174,7 @@ export function specLocationsByEntryIdentity(runRoot: string, runnerReports: rea
     const rootDir = typeof config.rootDir === "string" && isAbsolute(config.rootDir) ? config.rootDir : undefined;
     for (const spec of collectSpecs(report.suites)) {
       const title = typeof spec.title === "string" ? spec.title : "";
-      const file = runRootRelativeUri(runRoot, rootDir, spec.file);
+      const file = runRootRelativePath(runRoot, rootDir, spec.file);
       const match = identityTagPattern.exec(title);
       if (match === null || file === undefined) continue;
       // `?? ""` mirrors `report-mapping.ts`'s own `parseIdentityTag` (report-mapping.ts:140-142): the

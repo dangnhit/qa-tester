@@ -9,6 +9,47 @@ type SarifResult = {
 };
 
 /**
+ * One `AttemptRow.location.file` — a run-root-relative POSIX PATH — spelled as a SARIF
+ * `artifactLocation.uri`.
+ *
+ * **Measured, not assumed** (vendored `fixtures/sarif/sarif-2.1.0-schema.json`, this repo's own `ajv` +
+ * `ajv-formats`, `strict: false`): copied across verbatim, `e2e/check out.spec.ts`,
+ * `e2e/テスト.spec.ts`, `e2e/100%-done.spec.ts` and `e2e/a[1].spec.ts` each FAIL
+ * `artifactLocation.uri`'s `format: "uri-reference"`, and that failure lands outside this repo's test
+ * boundary — at GitHub's upload, which rejects the WHOLE document over one filename while
+ * `qa-skill export` exits 0 and the sidecar certifies the rejected bytes.
+ *
+ * **`encodeURIComponent` PER SEGMENT, and `encodeURI` would be wrong.** `encodeURI` leaves `#`, `?` and
+ * `&` alone, which is the half the schema cannot see: `e2e/a#b.spec.ts` is a schema-VALID uri-reference
+ * (measured `valid: true`) naming the file `e2e/a` with fragment `b.spec.ts`, and `?` opens a query the
+ * same way. A wrong location is worse than none, because a reader cannot tell it from a right one — the
+ * same reason `spec-locations.ts` refuses a `file` it cannot rebase. Splitting on `/` first keeps the
+ * separator a separator; everything `encodeURIComponent` leaves unescaped (`A-Za-z0-9-_.!~*'()`) is a
+ * valid RFC 3986 `pchar`, so every segment it produces is safe.
+ *
+ * **Double-encoding is the risk in the other direction, and the input shape is what rules it out.** A
+ * file literally named `100%-done.spec.ts` must reach `100%25-done.spec.ts` and decode back — it does,
+ * and the URI test pins it. It cannot be encoded TWICE because the value arriving here is always a
+ * filesystem path and never a URI: `spec-locations.ts`'s `runRootRelativePath` is the only producer of a
+ * `ProjectionLocation`, and it builds `file` from `resolve()` + `manifestRelativePath()` — path
+ * arithmetic, which percent-decodes nothing and percent-encodes nothing. If a spec really is named
+ * `check%20out.spec.ts` on disk, `check%2520out.spec.ts` is the CORRECT URI for it. Keeping
+ * `location.file` a decoded path (see its TSDoc) is what makes that invariant local enough to state.
+ *
+ * **No second separator decision.** `location.file` is `/`-separated on EVERY platform because
+ * `manifestRelativePath` already converted it — on `win32` it splits on `\` and joins with `/`
+ * (`core/fs.ts`), so nothing here re-derives that. Splitting on `/` reads that contract rather than
+ * competing with it, and a literal backslash — legal in a POSIX filename, impossible in a Windows one —
+ * is correctly escaped to `%5C` rather than mistaken for a separator.
+ *
+ * **A leading `/` or a drive letter cannot arrive**, and the containment check is why: `isPathWithin`
+ * rejects a relative result that `isAbsolute`, so `manifestRelativePath` only ever returns a contained
+ * relative path. Were one to arrive anyway, `encodeURIComponent` escapes `:` to `%3A`, which keeps
+ * `C:/x` a relative-path reference instead of letting `C:` read as a URI scheme.
+ */
+const artifactUri = (file: string): string => file.split("/").map(encodeURIComponent).join("/");
+
+/**
  * One SARIF result for an observed (lane-2) FAILED attempt.
  *
  * The message unconditionally names the row's own `provenance` — a controller decision that is NOT in
@@ -36,7 +77,7 @@ function observedResult(row: AttemptRow): SarifResult {
   const message = { text: `observed execution reported ${row.testCaseId} ${row.testCaseInstanceId} as ${row.status} (${row.failureClassification}) on the ${row.executionSurface} surface, provenance ${row.provenance}` };
   return row.location === undefined
     ? { ruleId: "observed-failure", level: "error", message }
-    : { ruleId: "observed-failure", level: "error", message, locations: [{ physicalLocation: { artifactLocation: { uri: row.location.file }, ...(row.location.line === undefined ? {} : { region: { startLine: row.location.line } }) } }] };
+    : { ruleId: "observed-failure", level: "error", message, locations: [{ physicalLocation: { artifactLocation: { uri: artifactUri(row.location.file) }, ...(row.location.line === undefined ? {} : { region: { startLine: row.location.line } }) } }] };
 }
 
 /**

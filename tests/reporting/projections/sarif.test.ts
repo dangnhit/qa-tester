@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 import { renderSarif } from "../../../src/reporting/projections/sarif.js";
-import type { ProjectionModel } from "../../../src/reporting/projections/projection-model.js";
+import type { AttemptRow, ProjectionModel } from "../../../src/reporting/projections/projection-model.js";
 
 // The shared catalog instance is Ajv2020 with strict:true (src/contracts/catalog.ts:71). The SARIF
 // schema is draft-07 (verified: fixtures/sarif/sarif-2.1.0-schema.json's own "$schema" is
@@ -13,6 +13,27 @@ import type { ProjectionModel } from "../../../src/reporting/projections/project
 const require = createRequire(import.meta.url);
 const Ajv = (require("ajv") as { default: new (options: object) => { compile: (schema: object) => (data: unknown) => boolean } }).default;
 const addFormats = (require("ajv-formats") as { default: (instance: unknown) => void }).default;
+
+/**
+ * The OFFICIAL SARIF 2.1.0 schema, compiled from the vendored copy — the only check in this file that
+ * sees what GitHub's code-scanning upload sees. Extracted from the single test that used to own it
+ * because more than one behaviour now has to be measured through it, and a `toContain` on an expected
+ * string would be exactly the check that cannot see the real consumer.
+ */
+const compileSarifSchema = async (): Promise<(document: unknown) => boolean> => {
+  const schema: object = JSON.parse(await readFile(new URL("../../../fixtures/sarif/sarif-2.1.0-schema.json", import.meta.url), "utf8"));
+  const ajv = new Ajv({ strict: false, allErrors: true });
+  addFormats(ajv);
+  return ajv.compile(schema);
+};
+
+/** One observed FAILED row carrying `file` as its spec location: the only shape in the whole model that
+ *  reaches `artifactLocation.uri`. */
+const rowLocatedAt = (file: string): AttemptRow => ({
+  lane: "observed-entry", id: "E-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1",
+  status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", durationMs: 5,
+  provenance: "runtime-observed", location: { file },
+});
 
 const model = (over: Partial<ProjectionModel> = {}): ProjectionModel => ({
   runId: "RUN-1", producerVersion: "0.3.0", generatedAt: "2026-07-29T00:00:00.000Z", reduced: false,
@@ -45,10 +66,7 @@ const parseSarif = (json: string): SarifDoc => JSON.parse(json) as SarifDoc;
 
 describe("renderSarif", () => {
   it("validates against the official SARIF 2.1.0 schema", async () => {
-    const schema: object = JSON.parse(await readFile(new URL("../../../fixtures/sarif/sarif-2.1.0-schema.json", import.meta.url), "utf8"));
-    const ajv = new Ajv({ strict: false, allErrors: true });
-    addFormats(ajv);
-    expect(ajv.compile(schema)(JSON.parse(renderSarif(model({
+    expect((await compileSarifSchema())(JSON.parse(renderSarif(model({
       // Two open bugs sharing "open-bug" as their ruleId (an ordinary run shape: more than one open bug
       // is common) make `tool.driver.rules`'s de-duplication LOAD-BEARING for this test: the schema's
       // `reportingDescriptor` array has `uniqueItems: true`, so two identical `{ "id": "open-bug" }`
@@ -60,6 +78,60 @@ describe("renderSarif", () => {
       attempts: [{ lane: "observed-entry", id: "E-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", durationMs: 5, provenance: "runtime-observed", location: { file: "specs/checkout.spec.ts", line: 42 } }],
       anchor: { commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) },
     }))))).toBe(true);
+  });
+
+  /**
+   * A spec filename is authored by whoever wrote the spec, and nothing between the filesystem and this
+   * renderer constrains its characters. Measured against the vendored official schema with this file's
+   * own ajv: `e2e/check out.spec.ts`, `e2e/テスト.spec.ts` and `e2e/100%-done.spec.ts` each failed
+   * `artifactLocation.uri`'s `format: "uri-reference"` when copied across verbatim — and the failure
+   * lands OUTSIDE this repo, at GitHub's upload, where the WHOLE projection is rejected over one
+   * filename while `qa-skill export` exits 0 and the sidecar certifies the rejected bytes. Same failure
+   * class as the `region.startLine` guard one field over.
+   *
+   * Measured through the schema rather than asserted against an expected string on purpose: a
+   * `toContain("%20")` cannot see what the real consumer sees, which is the mistake this branch's
+   * finding I4 already was.
+   */
+  it.each([
+    ["a space", "e2e/check out.spec.ts"],
+    ["a non-ASCII character", "e2e/テスト.spec.ts"],
+    ["a literal percent sign", "e2e/100%-done.spec.ts"],
+    ["a bracket", "e2e/a[1].spec.ts"],
+  ])("still validates against the official schema when a spec filename carries %s", async (_case, file) => {
+    expect((await compileSarifSchema())(JSON.parse(renderSarif(model({ attempts: [rowLocatedAt(file)] }))))).toBe(true);
+  });
+
+  /**
+   * The half the schema CANNOT catch, which is why it needs a test of its own rather than another ajv
+   * row: `e2e/a#b.spec.ts` and `e2e/a?b.spec.ts` are both perfectly valid `uri-reference`s — measured
+   * `valid: true` against the vendored schema — and both name the WRONG FILE. A `#` opens a fragment,
+   * so that URI names `e2e/a` with fragment `b.spec.ts`; a `?` opens a query the same way. A wrong
+   * location is worse than none, because a reader cannot tell it from a right one.
+   *
+   * Read the way a consumer reads it — resolved against a repository base with the platform URL
+   * parser — rather than compared against a hand-written encoded literal. That pins all three things
+   * at once and nothing else does: no fragment or query was opened, every segment decodes back to the
+   * authored filename, and `/` SURVIVED as the separator (a whole-path `encodeURIComponent`, which
+   * would escape it to `%2F`, collapses the segment count and fails here even though every character
+   * still decodes correctly).
+   */
+  it.each([
+    ["a fragment delimiter", "e2e/a#b.spec.ts"],
+    ["a query delimiter", "e2e/a?b.spec.ts"],
+    ["a literal percent sign, which must round-trip rather than double-encode", "e2e/100%-done.spec.ts"],
+  ])("emits a uri naming the whole file, and only that file, when the filename carries %s", (_case, file) => {
+    const sarif = parseSarif(renderSarif(model({ attempts: [rowLocatedAt(file)] })));
+    // By ruleId, not `results[0]`: the base model already carries a failing gate verdict, which sorts
+    // ahead of every observed failure and carries no location at all.
+    const observed = sarif.runs[0].results.find((result) => result.ruleId === "observed-failure");
+    const uri = observed?.locations?.[0]?.physicalLocation.artifactLocation.uri ?? "";
+
+    const resolved = new URL(uri, "https://example.invalid/repo/");
+
+    expect(resolved.hash).toBe("");
+    expect(resolved.search).toBe("");
+    expect(resolved.pathname.split("/").map(decodeURIComponent)).toEqual(["", "repo", ...file.split("/")]);
   });
 
   it("emits one result per failing verdict and per finding, and none for a passing verdict", () => {
