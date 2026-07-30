@@ -1,3 +1,6 @@
+import { isAbsolute, resolve } from "node:path";
+
+import { isPathWithin, manifestRelativePath } from "../../core/fs.js";
 import { array, isRecord } from "../../core/values.js";
 import type { ProjectionLocation } from "./projection-model.js";
 
@@ -47,6 +50,59 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
 }
 
 /**
+ * One spec's `file`, rebased onto the run root and spelled the way SARIF reads `artifactLocation.uri` --
+ * or `undefined`, in which case the spec contributes NO location rather than a wrong one.
+ *
+ * **`spec.file` is `config.rootDir`-relative, and this repo's own runtime is the authority for that.**
+ * `execute-observed-playwright.ts` resolves the identical field as `resolve(rootDir, file)` when it
+ * decides which specs an execution really ran. SARIF -- and GitHub code scanning reading it -- resolves
+ * `artifactLocation.uri` against the REPOSITORY ROOT. Copying `spec.file` across unchanged therefore
+ * emitted `checkout.spec.ts` for a file living at `e2e/checkout.spec.ts` under the ordinary
+ * `testDir: "./e2e"` configuration: a URI naming a file that is not there, in a code-scanning UI, with
+ * nothing in the export saying so.
+ *
+ * **An absent or relative `config.rootDir` yields no location, deliberately.** `sanitizeRunnerReport`
+ * keeps `rootDir` (it is in its `configKeys` allowlist) and Playwright's JSON reporter always emits it,
+ * absolute, as part of `FullConfig` -- so a payload without one is not a sanitized Playwright report,
+ * and `file` has no stated base to be relative TO. Treating it as run-root-relative would be a guess
+ * about a payload whose shape is already unrecognised, and the runtime's own position is that `file` is
+ * meaningless without `rootDir`. Requiring `rootDir` to be ABSOLUTE additionally keeps this reducer free
+ * of `process.cwd()`: `resolve(absolute, anything)` never consults it, so the same payload yields the
+ * same URI from any working directory.
+ *
+ * **Containment is the validation, and it is fail-closed.** `file` was previously accepted as any
+ * non-empty string, so an absolute path or one spelling `..` segments travelled verbatim into that same
+ * UI. The check is deliberately containment rather than "is it absolute": an absolute `file` INSIDE the
+ * run root is a true location and rebases correctly (and `resolve` gives an absolute `file` precedence
+ * over `rootDir`, exactly as the runtime's own `resolve(rootDir, file)` does), while any `file` landing
+ * outside -- absolute or traversed -- yields nothing. `assertExecutedSpecsAreAnchored` constrains where
+ * a resolved spec path may land, but it runs at execution time and never on this path, so the export
+ * must ask the question itself. This is the same policy the neighbouring `line` guard applies, one field
+ * out: refuse the field this reducer cannot vouch for.
+ *
+ * The cost is stated rather than hidden: the comparison is LEXICAL, because a pure reducer cannot call
+ * `realpath` and the spec files need not even exist on the machine running the export. A `rootDir` and
+ * a `runRoot` that reach the same directory through different spellings -- a symlinked `/tmp` prefix on
+ * macOS, or a run workspace exported on a different machine from the one that produced it -- therefore
+ * yield no locations. That is the fail-closed direction: no location rather than a wrong one.
+ *
+ * `manifestRelativePath` rather than a local `relative(...)`: a SARIF URI is separator-sensitive in
+ * exactly the way a manifest `relativePath` is, and `e2e\checkout.spec.ts` is as broken to GitHub as it
+ * is to the manifest reader. `isPathWithin` rather than a local prefix test, for the reason `fa6c60c`
+ * records: a containment call site that re-derives the decision loses the `..${sep}` marker and the
+ * cross-drive rejection that primitive exists to carry.
+ */
+function runRootRelativeUri(runRoot: string, rootDir: string | undefined, file: unknown): string | undefined {
+  if (rootDir === undefined || typeof file !== "string" || file.length === 0) return undefined;
+  const absolute = resolve(rootDir, file);
+  if (!isPathWithin(runRoot, absolute)) return undefined;
+  const uri = manifestRelativePath(runRoot, absolute);
+  // A spec resolving to the run root ITSELF is not a file position: `uri` would be the empty string,
+  // which SARIF would accept as a uri-reference and no reader could act on.
+  return uri.length === 0 ? undefined : uri;
+}
+
+/**
  * Every spec's `[qa:<testCaseId>/<revisionId>/<instanceId>@<surface>]` location, joined from every
  * sanitized runner report, keyed by the full four-part identity ({@link specLocationKey}).
  *
@@ -67,7 +123,14 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * identity there means the workspace cannot tell which registered case ran -- this join runs at
  * reporting time, over an ALREADY-ACCEPTED batch. A location is an annotation on a result that already
  * exists, never a gate on whether it exists, so an untagged spec, a spec whose tag does not parse, and
- * a spec whose file is missing are all silently excluded from the map rather than raised as an error.
+ * a spec whose file is missing or cannot be rebased onto `runRoot` are all silently excluded from the
+ * map rather than raised as an error.
+ *
+ * **`runRoot` must be ABSOLUTE**, and is the directory a SARIF consumer resolves `artifactLocation.uri`
+ * against — the `--root` the export was invoked with, which is the repository checkout in the pipeline
+ * `README.md` documents. The one production caller passes `resolve(options.root)`. See
+ * {@link runRootRelativeUri} for what each spec's `file` is rebased FROM, and for what a spec that
+ * cannot be rebased costs.
  *
  * **A duplicate identity poisons the key only when the two occurrences DISAGREE.** Two specs claiming
  * the same identity from DIFFERENT places means this join cannot tell which one actually produced the
@@ -85,13 +148,18 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * indistinguishable from a run whose specs were never tagged. So the ambiguity test compares the
  * RESOLVED LOCATION, and only a genuine disagreement about `file` or `line` poisons the key.
  */
-export function specLocationsByEntryIdentity(runnerReports: readonly Readonly<Record<string, unknown>>[]): ReadonlyMap<string, ProjectionLocation> {
+export function specLocationsByEntryIdentity(runRoot: string, runnerReports: readonly Readonly<Record<string, unknown>>[]): ReadonlyMap<string, ProjectionLocation> {
   const found = new Map<string, ProjectionLocation>();
   const ambiguous = new Set<string>();
   for (const report of runnerReports) {
+    // Read once per REPORT, not per spec: `rootDir` is the report's own, and a run holding several
+    // observed executions can hold several reports with different ones (a second suite under its own
+    // Playwright config). Each report's specs rebase against that report's root.
+    const config = isRecord(report.config) ? report.config : {};
+    const rootDir = typeof config.rootDir === "string" && isAbsolute(config.rootDir) ? config.rootDir : undefined;
     for (const spec of collectSpecs(report.suites)) {
       const title = typeof spec.title === "string" ? spec.title : "";
-      const file = typeof spec.file === "string" && spec.file.length > 0 ? spec.file : undefined;
+      const file = runRootRelativeUri(runRoot, rootDir, spec.file);
       const match = identityTagPattern.exec(title);
       if (match === null || file === undefined) continue;
       // `?? ""` mirrors `report-mapping.ts`'s own `parseIdentityTag` (report-mapping.ts:140-142): the

@@ -48,7 +48,13 @@ export function isPathWithin(root: string, candidate: string, pathApi: PathSeman
  *  therefore be converted here before it is compared against, or reported as, a manifest
  *  `relativePath`; otherwise every registered file reads as an unregistered orphan on Windows.
  *  Splitting on the platform `sep` rather than on `[\\/]` is deliberate: a backslash is a legal
- *  filename character on POSIX and must not be mistaken for a separator there. */
+ *  filename character on POSIX and must not be mistaken for a separator there.
+ *
+ *  The manifest is no longer the only portable, separator-sensitive path this repo derives from the
+ *  filesystem: `reporting/projections/spec-locations.ts` builds a SARIF `artifactLocation.uri`, which
+ *  GitHub code scanning reads as a repository-relative POSIX path, and `e2e\checkout.spec.ts` is exactly
+ *  as broken there as it is to the manifest reader. The conversion is the same one, so it is done here
+ *  rather than re-derived at that call site. */
 export function manifestRelativePath(root: string, absolutePath: string, pathApi: PathSemantics = nativePathSemantics): string {
   const nativeRelative = pathApi.relative(root, absolutePath);
   return pathApi.sep === "/" ? nativeRelative : nativeRelative.split(pathApi.sep).join("/");

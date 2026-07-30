@@ -11,6 +11,9 @@ export type ProjectionArtifact = Readonly<{
   value: Readonly<Record<string, unknown>>;
 }>;
 
+/** A spec's position, already in the form SARIF reads: `file` is a POSIX path RELATIVE TO THE RUN ROOT,
+ *  never the `config.rootDir`-relative `file` the runner reported. `spec-locations.ts` does that rebase
+ *  and refuses to emit a location it cannot do it for; see its `runRootRelativeUri`. */
 export type ProjectionLocation = Readonly<{ file: string; line?: number }>;
 
 export type AttemptRow = Readonly<{
@@ -163,9 +166,16 @@ export function reducedVerdictReason(verdict: Readonly<{ rule: string; reason: s
  * whose lane-2 rows have quietly lost every spec location -- indistinguishable, downstream, from a run
  * whose specs were never tagged. Required, a caller must say `[]` and mean it. Pass the PARSED payloads
  * (`src/operations/export-projection.ts` is the one production caller); this reducer reads no files.
+ *
+ * `runRoot` is the ABSOLUTE directory a spec location is expressed relative to — the `--root` the export
+ * was invoked with, and the directory a SARIF consumer resolves `artifactLocation.uri` against. It is
+ * required for the same reason `runnerReports` is: a reported `spec.file` is `config.rootDir`-relative,
+ * so without the root to rebase onto there is no honest URI, only the runner's own spelling passed off
+ * as a repository path. `spec-locations.ts` owns the arithmetic; this reducer only carries the value.
  */
 export function buildProjectionModel(input: Readonly<{
   runId: string; producerVersion: string; generatedAt: string;
+  runRoot: string;
   artifacts: readonly ProjectionArtifact[];
   runnerReports: readonly Readonly<Record<string, unknown>>[];
 }>): ProjectionModel {
@@ -229,7 +239,7 @@ export function buildProjectionModel(input: Readonly<{
   const batches = input.artifacts.filter((artifact) => artifact.record.type === "test-result-batch");
   // Built once over every sanitized report, not per entry: the join is a global index from identity to
   // location, keyed on the same full four-part identity every row below already carries.
-  const locations = specLocationsByEntryIdentity(input.runnerReports);
+  const locations = specLocationsByEntryIdentity(input.runRoot, input.runnerReports);
   // Every entry in one batch shares the manifest record's provenance: lane 2 has no per-entry
   // registration, only the one record the whole `test-result-batch` artifact was registered under.
   const observed: AttemptRow[] = batches.flatMap((artifact) => {

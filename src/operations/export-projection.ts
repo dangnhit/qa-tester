@@ -191,7 +191,15 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
     await assertOutputsAreOutsideTheRuns(dirname(workspace.path), [outPath, sidecarPath]);
     const artifacts = await workspace.readRegisteredArtifacts();
     const { reports, unreadable } = await readRunnerReports(workspace, artifacts);
-    const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), artifacts, runnerReports: reports });
+    // `resolve(options.root)`, not the realpath'd `dirname(dirname(workspace.path))`, and the choice is
+    // deliberate. This value is what a joined spec location is expressed RELATIVE TO, so it must be the
+    // same directory a SARIF consumer resolves `artifactLocation.uri` against — the checkout the
+    // operator named, which in `README.md`'s pipeline is `--root .`. It is also the spelling most likely
+    // to match the `config.rootDir` recorded in a sanitized runner report, because Playwright resolves
+    // its config path rather than realpath'ing it. Resolved but not realpath'd, both sides are then
+    // compared the way they were produced; where the two spellings genuinely differ,
+    // `spec-locations.ts` emits no location rather than a wrong one.
+    const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), runRoot: resolve(options.root), artifacts, runnerReports: reports });
     const rendered = Buffer.from(options.format === "junit" ? renderJUnit(model) : renderSarif(model), "utf8");
     // The projection is written first and the sidecar second, so a sidecar never describes bytes that
     // do not exist. The reverse order would leave a provenance claim about a missing file.

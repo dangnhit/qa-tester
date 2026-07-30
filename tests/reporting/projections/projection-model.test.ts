@@ -33,7 +33,7 @@ const batch: ProjectionArtifact = {
   },
 };
 
-const base = { runId: "RUN-1", producerVersion: "0.3.0", generatedAt: "2026-07-29T00:00:00.000Z" };
+const base = { runId: "RUN-1", producerVersion: "0.3.0", generatedAt: "2026-07-29T00:00:00.000Z", runRoot: "/repo" };
 
 describe("buildProjectionModel", () => {
   it("refuses a run with no release gate, because an unfinalized run has nothing to project", () => {

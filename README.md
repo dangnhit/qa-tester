@@ -202,6 +202,19 @@ location for GitHub to display it at all, so a location-less result uploads succ
 appear as an inline annotation — the JUnit output is the projection that shows every gate rule and every
 attempt regardless of whether either carries a file position.
 
+**A location's `uri` is relative to `--root`, and a spec that cannot be placed under it gets none.** A
+Playwright report states each spec's path relative to its own `config.rootDir`, not to the repository —
+under the ordinary `testDir: "./e2e"` that path is `checkout.spec.ts` for a file at
+`e2e/checkout.spec.ts` — while SARIF and GitHub code scanning read `artifactLocation.uri` relative to
+the repository root. `export` therefore resolves each spec against the `rootDir` its own report recorded
+and re-expresses it relative to `--root`, so pass the checkout directory as `--root` (the pipeline above
+passes `.`) or the URIs will not line up with the files GitHub is annotating. A spec that resolves
+*outside* `--root`, or a report carrying no absolute `config.rootDir`, yields **no** location rather
+than a guessed one — so does a run exported from a checkout at a different path than the one that
+produced it, since the two cannot be shown to be the same directory without resolving paths that may no
+longer exist. In each case the result still uploads and the gate verdict is unaffected; only the inline
+annotation is missing.
+
 ## Skill use
 
 The `qa-tester` Skill Adapter orchestrates the Full QA Lifecycle. Ask an agent to use it when requirements, test design, controlled data, browser execution, evidence, defects, and reporting should stay in one immutable QA Run.

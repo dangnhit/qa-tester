@@ -23,32 +23,45 @@ const testCase = { artifactType: "test-case", schemaVersion: "2.0.0", producerVe
  * with the identity the matching batch entry reports. This payload is what the export operation must
  * read off disk: it is registered as a BINARY, so `readRegisteredArtifacts` never parses it into any
  * artifact's `.value` (`inspect-workspace-state.ts:324` returns early for any record with a mediaType).
+ *
+ * `config.rootDir` is part of the shape, not decoration: `sanitizeRunnerReport` keeps it (`configKeys`
+ * at src/observed/sanitize-report.ts:64) and Playwright's reporter always emits it, absolute. It is
+ * what `spec.file` is relative to — `execute-observed-playwright.ts:238` resolves the identical field
+ * as `resolve(rootDir, file)` — so the export must rebase it before SARIF's `artifactLocation.uri`,
+ * which GitHub code scanning reads relative to the REPOSITORY root, can mean what it says.
+ *
+ * These fixtures put `rootDir` at `<root>/e2e`, the ordinary `testDir: "./e2e"` case, so the joined URI
+ * must come out as `e2e/<file>` rather than the runner's own `<file>`. The fixtures on this branch used
+ * to carry no `config` at all, which is exactly why no test could see the difference.
  */
-const reportTagging = (testCaseId: string, file: string, line: number): string => JSON.stringify({
+const reportTagging = (rootDir: string, testCaseId: string, file: string, line: number): string => JSON.stringify({
   sanitization: { policy: "qa-skills/observed-runner-report/v1", removed: [], note: "" },
+  config: { version: "1.61.0", rootDir },
   suites: [{
     title: file,
     specs: [{ title: `[qa:${testCaseId}/REV-1/INSTANCE-1@api] pays with a card`, ok: false, id: `spec-${testCaseId}`, file, line, column: 3, tests: [] }],
   }],
 }, null, 2);
 
-const sanitizedReport = reportTagging("TC-CHECKOUT", "specs/checkout.spec.ts", 42);
-
 /** One Runtime-Observed Execution to register: its own test case, its own `runner-report` evidence
  *  bundle, and the `test-result-batch` whose failing entry cites that bundle. A run may hold several
- *  (an external suite run per surface, say), which is why `finalizedRun` takes a list. */
-type Observation = Readonly<{ suffix: string; testCaseId: string; evidenceId: string; report: string }>;
+ *  (an external suite run per surface, say), which is why `finalizedRun` takes a list.
+ *
+ *  `report` is a FUNCTION of the run root because a sanitized report's `config.rootDir` is absolute,
+ *  and the root is a fresh `mkdtemp` directory that does not exist when these fixtures are declared. */
+type Observation = Readonly<{ suffix: string; testCaseId: string; evidenceId: string; report: (root: string) => string }>;
 
 const observation = (over: Partial<Observation> = {}): Observation => ({
-  suffix: "1", testCaseId: "TC-CHECKOUT", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", report: sanitizedReport, ...over,
+  suffix: "1", testCaseId: "TC-CHECKOUT", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
+  report: (root) => reportTagging(join(root, "e2e"), "TC-CHECKOUT", "checkout.spec.ts", 42), ...over,
 });
 
-async function registerObservation(workspace: RunWorkspace, entry: Observation): Promise<void> {
+async function registerObservation(workspace: RunWorkspace, entry: Observation, root: string): Promise<void> {
   const value = { ...testCase, testCaseId: entry.testCaseId };
   const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value, relationships: [] });
   const executionId = `EXEC-${entry.suffix}`;
   const bundle = await workspace.registerEvidenceBundle({
-    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(entry.report, "utf8"), mediaType: "application/json", captureType: "runner-report" }],
+    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(entry.report(root), "utf8"), mediaType: "application/json", captureType: "runner-report" }],
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
@@ -84,7 +97,7 @@ async function registerObservation(workspace: RunWorkspace, entry: Observation):
 async function finalizedRun(observations: readonly Observation[] = [observation()]): Promise<{ root: string; runId: string }> {
   const root = await mkdtemp(join(tmpdir(), "qa-export-")); roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
-  for (const entry of observations) await registerObservation(workspace, entry);
+  for (const entry of observations) await registerObservation(workspace, entry, root);
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
     value: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
@@ -149,7 +162,7 @@ describe("exportProjection", () => {
 
     const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string }; region?: { startLine: number } } }[] }[] }] };
     const observed = sarif.runs[0].results.find((entry) => entry.ruleId === "observed-failure");
-    expect(observed?.locations).toEqual([{ physicalLocation: { artifactLocation: { uri: "specs/checkout.spec.ts" }, region: { startLine: 42 } } }]);
+    expect(observed?.locations).toEqual([{ physicalLocation: { artifactLocation: { uri: "e2e/checkout.spec.ts" }, region: { startLine: 42 } } }]);
   });
 
   // The reason is a FIXED string in both rows, and the assertions pin that: V8's SyntaxError text would
@@ -158,7 +171,7 @@ describe("exportProjection", () => {
     ["a payload that is not JSON at all", "{ password123 is not json", "payload is not valid JSON"],
     ["a payload that parses to something other than an object", "[]", "payload is not a JSON object"],
   ])("still writes the projection when a registered runner report is unreadable (%s), and names what it could not read", async (_label, payload, reason) => {
-    const { root, runId } = await finalizedRun([observation({ report: payload })]);
+    const { root, runId } = await finalizedRun([observation({ report: () => payload })]);
     const outPath = join(root, "degraded.sarif");
 
     const result = await exportProjection({ root, runId, format: "sarif", outPath });
@@ -202,7 +215,7 @@ describe("exportProjection", () => {
   it("reads every registered runner report, not just the first, when a run holds two observed executions", async () => {
     const { root, runId } = await finalizedRun([
       observation(),
-      observation({ suffix: "2", testCaseId: "TC-SEARCH", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", report: reportTagging("TC-SEARCH", "specs/search.spec.ts", 7) }),
+      observation({ suffix: "2", testCaseId: "TC-SEARCH", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", report: (root) => reportTagging(join(root, "e2e"), "TC-SEARCH", "search.spec.ts", 7) }),
     ]);
     const outPath = join(root, "two.sarif");
 
@@ -211,7 +224,7 @@ describe("exportProjection", () => {
     const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
     const located = sarif.runs[0].results.filter((entry) => entry.ruleId === "observed-failure")
       .flatMap((entry) => entry.locations ?? []).map((location) => location.physicalLocation.artifactLocation.uri);
-    expect(located.sort()).toEqual(["specs/checkout.spec.ts", "specs/search.spec.ts"]);
+    expect(located.sort()).toEqual(["e2e/checkout.spec.ts", "e2e/search.spec.ts"]);
   });
 
   it("writes nothing inside the run workspace", async () => {
