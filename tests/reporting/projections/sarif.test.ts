@@ -135,14 +135,19 @@ describe("renderSarif", () => {
   });
 
   /**
-   * TOTALITY. `renderSarif` is a pure function over `ProjectionModel` — an EXPORTED type any caller can
-   * construct — so a hole in its domain is a latent crash, not a theoretical one. `encodeURIComponent`
-   * throws `URIError` on an unpaired UTF-16 surrogate, and one reaches a real export without any
-   * filesystem being involved: a sanitized runner report is registered BINARY content that nothing
-   * schema-validates, `\ud800` is a LEGAL JSON escape, and `JSON.parse` restores it verbatim on every
-   * platform. Measured end to end from the real read path, the throw surfaced through
-   * `program.ts`'s final `else` as the bare string `URI malformed` at exit `ABORTED_OR_INTERNAL`,
-   * naming no spec file and no artifact — an internal error where the truth is a data problem.
+   * TOTALITY: `renderSarif` always returns. `encodeURIComponent` throws `URIError` on an unpaired
+   * UTF-16 surrogate, and before the fix one reached a real export without any filesystem being
+   * involved — a sanitized runner report is registered BINARY content that nothing schema-validates,
+   * `\ud800` is a LEGAL JSON escape, and `JSON.parse` restores it verbatim on every platform. Measured
+   * end to end from the real read path, the throw surfaced through `program.ts`'s final `else` as the
+   * bare string `URI malformed` at exit `ABORTED_OR_INTERNAL`, naming no spec file and no artifact — an
+   * internal error where the truth is a data problem.
+   *
+   * With `spec-locations.ts` now refusing such a path, this branch is UNREACHABLE IN PRODUCTION AS
+   * SHIPPED, and the test says so by building the model directly. That is not a reason to skip it: the
+   * model is constructed here exactly as an in-repo caller could construct it, and this test is what
+   * keeps the renderer total if the producer is ever weakened. It is NOT reachable from outside the
+   * package — `exports` publishes only `.` and `./cli` — so "any caller" means an in-repo one.
    *
    * The location is OMITTED rather than neutralized to `�`, and that is not a disagreement with
    * `junit.ts`'s `escapeXml` — see `artifactUri`'s TSDoc for why one field is mandatory and the other
@@ -152,6 +157,21 @@ describe("renderSarif", () => {
    */
   it("does not throw on a spec filename carrying a lone surrogate, and omits the location rather than naming a file that does not exist", () => {
     const render = (): string => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800name.spec.ts")] }));
+
+    expect(render).not.toThrow();
+
+    const observed = parseSarif(render()).runs[0].results.find((result) => result.ruleId === "observed-failure");
+    expect(observed).toBeDefined();
+    expect(observed?.locations).toBeUndefined();
+  });
+
+  /**
+   * The same totality contract with the surrogate OFF THE LEAF. The test above cannot distinguish a
+   * renderer that checks the whole path from one that checks only the last segment, because it puts the
+   * surrogate in the last segment; `encodeURIComponent` throws on whichever segment holds it.
+   */
+  it("does not throw when the lone surrogate is in a directory segment rather than the filename", () => {
+    const render = (): string => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800dir/name.spec.ts")] }));
 
     expect(render).not.toThrow();
 

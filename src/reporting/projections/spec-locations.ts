@@ -111,16 +111,26 @@ function collectSpecs(suites: unknown): readonly Readonly<Record<string, unknown
  * because a dot segment is spelled entirely in unreserved characters and would therefore pass through
  * percent-encoding untouched, to be resolved away by whoever read the URI.
  *
- * **A LONE SURROGATE yields no location, and that is this module's question rather than the renderer's.**
- * An unpaired UTF-16 surrogate cannot be encoded as UTF-8, so no URI can spell it -- `encodeURIComponent`
- * THROWS `URIError` on one. It reaches here without any filesystem being involved: this payload is
- * registered BINARY content that nothing schema-validates, `\ud800` is a LEGAL JSON escape, and
- * `JSON.parse` restores it verbatim on every platform (a Windows filename can hold one, but the origin
- * does not depend on that). Refused alongside containment and the `line` guard because the question this
- * function has answered fail-closed every other time it was asked is the same one: no location rather
- * than a wrong one. `sarif.ts` separately refuses to THROW on one -- a different question, since its
- * contract is over a public type any caller can build -- and the two agree on the outcome, so they are
- * one policy with two enforcement points rather than two policies.
+ * **A LONE SURROGATE yields no location, and the reason is the AMBIGUITY interaction rather than the
+ * refusal itself.** An unpaired UTF-16 surrogate cannot be encoded as UTF-8, so no URI can spell it --
+ * `encodeURIComponent` THROWS `URIError` on one. It reaches here without any filesystem being involved:
+ * this payload is registered BINARY content that nothing schema-validates, `\ud800` is a LEGAL JSON
+ * escape, and `JSON.parse` restores it verbatim on every platform (a Windows filename can hold one, but
+ * the origin does not depend on that).
+ *
+ * For a LONE spec this guard is invisible: `sarif.ts` refuses the same location one step later, and the
+ * emitted document is byte-identical with this check and without it. What it actually buys is measured
+ * and narrow. Two specs claiming ONE identity, one surrogate-bearing and one clean, is a DISAGREEMENT
+ * about `file` -- and this function poisons a key its two claimants disagree about. Excluding the
+ * unspellable spec before that comparison lets the clean sibling supply the location; admitting it makes
+ * the two disagree and the location is lost ENTIRELY. So this guard RESCUES a location rather than
+ * merely refusing one, which is why it is not redundant with the renderer's and must not be deleted as
+ * such. Do not restate this as "otherwise the location is silently lost with nothing recording why" --
+ * that was measured false, because without the guard the single-spec case loses it just as silently.
+ *
+ * The refusal is placed on the REBASED path, not on the raw `spec.file`, because the rebased path is the
+ * value that becomes the URI: a surrogate living in `config.rootDir` never appears in `spec.file` at all,
+ * and a guard on the latter admits it. Both placements are pinned.
  */
 function runRootRelativePath(runRoot: string, rootDir: string | undefined, file: unknown): string | undefined {
   if (rootDir === undefined || typeof file !== "string" || file.length === 0) return undefined;

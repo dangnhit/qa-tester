@@ -451,6 +451,59 @@ describe("specLocationsByEntryIdentity", () => {
     expect(specLocationsByEntryIdentity(runRoot, [report]).size).toBe(0);
   });
 
+  /**
+   * THE SURROGATE IS NOT ALWAYS IN THE FILENAME, and the test above cannot tell the difference because
+   * it puts one there. Three separate weakenings survive a suite that only ever tests the final segment
+   * of `spec.file`: guarding the RAW `spec.file` instead of the rebased path, and checking only the LAST
+   * segment in either module.
+   *
+   * The `rootDir` row is the one that proves the guard's PLACEMENT rather than its existence, and it is
+   * not an equivalent mutant — measured, a guard on raw `spec.file` admits
+   * `{"file":"bad\ud800dir/name.spec.ts"}` into the model here, because the surrogate never appears in
+   * `spec.file` at all. The rebased path is the value that becomes the URI, so the rebased path is what
+   * has to be well-formed.
+   */
+  it.each([
+    ["a directory segment of the spec's own file", "/repo/e2e", "bad\uD800dir/name.spec.ts"],
+    ["the report's rootDir, with a spotless spec.file", "/repo/bad\uD800dir", "name.spec.ts"],
+  ])("emits no location when the lone surrogate is in %s", (_case, rootDir, file) => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir },
+      suites: [{ title: "s", specs: [{ title: "[qa:TC-D/REV-D/INST-D@api] surrogate off the leaf", ok: false, id: "spec-d", file, line: 1, column: 1, tests: [] }] }],
+    };
+
+    expect(specLocationsByEntryIdentity(runRoot, [report]).size).toBe(0);
+  });
+
+  /**
+   * WHAT THE PRODUCER GUARD IS ACTUALLY FOR, and the only shape in which it is observable at all.
+   *
+   * For a lone spec the guard changes nothing a consumer can see: the renderer refuses the same location
+   * one step later, so the emitted SARIF is byte-identical with the guard and without it. The guard
+   * earns its place HERE, in the ambiguity interaction. Two specs claiming one identity — one carrying a
+   * surrogate, one clean — is a disagreement about `file`, and this module poisons a key that two specs
+   * disagree about. Excluding the unspellable spec BEFORE the comparison lets the clean sibling supply
+   * the location; admitting it makes the two disagree and the location is lost ENTIRELY.
+   *
+   * So the guard RESCUES a location rather than merely refusing one, which is the opposite of how a
+   * fail-closed check usually reads and the reason it cannot be dropped as redundant with the renderer's.
+   */
+  it("lets a clean sibling supply the location when another spec claims the same identity with a lone surrogate", () => {
+    const report: Readonly<Record<string, unknown>> = {
+      config: { rootDir: "/repo/e2e" },
+      suites: [{
+        title: "s",
+        specs: [
+          { title: "[qa:TC-R/REV-R/INST-R@api] unspellable", ok: false, id: "spec-bad", file: "bad\uD800name.spec.ts", line: 42, column: 1, tests: [] },
+          { title: "[qa:TC-R/REV-R/INST-R@api] spellable", ok: false, id: "spec-ok", file: "clean.spec.ts", line: 42, column: 1, tests: [] },
+        ],
+      }],
+    };
+
+    expect(specLocationsByEntryIdentity(runRoot, [report]).get("TC-R/REV-R/INST-R@api"))
+      .toEqual({ file: "e2e/clean.spec.ts", line: 42 });
+  });
+
   it("attaches the joined location to the matching attempt row and to no other", () => {
     const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [runnerReport] });
     expect(model.attempts.find((row) => row.id === "E-1")?.location).toEqual({ file: "specs/checkout.spec.ts", line: 42 });

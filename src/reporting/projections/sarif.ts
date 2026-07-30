@@ -62,13 +62,25 @@ type SarifResult = {
  * **TOTAL: this function never throws, and that is a separate guarantee from truth.** `encodeURIComponent`
  * throws `URIError` on an unpaired UTF-16 surrogate, which is unencodable as UTF-8 and therefore
  * unspellable as any URI. `spec-locations.ts` already refuses to emit such a location — TRUTH is its
- * guarantee, asked and answered fail-closed — but this renderer's contract is over `ProjectionModel`, an
- * EXPORTED type any caller can construct, so the producer's care is a fact about one caller and not
- * about the type. Measured before the fix: the throw escaped through `program.ts`'s final `else` as the
- * bare string `URI malformed` at exit `ABORTED_OR_INTERNAL`, naming no spec file and no artifact.
+ * guarantee, asked and answered fail-closed — while THIS function's guarantee is only that it always
+ * returns. Measured before the fix: the throw escaped through `program.ts`'s final `else` as the bare
+ * string `URI malformed` at exit `ABORTED_OR_INTERNAL`, naming no spec file and no artifact — an
+ * internal error where the truth was a data problem.
+ *
+ * **Stated precisely: this branch is UNREACHABLE IN PRODUCTION AS SHIPPED, not defence in depth.**
+ * `runRootRelativePath` is the only thing in `src/` that constructs a `ProjectionLocation`, it guards
+ * the fully REBASED path, and `export-projection.ts` holds the only call to `renderSarif`. Nor can an
+ * outside consumer reach it: the package `exports` map publishes exactly `.` and `./cli` with no
+ * wildcard subpath, so "any caller can construct a `ProjectionModel`" is true only of IN-REPO callers.
+ * It is a real totality contract rather than dead code — deleting it is killed by test, and it is what
+ * keeps a weakened producer (one guarding raw `spec.file`, which a surrogate living in `config.rootDir`
+ * never touches) from turning a data problem back into a crash — but a reader deserves to know that no
+ * production path exercises it today.
  *
  * `undefined` — omit the location — rather than `junit.ts`'s neutralize-to-`\uFFFD`, and the two are NOT
- * in conflict. `escapeXml` neutralizes because the field it guards is MANDATORY: a `<testcase>` must
+ * in conflict. (`renderJUnit` surviving the identical model is no evidence either way: it never reads
+ * `location` at all, so it survives by never looking, not by neutralizing.) `escapeXml` neutralizes
+ * because the field it guards is MANDATORY: a `<testcase>` must
  * carry a `name`, XML has no way to spell "no name", and dropping the element would lose a whole result,
  * so it accepts local damage to keep the record. SARIF's `locations` is OPTIONAL — this file already
  * omits it for every row that joined nothing, and `projection-model.ts` states the rule: a location is
