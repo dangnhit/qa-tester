@@ -112,6 +112,50 @@ async function readRunnerReports(
 }
 
 /**
+ * Refuses before anything is written unless EVERY output lands outside the results root.
+ *
+ * **Every output, not just `--out`.** The sidecar's path is DERIVED from the projection's by
+ * concatenation, so a guard on `--out` alone says nothing about it — and being derived is what makes it
+ * the easier of the two to attack: it needs no influence over the caller's argument at all. A symlink
+ * planted at `<out>.provenance.json` pointing into a run would be followed by `writeFile` (which opens
+ * `O_CREAT|O_TRUNC` with no `O_NOFOLLOW`), overwriting a registered artifact and leaving that run
+ * `CHECKSUM_MISMATCH` forever, or creating one and leaving it `ORPHAN_FILE`.
+ *
+ * **Every output before ANY write**, which is a stronger claim than checking each just before its own
+ * write. A projection written and then a refused sidecar would leave a projection on disk that nothing
+ * vouches for — the exact state the sidecar exists to make impossible, reached by way of the check meant
+ * to protect it.
+ *
+ * **Scoped to the whole results root** (`dirname(workspace.path)`, already realpath'd by
+ * `RunWorkspace.open`): a file landing in ANY run's `inputs/` or `evidence/` invalidates THAT run, not
+ * merely the one being projected.
+ *
+ * **A destination that cannot be resolved is refused, not assumed innocent.** `isRealPathWithin` throws
+ * rather than answering when the path is a dangling symlink or a symlink loop. Every such failure
+ * becomes a refusal here: the guard's job is to PROVE the write lands outside the runs, and "I could not
+ * work out where this write goes" is not a proof. Failing closed costs an operator whose `--out` is a
+ * link to a not-yet-created file OUTSIDE `qa-results/` — that used to succeed, and now refuses (the
+ * availability cost is stated in the task report). Failing open would cost a run.
+ */
+async function assertOutputsAreOutsideTheRuns(closedRuns: string, outputs: readonly string[]): Promise<void> {
+  for (const candidate of outputs) {
+    let inside: boolean;
+    try {
+      // `isRealPathWithin` rather than a comparison written here: it resolves symlinks at the LEAF as
+      // well as in the parents, so an output that is itself a link into a run is refused rather than
+      // followed. A `realpath(dirname(candidate))` written locally would miss precisely that, and would
+      // re-derive a decision `core/fs.ts` owns — which is what `fa6c60c` records the cost of.
+      inside = await isRealPathWithin(closedRuns, candidate);
+    } catch {
+      throw new QaSkillsError(`Refusing to write ${candidate}: its destination could not be resolved, so it cannot be shown to lie outside ${closedRuns}. A symlink whose target does not exist, or a symlink loop, is the usual cause.`, "INVALID_ARTIFACT");
+    }
+    if (inside) {
+      throw new QaSkillsError(`Refusing to write ${candidate} inside ${closedRuns}: a run workspace is closed and checksummed, and a file written into one either invalidates a registered artifact or orphans the run. A projection and its sidecar belong beside the runs, never inside them.`, "INVALID_ARTIFACT");
+    }
+  }
+}
+
+/**
  * Projects a finalized run's release gate into a CI-readable file, beside a provenance sidecar.
  *
  * **No second gate derivation.** `readRegisteredArtifacts` re-inspects the whole workspace and throws
@@ -133,8 +177,10 @@ async function readRunnerReports(
  * **Nothing is written inside `qa-results/`.** A finalized run is closed, and an unregistered file under
  * any run's `inputs/` or `evidence/` directory would raise `ORPHAN_FILE`
  * (`inspect-workspace-state.ts:542`) on every later read of THAT run — an export that bricked a run,
- * whether or not it is the one being projected. So an `--out` resolving anywhere inside the results
- * root is refused rather than trusted to be harmless, symlinks included.
+ * whether or not it is the one being projected. Overwriting a registered file is worse still: that run
+ * is `CHECKSUM_MISMATCH` forever. So BOTH of this operation's outputs — the projection and the sidecar
+ * derived from its name — are checked against the whole results root, symlinks resolved, and BOTH are
+ * checked before EITHER is written. See `assertOutputsAreOutsideTheRuns`.
  */
 export async function exportProjection(options: Readonly<{ root: string; runId: string; format: string; outPath: string }>): Promise<ExportProjectionResult> {
   if (!isFormat(options.format)) throw new QaSkillsError(`Unsupported projection format ${options.format}: use junit or sarif`, "INVALID_ARTIFACT");
@@ -142,20 +188,7 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
   const sidecarPath = `${outPath}.provenance.json`;
   const workspace = await RunWorkspace.open(options.root, options.runId);
   try {
-    // Scoped to the whole `qa-results/` root, not just the run being exported. A projection written
-    // into ANY run's `inputs/` or `evidence/` raises `ORPHAN_FILE` for that run on every later read
-    // (`inspect-workspace-state.ts:542`), so the guard's own justification argues for the wider scope;
-    // and the root is not something this operation has to go looking for — `dirname(workspace.path)`
-    // is it, already realpath'd by `RunWorkspace.open`.
-    //
-    // `isRealPathWithin` rather than a comparison written here: it resolves symlinks at the LEAF as
-    // well as in the parents, so `--out /tmp/junit.xml` where that file is a symlink into a run's
-    // `inputs/` is refused rather than followed. A `realpath(dirname(outPath))` written locally would
-    // miss precisely that, and would also re-derive a decision `core/fs.ts` owns.
-    const closedRuns = dirname(workspace.path);
-    if (await isRealPathWithin(closedRuns, outPath)) {
-      throw new QaSkillsError(`Refusing to write ${outPath} inside ${closedRuns}: a run workspace is closed and checksummed, and a projection written into one would be an unregistered file that invalidates it. A projection belongs beside the run, never inside it.`, "INVALID_ARTIFACT");
-    }
+    await assertOutputsAreOutsideTheRuns(dirname(workspace.path), [outPath, sidecarPath]);
     const artifacts = await workspace.readRegisteredArtifacts();
     const { reports, unreadable } = await readRunnerReports(workspace, artifacts);
     const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), artifacts, runnerReports: reports });

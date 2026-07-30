@@ -80,12 +80,22 @@ export function resolveWithin(root: string, candidate: string): string {
  * True when `candidate` — or, when it does not exist yet, its nearest existing ancestor — REALLY lands
  * inside `root`, symlinks followed.
  *
- * The predicate half of `assertPathWithin`: same resolution, same `isPathWithin` comparison, no
- * refusal. It exists because those two answer opposite questions. `assertPathWithin` serves a caller
- * that must refuse a path for being OUTSIDE a root; this serves one that must refuse a path for being
- * INSIDE one (`export-projection.ts`, which will not write a derived file into a closed run workspace).
- * Inverting an assertion by catching its throw would make the common case — a path legitimately outside
- * — travel by exception, and would conflate `PATH_ESCAPE` with `SYMLINK_ESCAPE` as if both meant "fine".
+ * The predicate half of `assertPathWithin`: same `nearestExistingParent` walk, same `isPathWithin`
+ * comparison, no refusal. It exists because those two answer opposite questions. `assertPathWithin`
+ * serves a caller that must refuse a path for being OUTSIDE a root; this serves one that must refuse a
+ * path for being INSIDE one (`export-projection.ts`, which will not write a derived file into a closed
+ * run workspace). Inverting an assertion by catching its throw would make the common case — a path
+ * legitimately outside — travel by exception, and would conflate `PATH_ESCAPE` with `SYMLINK_ESCAPE` as
+ * if both meant "fine".
+ *
+ * **A RELATIVE `candidate` resolves against the CWD here, not against `root`.** `assertPathWithin`
+ * resolves one against the root (`resolveWithin`'s `resolve(resolvedRoot, candidate)`) because a
+ * relative path reaching it means "inside this root, at this subpath". This function's callers are
+ * asking about a path the USER named — an output file, typically from a CLI argument — where relative
+ * means "relative to where I am standing", so cwd is the reading that matches the question. The
+ * difference is observable for this polarity: a relative candidate a root-relative reading would place
+ * INSIDE the root can answer `false` here. Pass an absolute path when the distinction matters; every
+ * caller today does.
  *
  * It shares `nearestExistingParent` rather than resolving the leaf itself, and that sharing is the
  * point: `lstat`ping the candidate BEFORE walking up is what makes a symlink AT THE LEAF resolve to its

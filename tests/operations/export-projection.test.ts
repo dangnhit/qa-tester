@@ -290,23 +290,76 @@ describe("exportProjection", () => {
 
   /**
    * The same attack with a symlink whose target does not exist yet — `writeFile` would CREATE it inside
-   * the run. Containment holds, but by a different route and with a different message: `lstat` sees the
-   * link, `realpath` cannot resolve its missing target, and the raw ENOENT propagates (exit 5) instead
-   * of the guard's own refusal (exit 3). Pinned as the property that actually matters — nothing is
-   * created inside the run — rather than on the message, and disclosed as the one input shape where the
-   * refusal is less legible than it should be. Resolving a dangling link cleanly would mean hand-rolling
-   * a `readlink` walk in `core/fs.ts`, which is the kind of local containment logic `fa6c60c` records
-   * the cost of; refusing loudly is the safe half of the trade.
+   * the run, leaving it ORPHAN_FILE. `isRealPathWithin` cannot resolve a dangling link, so it throws
+   * rather than answering; the guard turns every such failure into a refusal, because its job is to
+   * PROVE the write lands outside the runs and "I could not work out where this goes" is not a proof.
    */
-  it("still creates nothing inside a run workspace when --out is a dangling symlink into one", async () => {
+  it("refuses a dangling symlink into a run workspace, creating nothing", async () => {
     const { root, runId } = await finalizedRun();
     const inputs = join(root, "qa-results", runId, "inputs");
     const outside = await mkdtemp(join(tmpdir(), "qa-export-dangling-")); roots.push(outside);
     const outPath = join(outside, "junit.xml");
     await symlink(join(inputs, "through-a-link.xml"), outPath);
 
-    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow();
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/destination could not be resolved/i);
     expect(await readdir(inputs)).not.toContain("through-a-link.xml");
+  });
+
+  /**
+   * A symlink LOOP is the other way a destination cannot be resolved: `lstat` sees the link, `realpath`
+   * answers ELOOP. It takes the same refusal as a dangling link — the guard does not care WHY it could
+   * not answer, only that it could not.
+   */
+  it("refuses an --out whose symlinks form a loop", async () => {
+    const { root, runId } = await finalizedRun();
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-loop-")); roots.push(outside);
+    const first = join(outside, "first.xml");
+    const second = join(outside, "second.xml");
+    await symlink(second, first);
+    await symlink(first, second);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath: first }))
+      .rejects.toThrow(/destination could not be resolved/i);
+  });
+
+  /**
+   * THE SIDECAR PATH IS DERIVED, so a guard on `--out` alone never sees it — and being derived makes it
+   * the easier of the two to attack: it needs no influence over the caller's argument at all. Here
+   * `--out` is an ordinary unremarkable path that passes the guard, while `<out>.provenance.json` is a
+   * symlink onto a REGISTERED artifact of a DIFFERENT run. Unguarded, `writeFile` follows it and that
+   * other run is CHECKSUM_MISMATCH forever, while this command exits 0.
+   */
+  it("refuses when the derived sidecar path is a symlink onto another run's registered artifact", async () => {
+    const { root, runId } = await finalizedRun();
+    const other = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+    const otherRunId = other.runId;
+    await other.close();
+    const otherInputs = join(root, "qa-results", otherRunId, "inputs");
+    const registered = (await readdir(otherInputs))[0]!;
+    const before = await readFile(join(otherInputs, registered), "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-sidecar-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await symlink(join(otherInputs, registered), `${outPath}.provenance.json`);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/inside .*qa-results/i);
+
+    expect(await readFile(join(otherInputs, registered), "utf8")).toBe(before);
+    // Both outputs are checked BEFORE either is written, so the refusal leaves no projection behind
+    // either — a projection with no sidecar is the state the sidecar exists to make impossible.
+    await expect(readFile(outPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("refuses when the derived sidecar path is a dangling symlink into a run workspace", async () => {
+    const { root, runId } = await finalizedRun();
+    const inputs = join(root, "qa-results", runId, "inputs");
+    const outside = await mkdtemp(join(tmpdir(), "qa-export-sidecar-dangling-")); roots.push(outside);
+    const outPath = join(outside, "junit.xml");
+    await symlink(join(inputs, "sidecar-through-a-link.json"), `${outPath}.provenance.json`);
+
+    await expect(exportProjection({ root, runId, format: "junit", outPath })).rejects.toThrow(/destination could not be resolved/i);
+
+    expect(await readdir(inputs)).not.toContain("sidecar-through-a-link.json");
+    await expect(readFile(outPath, "utf8")).rejects.toThrow(/ENOENT/);
   });
 });
 
