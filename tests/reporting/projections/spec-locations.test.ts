@@ -74,7 +74,8 @@ describe("specLocationsByEntryIdentity", () => {
   });
 
   it("ignores a non-evidence artifact even when its payload happens to hold a tagged spec", () => {
-    const disguised: ProjectionArtifact = { ...gateArtifact, record: { ...gateArtifact.record, type: "release-gate" }, value: evidenceArtifact.value };
+    // `gateArtifact.record.type` is already "release-gate"; only `value` is swapped for the tagged payload.
+    const disguised: ProjectionArtifact = { ...gateArtifact, value: evidenceArtifact.value };
     expect(specLocationsByEntryIdentity([disguised]).size).toBe(0);
   });
 
@@ -126,7 +127,7 @@ describe("specLocationsByEntryIdentity", () => {
     expect(specLocationsByEntryIdentity([malformed]).size).toBe(0);
   });
 
-  it("ignores a spec with no title at all, rather than crashing on a non-string title", () => {
+  it("treats a spec with no title at all exactly like an untagged spec", () => {
     const artifact: ProjectionArtifact = {
       record: { id: "evidence-3b", sha256: "7".repeat(64), type: "evidence", provenance: "runtime" },
       value: { suites: [{ title: "s", specs: [{ ok: false, id: "spec-notitle", file: "specs/notitle.spec.ts", line: 1, column: 1, tests: [] }] }] },

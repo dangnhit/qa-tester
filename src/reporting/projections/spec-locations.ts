@@ -69,7 +69,10 @@ export function specLocationsByEntryIdentity(artifacts: readonly ProjectionArtif
       const file = typeof spec.file === "string" && spec.file.length > 0 ? spec.file : undefined;
       const match = identityTagPattern.exec(title);
       if (match === null || file === undefined) continue;
-      const key = `${match[1]}/${match[2]}/${match[3]}@${match[4]}`;
+      // `?? ""` mirrors `report-mapping.ts`'s own `parseIdentityTag` (report-mapping.ts:140-142): the
+      // pattern requires all four groups, so a successful match always populates them, but
+      // `noUncheckedIndexedAccess` still types a capture group access as possibly `undefined`.
+      const key = specLocationKey({ testCaseId: match[1] ?? "", testCaseRevisionId: match[2] ?? "", testCaseInstanceId: match[3] ?? "", executionSurface: match[4] ?? "" });
       if (found.has(key)) { ambiguous.add(key); continue; }
       found.set(key, typeof spec.line === "number" ? { file, line: spec.line } : { file });
     }
