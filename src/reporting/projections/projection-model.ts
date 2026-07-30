@@ -1,6 +1,8 @@
 import { QaSkillsError } from "../../core/errors.js";
 import { isRecord } from "../../core/values.js";
 
+import { specLocationKey, specLocationsByEntryIdentity } from "./spec-locations.js";
+
 /** The artifact shape a projection reads. Declared structurally, not imported from `RunWorkspace`, for
  *  the same reason `release-gate.ts` declares `GateWorkspaceArtifact` locally: these modules are pure
  *  reducers over already-read records and must not acquire a dependency on the reader. */
@@ -177,6 +179,9 @@ export function buildProjectionModel(input: Readonly<{
   });
 
   const batches = input.artifacts.filter((artifact) => artifact.record.type === "test-result-batch");
+  // Built once over every artifact, not per entry: the join is a global index from identity to
+  // location, keyed on the same full four-part identity every row below already carries.
+  const locations = specLocationsByEntryIdentity(input.artifacts);
   // Every entry in one batch shares the manifest record's provenance: lane 2 has no per-entry
   // registration, only the one record the whole `test-result-batch` artifact was registered under.
   const observed: AttemptRow[] = batches.flatMap((artifact) => {
@@ -186,9 +191,14 @@ export function buildProjectionModel(input: Readonly<{
       const testCaseRevisionId = str(entry.testCaseRevisionId);
       const testCaseInstanceId = str(entry.testCaseInstanceId); const status = str(entry.status);
       const failureClassification = str(entry.failureClassification); const executionSurface = str(entry.executionSurface);
-      return id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined || executionSurface === undefined
-        ? []
-        : [{ lane: "observed-entry" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface, durationMs: durationOf(entry), provenance }];
+      if (id === undefined || testCaseId === undefined || testCaseRevisionId === undefined || testCaseInstanceId === undefined || status === undefined || failureClassification === undefined || executionSurface === undefined) return [];
+      // Lane 1 never reaches this branch at all -- a driven attempt has no spec file to join, and this
+      // lookup only ever runs for a lane-2 row.
+      const location = locations.get(specLocationKey({ testCaseId, testCaseRevisionId, testCaseInstanceId, executionSurface }));
+      return [{
+        lane: "observed-entry" as const, id, testCaseId, testCaseRevisionId, testCaseInstanceId, status, failureClassification, executionSurface, durationMs: durationOf(entry), provenance,
+        ...(location === undefined ? {} : { location }),
+      }];
     });
   });
 
