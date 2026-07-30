@@ -135,6 +135,28 @@ describe("specLocationsByEntryIdentity", () => {
     expect(specLocationsByEntryIdentity([artifact]).size).toBe(0);
   });
 
+  // The guard this proves: `typeof spec.title === "string"`. Without it, `RegExp#exec` coerces its
+  // argument via `ToString` -- `String(["not really a title", "[qa:TC-X/REV-X/INST-X@api] spurious"])`
+  // is `"not really a title,[qa:TC-X/REV-X/INST-X@api] spurious"`, which DOES contain a valid tag and
+  // would register a bogus location. An absent title (`.exec(undefined)` -> `.exec("undefined")`) can
+  // never distinguish the guarded implementation from an unguarded one; only a non-string value whose
+  // coerced form spells out a tag can.
+  it("does not let a non-string title fabricate a location through ToString coercion", () => {
+    const artifact: ProjectionArtifact = {
+      record: { id: "evidence-8", sha256: "8".repeat(64), type: "evidence", provenance: "runtime" },
+      value: {
+        suites: [{
+          title: "s",
+          specs: [{
+            title: ["not really a title", "[qa:TC-X/REV-X/INST-X@api] spurious"],
+            ok: false, id: "spec-8", file: "specs/coerced.spec.ts", line: 1, column: 1, tests: [],
+          }],
+        }],
+      },
+    };
+    expect(specLocationsByEntryIdentity([artifact]).has("TC-X/REV-X/INST-X@api")).toBe(false);
+  });
+
   it("skips a malformed tag rather than guessing an identity", () => {
     const artifact: ProjectionArtifact = {
       record: { id: "evidence-4", sha256: "3".repeat(64), type: "evidence", provenance: "runtime" },
