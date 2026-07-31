@@ -139,7 +139,12 @@ function regressionTester() {
       },
       unmatched: {
         changes: [{ id: "CHANGE-NONE", requirementIds: ["REQ-NOT-COVERED"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }],
-        provenance: { kind: "git-diff", reference: "phase-8b-task-3-empty-selection" },
+        // Deliberately omits the task number, and this comment deliberately does not quote the string it
+        // is about. `scripts/check-secrets.ts` reads an OpenAI-style provider key as the last two letters
+        // of "task" followed by a long hyphenated tail, so spelling the obvious reference here — task
+        // number, then "-empty-selection" — trips the scan in the reference AND in any comment quoting
+        // it. The scan walks git-TRACKED files, so it stays invisible until the file is committed.
+        provenance: { kind: "git-diff", reference: "phase-8b-empty-selection" },
       },
     },
   });
@@ -203,7 +208,7 @@ async function rechecksumRegisteredArtifact(workspace: RunWorkspace, artifactId:
  * `regressionSelectionRule` (src/core/semantic-rules.ts) re-derives the selection over every registered
  * `test-case` on the next open, so growing the pool would invalidate a selection nothing else touched.
  */
-async function registerObservedBatch(root: string, runId: string, observed: readonly { testCaseId: string; revisionId: string; instanceId: string }[]) {
+async function registerObservedBatch(root: string, runId: string, observed: readonly { testCaseId: string; revisionId: string; instanceId: string; status?: "PASSED" | "FAILED" | "NOT_RUN" | "BLOCKED" | "INCONCLUSIVE" }[]) {
   const workspace = await RunWorkspace.open(root, runId);
   try {
     const registered = await workspace.readRegisteredArtifacts();
@@ -237,10 +242,14 @@ async function registerObservedBatch(root: string, runId: string, observed: read
       artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0",
       executionId, runId, commitSha: "0".repeat(40), specTreeSha256: "1".repeat(64),
       startedAt: "2026-07-31T00:00:00.000Z", finishedAt: "2026-07-31T00:00:01.000Z",
+      // `failureClassification` follows the status the way `mapObservedReport` derives it: `PASSED` pairs
+      // with `NONE`, everything else with `UNDETERMINED`, which is the biconditional `testResultBatchRule`
+      // enforces. A test that varied the status alone would be refused by that rule, not by the code
+      // under test.
       entries: observed.map((identity, index) => ({
         entryId: `ENTRY-${index + 1}`, testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId,
-        status: "PASSED", failureClassification: "NONE", executionSurface: "api",
-        steps: [{ stepId: "observed-open", status: "PASSED", durationMs: 5 }],
+        status: identity.status ?? "PASSED", failureClassification: (identity.status ?? "PASSED") === "PASSED" ? "NONE" : "UNDETERMINED", executionSurface: "api",
+        steps: [{ stepId: "observed-open", status: identity.status ?? "PASSED", durationMs: 5 }],
       })),
     } });
   } finally { await workspace.close(); }
@@ -360,5 +369,90 @@ describe("the residual: one selection, two lanes", () => {
     const inspected = await inspectWorkspaceState(join(root, "qa-results", paused.runId), paused.runId, (crossRoot, crossRunId) => RunWorkspace.open(crossRoot, crossRunId));
     expect(inspected.diagnostics.map((diagnostic) => diagnostic.message)).toContain("Workflow checkpoints must form an immutable revision chain with verified operation outputs");
     await expect(RunWorkspace.open(root, paused.runId)).rejects.toThrow(/Workspace artifact binding is invalid/);
+  }, 180_000);
+
+  it("drives the case an observed entry reports NOT_RUN for, and not the one beside it that ran", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-not-run-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const tester = regressionTester();
+    const paused = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
+    // What a tagged spec that `test.skip`s produces: `mapObservedReport` maps `skipped` to NOT_RUN,
+    // "nothing executed". The batch is stamped `runtime-observed` and satisfies every clause of
+    // `testResultBatchRule` — the evidence clause only fires on a PASSED entry — so nothing upstream
+    // refuses it. One execution, two entries, opposite consequences: the skipped one must not stop lane 1
+    // driving its case, and the one that ran must.
+    await registerObservedBatch(root, paused.runId, [{ ...identities.a, status: "NOT_RUN" }, identities.b]);
+
+    const resumed = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
+
+    expect(await drivenCaseIds(root, paused.runId)).toEqual(["TC-REG-A"]);
+    expect(resumed.outcome).toBe("COMPLETED");
+    expect(resumed.validation.valid).toBe(true);
+  }, 180_000);
+
+  it("keeps waiting for lane 2 when every observed entry reports NOT_RUN", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-not-run-only-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const tester = regressionTester();
+    const paused = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
+    await registerObservedBatch(root, paused.runId, [{ ...identities.a, status: "NOT_RUN" }]);
+
+    const resumed = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
+
+    // A suite in which every tagged spec skipped observed nothing, so the run is exactly where it was
+    // before it ran and says so — the same ruling `pendingObservedExecution` (src/operations/observed-pause.ts)
+    // already applies to a batch that failed its semantic rule, reached through the one shared reader.
+    // The safe direction either way: nothing is executed by neither lane, because nothing finalizes.
+    expect(resumed.outcome).toBe("AWAITING_OBSERVED_EXECUTION");
+    const artifacts = await registeredArtifacts(root, paused.runId);
+    expect(artifacts.filter((artifact) => artifact.record.type === "test-result")).toHaveLength(0);
+    expect(artifacts.some((artifact) => artifact.record.type === "release-gate")).toBe(false);
+  }, 180_000);
+
+  it("invalidates a checkpoint whose selected case is claimed only by a NOT_RUN entry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-not-run-union-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const tester = regressionTester();
+    const paused = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
+    await registerObservedBatch(root, paused.runId, [identities.a]);
+    const resumed = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
+    expect(resumed.validation.valid).toBe(true);
+    expect(await drivenCaseIds(root, paused.runId)).toEqual(["TC-REG-B"]);
+
+    // The union side of the same question, reached through the STATUS rather than the identity: A keeps
+    // its entry and its identity, and only its outcome changes to the one that means nothing executed.
+    // `failureClassification` moves with it because `testResultBatchRule` enforces the biconditional, so
+    // the batch stays valid and the checkpoint is the only thing that can refuse.
+    const workspace = await RunWorkspace.open(root, paused.runId);
+    const batch = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result-batch");
+    if (!batch) throw new Error("Expected an observed batch");
+    await rechecksumRegisteredArtifact(workspace, batch.record.id, (value) => {
+      const entry = (value.entries as Record<string, unknown>[])[0];
+      if (!entry || entry.testCaseId !== identities.a.testCaseId) throw new Error("Expected the first entry to credit the selected case");
+      entry.status = "NOT_RUN";
+      entry.failureClassification = "UNDETERMINED";
+    });
+    await workspace.close();
+
+    const inspected = await inspectWorkspaceState(join(root, "qa-results", paused.runId), paused.runId, (crossRoot, crossRunId) => RunWorkspace.open(crossRoot, crossRunId));
+    expect(inspected.diagnostics.map((diagnostic) => diagnostic.message)).toContain("Workflow checkpoints must form an immutable revision chain with verified operation outputs");
+    await expect(RunWorkspace.open(root, paused.runId)).rejects.toThrow(/Workspace artifact binding is invalid/);
+  }, 180_000);
+
+  it("waits for the browser manager even when lane 2 covered the whole selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-no-runtime-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const paused = await regressionTester()({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
+    await registerObservedBatch(root, paused.runId, [identities.a, identities.b]);
+
+    // Resumed against a registry holding no browser manager. `missingRuntimeLabel` is evaluated BEFORE the
+    // operation loop, so a run that would drive nothing at all still stops at AWAITING_RUNTIME. Pinned
+    // because it is the reason a `return []` short-circuit in front of `executeWithRuntime` buys nothing
+    // (no well-formed run reaches that call with an unresolvable manager), and because relaxing it for a
+    // lane-2-only run is a live question for the CLI modes rather than something to change here silently.
+    const resumed = await createQaTester({})({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
+
+    expect(resumed.outcome).toBe("AWAITING_RUNTIME");
+    expect(await drivenCaseIds(root, paused.runId)).toEqual([]);
   }, 180_000);
 });

@@ -1115,16 +1115,19 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     const all = await artifacts();
     const observedCases = observedCoveredCaseIds(all);
     const residual = state.executionCaseIds.filter((id) => !observedCases.has(id));
-    // Zero residual is legal ONLY when observation covers the whole selection. The original refusal
-    // still fires for the state its message describes: nothing to execute and nothing observed either.
-    if (residual.length === 0 && state.executionCaseIds.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
-    // Deliberately redundant with `executeWithRuntime`, whose per-case loop simply does not run on an
-    // empty worklist — deleting this line changes no test, which was measured rather than assumed. It
-    // stays because "a fully observed selection drives nothing" is decided HERE, where the residual is
-    // computed, instead of being inherited from whether another function happens to tolerate an empty
-    // list: a future empty-worklist refusal there would be reasonable, and would silently break a
-    // lane-2-only run if this branch were not the one answering the question.
-    if (residual.length === 0) return [] as unknown as WorkflowOperationOutputMap[Name];
+    // The original refusal, byte-for-byte, and deliberately still asked of the SELECTION rather than the
+    // residual: it means "nothing to execute and nothing observed either", which is a statement about
+    // what this run imported. Asking it of the residual instead would refuse the fully-observed run this
+    // task makes legal, and adding a `residual.length === 0` conjunct would be implied anyway — `residual`
+    // is a filter of `executionCaseIds`, so an empty selection already has an empty residual.
+    if (state.executionCaseIds.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
+    // A fully observed selection reaches `executeWithRuntime` with an EMPTY worklist, whose per-case loop
+    // does not run: nothing is registered and `[]` comes back. Deliberately not short-circuited with a
+    // `return []` above — that guard is unprovable here, measured rather than assumed: every mode that
+    // reaches this operation has already had its browser manager resolved by `missingRuntimeLabel` (a run
+    // without one returns AWAITING_RUNTIME before this loop), so skipping the call protects nothing a
+    // well-formed run can hit. What protects the behaviour is the test asserting a fully observed
+    // selection completes with zero attempts, which reddens if that empty-worklist tolerance ever changes.
     return executeWithRuntime(workspace, runtime, input.runtime ?? {}, residual) as Promise<WorkflowOperationOutputMap[Name]>;
   }
   if (name === "collect-evidence") {
