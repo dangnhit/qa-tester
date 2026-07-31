@@ -1,16 +1,103 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ExitCode } from "../../src/cli/exit-codes.js";
 import { runCli } from "../../src/cli/program.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
+import { createEntityId } from "../../src/core/ids.js";
+import { generateBugReport } from "../../src/operations/generate-bug-report.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "1.0.0", environmentProfileId: "env", name: "Fixture", classification: "test", baseUrl: "https://fixture.test", productionReadOnly: false } as const;
+
+// Shared identity triple: `planningOnlyRun` and `executedRunWithBug` deliberately register the SAME
+// testCaseId/revisionId/instanceId across two distinct runs. Retest matches its bundle to the source
+// scenarios by that exact triple (src/operations/run-workflow.ts), never by artifact ID, so a realistic
+// fixture pair needs it even though the assertions in this file only inspect `scaffoldWorkflowInput`'s
+// output.
+const bugIdentity = { testCaseId: "TC-BUG", revisionId: "REV-BUG", instanceId: "INSTANCE-BUG", requirementId: "REQ-BUG" } as const;
+
+/** A planning-only terminal run (mode "plan") carrying the given identity triple. Scaffold's bundle
+ *  path refuses a source run holding non-planning artifacts (src/cli/workflow.ts), so a retest's
+ *  bundle must come from a run like this one rather than from the executed run holding its bug. */
+async function planningOnlyRun(root: string, envPath: string, identity: typeof bugIdentity): Promise<string> {
+  const paths = {
+    requirement: join(root, `requirement-${identity.testCaseId}.json`),
+    plan: join(root, `plan-${identity.testCaseId}.json`),
+    testcase: join(root, `testcase-${identity.testCaseId}.json`),
+    coverage: join(root, `coverage-${identity.testCaseId}.json`),
+  };
+  const requirement = { artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: `RA-${identity.testCaseId}`, statements: [{ requirementId: identity.requirementId, sourceProvenance: { kind: "user", reference: "fixture" }, normalizedText: "Member must save.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }] };
+  const plan = { artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: `PLAN-${identity.testCaseId}`, approvalPolicy: { mode: "human-review" }, testCases: [{ testCaseId: identity.testCaseId, title: "Save", expectedResults: [{ id: "ER", requirementId: identity.requirementId, authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }] };
+  const testcase = { artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: identity.testCaseId, revisionId: identity.revisionId, instanceId: identity.instanceId, title: "Save", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: identity.requirementId, role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } };
+  const coverage = { artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: `COV-${identity.testCaseId}`, requirementAnalysisArtifactId: "replaced-atomically", requirementId: identity.requirementId, role: "member", behavior: "save", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved", required: true };
+  await Promise.all([
+    writeFile(paths.requirement, JSON.stringify(requirement)),
+    writeFile(paths.plan, JSON.stringify(plan)),
+    writeFile(paths.testcase, JSON.stringify(testcase)),
+    writeFile(paths.coverage, JSON.stringify(coverage)),
+  ]);
+  const bootstrapped = await bootstrapPlanningBundle({ root, environmentPath: envPath, requirementPath: paths.requirement, planPath: paths.plan, testCasePaths: [paths.testcase], coveragePaths: [paths.coverage] });
+  return bootstrapped.runId;
+}
+
+/** A terminal `execute` run holding one FAILED/PRODUCT_DEFECT test-result per identity and a generated
+ *  `bug-report` for each. Lifted from the `options.sourceBug` half of `sourceBundle` in
+ *  tests/orchestration/runtime-public.e2e.test.ts, trimmed to what `generateBugReport` requires: one
+ *  registered environment, the attempt's testcase, the attempt itself, and evidence bound to it. */
+async function executedRunWithBug(root: string, options: { bugs?: number } = {}): Promise<{ runId: string; bugArtifactId: string; bugSha256: string }> {
+  const count = options.bugs ?? 1;
+  const identities = Array.from({ length: count }, (_, index) => index === 0
+    ? bugIdentity
+    : { testCaseId: `TC-BUG-EXTRA-${index}`, revisionId: `REV-BUG-EXTRA-${index}`, instanceId: `INSTANCE-BUG-EXTRA-${index}`, requirementId: bugIdentity.requirementId });
+  const source = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
+  const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
+    artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-BUG",
+    statements: [{ requirementId: bugIdentity.requirementId, sourceProvenance: { kind: "user", reference: "fixture" }, normalizedText: "Member must save.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }],
+  } });
+  const plan = await source.registerArtifactValue({ type: "test-plan", relationships: [requirement.id], value: {
+    artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-BUG", approvalPolicy: { mode: "human-review" },
+    testCases: identities.map((identity) => ({ testCaseId: identity.testCaseId, title: "Save", expectedResults: [{ id: `ER-${identity.testCaseId}`, requirementId: identity.requirementId, authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] })),
+  } });
+  let bugArtifactId = ""; let bugSha256 = "";
+  for (const identity of identities) {
+    const attemptId = `ATT-${identity.testCaseId}`;
+    const testcase = await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
+      artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: identity.testCaseId, revisionId: identity.revisionId, instanceId: identity.instanceId, title: "Save", steps: [{ id: "open", action: "navigate", sideEffect: "none" }],
+      coverage: { requirementId: identity.requirementId, role: "member", behavior: "save", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
+    } });
+    const attempt = await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: {
+      artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "1.0.0", attemptId, runId: source.runId, testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId,
+      status: "FAILED", failureClassification: "PRODUCT_DEFECT", observedEngine: "chromium",
+      steps: [{ stepId: "open", status: "FAILED", durationMs: 1 }],
+      startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z",
+    } });
+    await source.registerEvidenceBundle({
+      binaries: [{ filename: `${identity.testCaseId}.txt`, contents: Buffer.from("failure"), mediaType: "text/plain", captureType: "log" }],
+      relationships: [attempt.id],
+      descriptor: (binaries) => ({
+        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(),
+        runId: source.runId, subject: { kind: "attempt", attemptId, testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId },
+        kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain",
+        binaryArtifactIds: binaries.map((binary) => binary.id),
+        binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
+        telemetryFindings: [{ kind: "console" as const, level: "error", message: "failure" }],
+        provenance: { captureType: "log" as const, url: environment.baseUrl, browser: "chromium", build: "fixture", capturedAt: "2026-07-23T00:01:00.000Z", testcaseId: identity.testCaseId },
+      }),
+    });
+    const generated = await generateBugReport({ workspace: source, attemptId, unsafeRerunReason: "Fixture preserves a single captured production defect observation." });
+    if (generated.kind !== "BUG") throw new Error("Expected a product bug report");
+    bugArtifactId = generated.record.id; bugSha256 = generated.record.sha256;
+  }
+  await source.finalize("execute");
+  const runId = source.runId;
+  await source.close();
+  return { runId, bugArtifactId, bugSha256 };
+}
 
 describe("workflow scaffold", () => {
   it("bootstraps the first complete terminal planning bundle from explicit canonical files", async () => {
@@ -118,5 +205,150 @@ describe("workflow scaffold", () => {
     await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "unsafe.json"), sourceRoot: root, sourceRunId: workspace.runId })).rejects.toThrow(/non-planning/i);
     const verified = await runCli(["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], { cwd: root });
     expect(verified.exitCode).toBe(0); expect(JSON.parse(verified.stdout)).toMatchObject({ compatible: true });
+  });
+});
+
+// Phase 8b MODE-1: the CLI wiring the three previously-unreachable modes (exploratory, retest,
+// regression) need -- an unknown mode, a charter, a change scope, and a retest source bug, all
+// refused or resolved at scaffold time rather than deep inside `workflow run`.
+describe("workflow scaffold: modes, charter, change scope, and retest wiring", () => {
+  let root: string;
+  let envPath: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "qa-workflow-modes-"));
+    roots.push(root);
+    envPath = join(root, "environment.json");
+    await writeFile(envPath, JSON.stringify(environment));
+  });
+
+  it("refuses a mode that is not a public workflow mode", async () => {
+    await expect(scaffoldWorkflowInput({ root, mode: "regresion", outputPath: join(root, "typo.json"), environmentPath: envPath }))
+      .rejects.toThrow(/mode/i);
+  });
+
+  it("inlines a change scope so the run input stays one closed file", async () => {
+    const scopePath = join(root, "scope.json");
+    await writeFile(scopePath, JSON.stringify({ changes: [{ id: "CHG-1", requirementIds: ["REQ-1"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "declared-change", reference: "PR-482" } }));
+
+    const input = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "regression.json"), environmentPath: envPath, changeScopePath: scopePath });
+
+    expect(input.changeScope).toMatchObject({ provenance: { kind: "declared-change", reference: "PR-482" } });
+    expect(input.runtime).toMatchObject({ changeScopeSourceId: "local-change-scope" });
+  });
+
+  it("refuses a change scope declaring no changes, at the edge", async () => {
+    const scopePath = join(root, "empty-scope.json");
+    await writeFile(scopePath, JSON.stringify({ changes: [], provenance: { kind: "declared-change", reference: "PR-0" } }));
+
+    await expect(scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "empty.json"), environmentPath: envPath, changeScopePath: scopePath }))
+      .rejects.toThrow(/change/i);
+  });
+
+  it("validates a charter at scaffold time rather than deep in the run", async () => {
+    const charterPath = join(root, "charter.json");
+    await writeFile(charterPath, JSON.stringify({ charterId: "CHARTER-1", mission: "explore checkout", scope: ["checkout"], roles: ["member"], heuristics: ["follow the money"], safetyRules: ["RULE-1"], actions: [{ actionId: "ACT-1", target: "/checkout", kind: "navigate", sideEffect: "none", safetyRuleId: "RULE-1" }], actionBudget: 5, timeBudgetMinutes: 10, stopConditions: ["budget spent"] }));
+
+    const input = await scaffoldWorkflowInput({ root, mode: "exploratory", outputPath: join(root, "exploratory.json"), environmentPath: envPath, charterPath });
+
+    expect(input.charter).toMatchObject({ charterId: "CHARTER-1" });
+  });
+
+  it("refuses a charter whose action list exceeds its budget", async () => {
+    const charterPath = join(root, "over-budget.json");
+    await writeFile(charterPath, JSON.stringify({
+      charterId: "CHARTER-2", mission: "explore checkout", scope: ["checkout"], roles: ["member"],
+      heuristics: ["follow the money"], safetyRules: ["RULE-1"],
+      actions: [{ actionId: "ACT-1", target: "/checkout", kind: "navigate", sideEffect: "none", safetyRuleId: "RULE-1" }],
+      actionBudget: 0, timeBudgetMinutes: 10, stopConditions: ["budget spent"],
+    }));
+
+    await expect(scaffoldWorkflowInput({ root, mode: "exploratory", outputPath: join(root, "over-budget-input.json"), environmentPath: envPath, charterPath }))
+      .rejects.toThrow(/budget/i);
+  });
+
+  it("reads the retest source bug and its checksum from the named run's manifest", async () => {
+    // TWO RUNS ARE REQUIRED HERE, and this is a consequence of the design rather than a fixture quirk:
+    // scaffold's bundle path refuses a run holding non-planning artifacts (src/cli/workflow.ts:85), so
+    // the executed run below cannot supply the bundle. `planRunId` is a separate planning-only terminal
+    // run carrying the SAME identity triple, matched by `planningOnlyRun`/`executedRunWithBug` sharing
+    // `bugIdentity`.
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const executed = await executedRunWithBug(root);
+
+    const input = await scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "retest.json"), sourceRoot: root, sourceRunId: planRunId, bugRunId: executed.runId });
+
+    expect(input.linkedRunId).toBe(executed.runId);
+    expect(input.retest).toMatchObject({ sourceBug: { artifactId: executed.bugArtifactId, sha256: executed.bugSha256 } });
+  });
+
+  it("refuses a bug run holding several bug reports unless one is named", async () => {
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const executed = await executedRunWithBug(root, { bugs: 2 });
+    await expect(scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "ambiguous.json"), sourceRoot: root, sourceRunId: planRunId, bugRunId: executed.runId }))
+      .rejects.toThrow(/bug/i);
+  });
+
+  it("resolves the exact bug artifact named by --bug-artifact-id among several", async () => {
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const executed = await executedRunWithBug(root, { bugs: 2 });
+    const input = await scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "named.json"), sourceRoot: root, sourceRunId: planRunId, bugRunId: executed.runId, bugArtifactId: executed.bugArtifactId });
+    expect(input.retest).toMatchObject({ sourceBug: { artifactId: executed.bugArtifactId, sha256: executed.bugSha256 } });
+  });
+
+  // Resolves the ambiguity the brief flagged under "Before You Begin": naming an artifact that exists
+  // but is not a `bug-report` is refused exactly like naming an ID that does not exist at all --
+  // `bugArtifactId` is looked up within the bug-report subset, never the unfiltered artifact list, so
+  // it can never resolve to some other registered artifact type.
+  it("refuses a --bug-artifact-id that does not name a registered bug report", async () => {
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const executed = await executedRunWithBug(root);
+    const manifest = JSON.parse(await readFile(join(root, "qa-results", executed.runId, "artifact-manifest.json"), "utf8")) as { artifacts: readonly { id: string; type: string }[] };
+    const nonBugArtifact = manifest.artifacts.find((artifact) => artifact.type !== "bug-report");
+    if (!nonBugArtifact) throw new Error("expected the executed run to hold a non-bug-report artifact");
+    await expect(scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "wrong-artifact.json"), sourceRoot: root, sourceRunId: planRunId, bugRunId: executed.runId, bugArtifactId: nonBugArtifact.id }))
+      .rejects.toThrow(/bug/i);
+  });
+
+  // The brief's mutation table names two rows that would otherwise only redden a Task 5 test that does
+  // not exist yet in this codebase: dropping `changeScopeSources` from `runLocalWorkflow`, and dropping
+  // the production `linkedRunId` pre-check. Both are covered here, minimally and directly, rather than
+  // deferred -- neither needs the full six-mode CLI reachability harness Task 5 owns.
+
+  it("refuses a retest with no linked run before any workspace is created (production adapter)", async () => {
+    // Exercises `createQaTester` directly -- the production seam `runLocalWorkflow` calls into -- with an
+    // EMPTY runtime registry and no bundle. The pre-check under test (run-workflow.ts, beside the former
+    // `ensureCanonicalBundle`/`runQaTesterWithAdapters` boundary) fires before `RunWorkspace.create`, so
+    // reaching it needs nothing else configured; if the mutation table's "drop the linkedRunId pre-check"
+    // row were applied, this would instead run to `RunWorkspace.create` and fail later for a missing
+    // runtime, never mentioning the missing link.
+    const { createQaTester } = await import("../../src/orchestration/qa-tester.js");
+    await expect(createQaTester({})({ root, mode: "retest", environmentProfile: environment, retest: { sourceBug: { artifactId: "BUG-1", sha256: "a".repeat(64) } } }))
+      .rejects.toThrow(/linked immutable run/i);
+    // No run directory was created: the guard fires before any workspace exists, so an invalid
+    // scaffolded retest leaves no orphaned qa-results/<runId> behind for a caller to clean up.
+    await expect(readdir(join(root, "qa-results"))).rejects.toThrow(/ENOENT/);
+  });
+
+  it("wires a scaffolded change scope into runLocalWorkflow's change-scope source registry", async () => {
+    const scopePath = join(root, "cli-scope.json");
+    await writeFile(scopePath, JSON.stringify({ changes: [{ id: "CHG-1", requirementIds: ["REQ-1"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "declared-change", reference: "PR-482" } }));
+    const inputPath = join(root, "retest-input.json");
+    await scaffoldWorkflowInput({ root, mode: "retest", outputPath: inputPath, environmentPath: envPath, changeScopePath: scopePath });
+    // Hand-add a linkedRunId (validly shaped but pointing at no real run) and a placeholder source bug
+    // so only the change-scope wiring is under test here -- neither is ever dereferenced, because the
+    // run fails at the bundle check below, before `reproduce-bug` would open the linked run or read the
+    // bug reference.
+    const raw = JSON.parse(await readFile(inputPath, "utf8")) as Record<string, unknown>;
+    await writeFile(inputPath, JSON.stringify({ ...raw, linkedRunId: "20260101T000000Z-abcdef", retest: { sourceBug: { artifactId: "BUG-1", sha256: "a".repeat(64) } } }));
+
+    // Without `changeScopeSources` wired, `runLocalWorkflow` fails at run-workflow.ts's retest gate with
+    // "change-scope source is not configured" BEFORE the bundle is even checked (run-workflow.ts, the
+    // `if (input.mode === "retest")` block). With it wired, that gate passes and the run instead fails
+    // downstream for lacking a canonical plan bundle -- proof, by way of the DIFFERENT failure reached,
+    // that the registry `runLocalWorkflow` populates from `input.changeScope` was actually consulted. If
+    // the mutation table's "drop changeScopeSources from runLocalWorkflow" row were applied, this
+    // assertion would see the earlier "not configured" message instead and fail.
+    await expect(runLocalWorkflow({ cwd: root, inputPath })).rejects.toThrow(/canonical plan bundle/i);
   });
 });

@@ -138,8 +138,21 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .option("--environment-file <json>", "Path to an environment profile JSON file")
     .option("--source-root <path>", "Root directory to copy an existing run's artifacts from")
     .option("--source-run-id <id>", "Run ID to copy artifacts from within --source-root")
-    .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string }) => {
-      stdout += `${JSON.stringify(await scaffoldWorkflowInput({ root: commandOptions.root, mode: commandOptions.mode, outputPath: commandOptions.output, ...(commandOptions.environmentFile === undefined ? {} : { environmentPath: commandOptions.environmentFile }), ...(commandOptions.sourceRoot === undefined ? {} : { sourceRoot: commandOptions.sourceRoot }), ...(commandOptions.sourceRunId === undefined ? {} : { sourceRunId: commandOptions.sourceRunId }) }))}\n`;
+    .option("--charter-file <path>", "Path to an exploration charter JSON file (exploratory mode)")
+    .option("--change-scope-file <path>", "Path to a change scope JSON file, inlined into the input (retest and regression modes)")
+    .option("--bug-run-id <id>", "Terminal run ID holding the bug report a retest reproduces")
+    .option("--bug-artifact-id <id>", "Which bug report in --bug-run-id, when it holds several")
+    .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string; charterFile?: string; changeScopeFile?: string; bugRunId?: string; bugArtifactId?: string }) => {
+      stdout += `${JSON.stringify(await scaffoldWorkflowInput({
+        root: commandOptions.root, mode: commandOptions.mode, outputPath: commandOptions.output,
+        ...(commandOptions.environmentFile === undefined ? {} : { environmentPath: commandOptions.environmentFile }),
+        ...(commandOptions.sourceRoot === undefined ? {} : { sourceRoot: commandOptions.sourceRoot }),
+        ...(commandOptions.sourceRunId === undefined ? {} : { sourceRunId: commandOptions.sourceRunId }),
+        ...(commandOptions.charterFile === undefined ? {} : { charterPath: commandOptions.charterFile }),
+        ...(commandOptions.changeScopeFile === undefined ? {} : { changeScopePath: commandOptions.changeScopeFile }),
+        ...(commandOptions.bugRunId === undefined ? {} : { bugRunId: commandOptions.bugRunId }),
+        ...(commandOptions.bugArtifactId === undefined ? {} : { bugArtifactId: commandOptions.bugArtifactId }),
+      }))}\n`;
     });
   workflowCommand.command("bootstrap")
     .description("Bootstrap a planning bundle (requirement analysis, plan, test cases, coverage) into a workflow input")

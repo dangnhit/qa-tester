@@ -971,6 +971,10 @@ async function ensureCanonicalBundle(state: WorkflowExecutionState): Promise<voi
 }
 
 async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWorkflowInput, adapters: typeof closedOperationAdapters): Promise<WorkflowResult> {
+  // The unsafe seam already pre-checks this (see the runWorkflowWithRegistry branch in this file);
+  // without the same check here a scaffolded retest fails later, inside reproduce-bug, with a
+  // message about the source run rather than about the missing link.
+  if (input.mode === "retest" && !input.linkedRunId) throw new QaSkillsError("Retest creates a linked immutable run", "ARTIFACT_BINDING");
   const workspace = input.resumeRunId === undefined
     ? await RunWorkspace.create({ root: input.root, mode: input.mode, environmentProfile: input.environmentProfile, ...(input.linkedRunId === undefined ? {} : { linkedRunId: input.linkedRunId }) })
     : await RunWorkspace.open(input.root, input.resumeRunId);
