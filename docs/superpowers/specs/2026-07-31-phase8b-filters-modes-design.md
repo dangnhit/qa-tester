@@ -174,10 +174,20 @@ checkpoint on `validate`. Attribution is derived instead — a triple in a batch
 is lane 1 — the same derive-on-read habit `semantic-rules.ts:666-690` already uses for the gate, and the habit
 Phase 8a's review confirmed by finding the gate re-derived on read rather than stored twice.
 
-**Reporting.** The QA report records the lane split for the selected set (covered by observation, covered by
-driving) from that derivation. No new artifact type, no gate rule change: with lane 1 driving the residual,
-every selected case is covered by one lane or the other unless driving itself fails, which is already an error
-path.
+**Reporting — corrected against the schema after the design was drafted.** An earlier draft of this section
+had the QA report carry the lane split as a new field. It cannot: `qa-execution-report.schema.json` is
+`additionalProperties: false` with `schemaVersion` pinned by `const`, so the field would bump the const and
+invalidate every existing run's report on `validate` — the same cost that ruled out the checkpoint field two
+paragraphs up, and it applies identically here.
+
+So **no artifact records the split, and none needs to.** It is derivable from the run's own artifacts by any
+reader: a triple in a `test-result-batch` entry was observed, a `test-result` was driven, and Phase 8a's
+projections already read both lanes (`projection-model.ts`). Squeezing the split into an existing field such
+as `excludedNotRun` was rejected — those cases were excluded by the selection, not covered by another lane, and
+overloading the field would make the report say something false. No gate rule change either: with lane 1
+driving the residual, every selected case is covered by one lane or the other unless driving itself fails,
+which is already an error path, and the amended checkpoint invariant is what makes that structural rather than
+a matter of trust.
 
 ### Half 2 — MODE-1
 
