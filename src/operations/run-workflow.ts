@@ -13,6 +13,7 @@ import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
 import { executeTestInstance } from "./execute-browser-test.js";
 import { pendingHumanInput, type PendingHumanInput } from "./human-input.js";
+import { pendingObservedExecution, type PendingObservedExecution } from "./observed-pause.js";
 import { attachEvidence, captureEvidence, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
 import { normalizeGeometry } from "../evidence/geometry.js";
@@ -80,12 +81,14 @@ export type WorkflowInput = Readonly<{
 }>;
 export type WorkflowTerminalStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "BLOCKED" | "ABORTED";
 /**
- * `AWAITING_RUNTIME` and `AWAITING_HUMAN_INPUT` are the two non-terminal outcomes: neither finalizes
- * the run, both leave a resumable checkpoint and a writable workspace. They differ in whose action
- * unblocks them — a caller-side runtime registry, or an identified person recording an artifact — and
- * only the second needs to say what that artifact is, which is what `pendingHumanInput` carries.
+ * `AWAITING_RUNTIME`, `AWAITING_HUMAN_INPUT`, and `AWAITING_OBSERVED_EXECUTION` are the three
+ * non-terminal outcomes: none finalizes the run, and all three leave a resumable checkpoint and a
+ * writable workspace. They differ in whose action unblocks them — a caller-side runtime registry, an
+ * identified person recording an artifact, or the `qa-skill execute playwright` command registering a
+ * batch into this same run — and the latter two name what unblocks them, which is what
+ * `pendingHumanInput` and `pendingObservedExecution` respectively carry.
  */
-export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | "AWAITING_HUMAN_INPUT" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation; pendingHumanInput?: PendingHumanInput }>;
+export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | "AWAITING_HUMAN_INPUT" | "AWAITING_OBSERVED_EXECUTION" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation; pendingHumanInput?: PendingHumanInput; pendingObservedExecution?: PendingObservedExecution }>;
 
 export type { PendingHumanInput, PendingHumanInputSubject } from "./human-input.js";
 
@@ -122,6 +125,10 @@ export type QaWorkflowInput = Readonly<{
   runtime?: Readonly<{ browserManagerId?: string; secretResolverId?: string; testDataRegistryId?: string; testDataHookIds?: readonly string[]; evidencePolicyId?: string; externalPermitRegistryId?: string; changeScopeSourceId?: string }>;
   charter?: ExplorationCharter;
   retest?: Readonly<{ sourceBug: RegisteredArtifactRef }>;
+  /** Declares that a Runtime-Observed Execution (`qa-skill execute playwright`) will supply part of this
+   *  run's execution. The run pauses in front of `execute-browser-test` until a batch exists; see
+   *  src/operations/observed-pause.ts for the predicate. */
+  observedExecution?: Readonly<{ expected: true }>;
 }>;
 
 function array(value: unknown): readonly unknown[] { return Array.isArray(value) ? value as unknown[] : []; }
@@ -136,7 +143,7 @@ function asString(value: unknown, label: string): string {
 }
 
 function workflowInputChecksum(input: QaWorkflowInput): string {
-  return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, testDataHookIds: input.runtime?.testDataHookIds, charter: input.charter, retest: input.retest }));
+  return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, testDataHookIds: input.runtime?.testDataHookIds, charter: input.charter, retest: input.retest, observedExecution: input.observedExecution }));
 }
 
 type WorkflowStateSnapshot = Readonly<{
@@ -995,6 +1002,16 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
       const pending = await pendingHumanInput(workspace, name, state.executionCaseIds);
       if (pending !== undefined) {
         return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_HUMAN_INPUT", operationOrder: order, outputs, validation: await workspace.validate(input.mode), pendingHumanInput: pending };
+      }
+      // The observed-execution checkpoint. Same position and same four properties as the human one
+      // above — registers nothing, advances no checkpoint, never finalizes, leaves the workspace
+      // writable — because the command that clears it (`qa-skill execute playwright`) registers INTO
+      // this run. Placed after the human pause so a run that needs both reports the human one first:
+      // an approval is a precondition of driving anything, and the operator can record it while the
+      // observed suite runs.
+      const observed = await pendingObservedExecution(workspace, name, input.observedExecution?.expected === true);
+      if (observed !== undefined) {
+        return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_OBSERVED_EXECUTION", operationOrder: order, outputs, validation: await workspace.validate(input.mode), pendingObservedExecution: observed };
       }
       const output = await adapter.execute(state);
       await adapter.assertPostcondition(workspace, output as never);

@@ -30,6 +30,19 @@ describe("qa-skill workflow run CLI exit-code wiring", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ outcome: "AWAITING_RUNTIME" });
   });
 
+  it("assigns BLOCKED for a non-throwing AWAITING_OBSERVED_EXECUTION result instead of leaving the default SUCCESS", async () => {
+    runLocalWorkflowMock.mockResolvedValueOnce({
+      runId: "RUN-AWAITING-OBSERVED", mode: "regression", outcome: "AWAITING_OBSERVED_EXECUTION", operationOrder: [], outputs: {}, validation: { valid: true, diagnostics: [] },
+      pendingObservedExecution: { operation: "execute-browser-test", command: "execute playwright", reason: "The run expects a Runtime-Observed Execution." },
+    });
+
+    const result = await runCli(["workflow", "run", "--input", "unused.json"], { cwd: "/tmp" });
+
+    expect(result.exitCode).toBe(ExitCode.BLOCKED);
+    expect(result.exitCode).not.toBe(ExitCode.SUCCESS);
+    expect(JSON.parse(result.stdout)).toMatchObject({ outcome: "AWAITING_OBSERVED_EXECUTION" });
+  });
+
   it("assigns UNMET_OBLIGATIONS for a NOT_READY release-gate recommendation on an otherwise-clean COMPLETED result", async () => {
     runLocalWorkflowMock.mockResolvedValueOnce({
       runId: "RUN-NOT-READY", mode: "full", outcome: "COMPLETED", operationOrder: [], outputs: {}, validation: { valid: true, diagnostics: [] }, releaseRecommendation: "NOT_READY",
