@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -267,9 +267,38 @@ describe("workflow scaffold: modes, charter, change scope, and retest wiring", (
       .rejects.toThrow(/budget/i);
   });
 
+  // A nonexistent run ID must refuse cleanly, not crash on a raw Node ENOENT: an unhandled ENOENT
+  // propagates through program.ts's generic catch as ABORTED_OR_INTERNAL (exit 5) with a raw filesystem
+  // path in the message, rather than the same clean INVALID_ARTIFACT (exit 3) every other scaffold-time
+  // refusal in this file uses.
+
+  it("refuses a --bug-run-id that does not exist, rather than crashing on a raw ENOENT", async () => {
+    await expect(scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "no-such-bug-run.json"), environmentPath: envPath, bugRunId: "20260101T000000Z-abcdef" }))
+      .rejects.toThrow(/bug run 20260101T000000Z-abcdef was not found/i);
+  });
+
+  it("refuses a --source-run-id that does not exist, rather than crashing on a raw ENOENT", async () => {
+    await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "no-such-source-run.json"), sourceRoot: root, sourceRunId: "20260101T000000Z-abcdef" }))
+      .rejects.toThrow(/source run 20260101T000000Z-abcdef was not found/i);
+  });
+
+  // The ENOENT translation above must not widen into swallowing every read failure: a run directory
+  // that EXISTS but holds an unparseable manifest is a different, non-"missing" error (no `.code` at
+  // all, since it never reaches the filesystem layer) and must still surface as the internal error it
+  // is, not be folded into the "was not found" edge refusal.
+  it("does not swallow a non-ENOENT error reading a bug run's manifest", async () => {
+    const corruptRunId = "20260101T000000Z-fedcba";
+    await mkdir(join(root, "qa-results", corruptRunId), { recursive: true });
+    await writeFile(join(root, "qa-results", corruptRunId, "artifact-manifest.json"), "not valid json");
+    const error: Error = await scaffoldWorkflowInput({ root, mode: "retest", outputPath: join(root, "corrupt-bug-run.json"), environmentPath: envPath, bugRunId: corruptRunId })
+      .then(() => { throw new Error("expected scaffoldWorkflowInput to reject"); }, (caught: unknown) => caught as Error);
+    expect(error.message).not.toMatch(/was not found/i);
+    expect(error.message).toMatch(/json/i);
+  });
+
   it("reads the retest source bug and its checksum from the named run's manifest", async () => {
     // TWO RUNS ARE REQUIRED HERE, and this is a consequence of the design rather than a fixture quirk:
-    // scaffold's bundle path refuses a run holding non-planning artifacts (src/cli/workflow.ts:85), so
+    // scaffold's bundle path refuses a run holding non-planning artifacts (src/cli/workflow.ts), so
     // the executed run below cannot supply the bundle. `planRunId` is a separate planning-only terminal
     // run carrying the SAME identity triple, matched by `planningOnlyRun`/`executedRunWithBug` sharing
     // `bugIdentity`.

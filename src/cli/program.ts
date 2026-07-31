@@ -140,7 +140,7 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .option("--source-run-id <id>", "Run ID to copy artifacts from within --source-root")
     .option("--charter-file <path>", "Path to an exploration charter JSON file (exploratory mode)")
     .option("--change-scope-file <path>", "Path to a change scope JSON file, inlined into the input (retest and regression modes)")
-    .option("--bug-run-id <id>", "Terminal run ID holding the bug report a retest reproduces")
+    .option("--bug-run-id <id>", "Terminal run ID holding the bug report a retest reproduces, looked up under --root (not --source-root)")
     .option("--bug-artifact-id <id>", "Which bug report in --bug-run-id, when it holds several")
     .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string; charterFile?: string; changeScopeFile?: string; bugRunId?: string; bugArtifactId?: string }) => {
       stdout += `${JSON.stringify(await scaffoldWorkflowInput({

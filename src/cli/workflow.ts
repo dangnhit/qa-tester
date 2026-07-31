@@ -74,6 +74,25 @@ export async function bootstrapPlanningBundle(options: BootstrapOptions): Promis
   }
 }
 
+/** True only for "this file does not exist" -- a permission error, an I/O error, or any other errno
+ *  must still surface as the internal error it is, never folded into an edge refusal alongside it. */
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+/** Reads a run's manifest and metadata, translating "this run does not exist" into a named edge
+ *  refusal rather than a raw filesystem crash. Names the run ID given, never the resolved path. */
+async function readRunManifestAndMetadata(runPath: string, runId: string, label: string): Promise<{ manifestValue: unknown; metadataValue: unknown }> {
+  try {
+    const manifestValue: unknown = JSON.parse(await readFile(join(runPath, "artifact-manifest.json"), "utf8"));
+    const metadataValue: unknown = JSON.parse(await readFile(join(runPath, "run-metadata.json"), "utf8"));
+    return { manifestValue, metadataValue };
+  } catch (error: unknown) {
+    if (isMissingFileError(error)) throw new QaSkillsError(`${label} run ${runId} was not found`, "INVALID_ARTIFACT");
+    throw error;
+  }
+}
+
 /** Create a closed workflow input from explicit paths; never discovers a "latest" run. */
 export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<Record<string, unknown>> {
   // Refused at the edge, before any file is even opened: `mode` stays a plain `string` at this CLI
@@ -85,8 +104,7 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
   if (options.sourceRoot !== undefined || options.sourceRunId !== undefined) {
     if (!options.sourceRoot || !options.sourceRunId) throw new QaSkillsError("Source root and source run ID must be provided together", "INVALID_ARTIFACT");
     const sourcePath = join(resolve(options.sourceRoot), "qa-results", options.sourceRunId);
-    const manifestValue: unknown = JSON.parse(await readFile(join(sourcePath, "artifact-manifest.json"), "utf8"));
-    const metadataValue: unknown = JSON.parse(await readFile(join(sourcePath, "run-metadata.json"), "utf8"));
+    const { manifestValue, metadataValue } = await readRunManifestAndMetadata(sourcePath, options.sourceRunId, "Source");
     if (!isRecord(metadataValue) || !["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"].includes(String(metadataValue.status))) throw new QaSkillsError("Source run must be terminal", "INVALID_ARTIFACT");
     if (!isRecord(manifestValue) || !Array.isArray(manifestValue.artifacts)) throw new QaSkillsError("Source artifact manifest is invalid", "INVALID_ARTIFACT");
     const artifacts = manifestValue.artifacts.filter(isRecord).filter((artifact) => [artifact.id, artifact.type, artifact.sha256, artifact.relativePath].every((part) => typeof part === "string"));
@@ -131,8 +149,7 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
   let sourceBug: Record<string, unknown> | undefined;
   if (options.bugRunId !== undefined) {
     const bugRunPath = join(resolve(options.root), "qa-results", options.bugRunId);
-    const bugManifestValue: unknown = JSON.parse(await readFile(join(bugRunPath, "artifact-manifest.json"), "utf8"));
-    const bugMetadataValue: unknown = JSON.parse(await readFile(join(bugRunPath, "run-metadata.json"), "utf8"));
+    const { manifestValue: bugManifestValue, metadataValue: bugMetadataValue } = await readRunManifestAndMetadata(bugRunPath, options.bugRunId, "Bug");
     // The same terminal-status check the bundle path above applies to a source run: a non-terminal run's
     // manifest can still grow, so a bug reference read from it would not be the checksum-bound one the
     // caller will get later.
