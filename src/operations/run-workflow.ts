@@ -8,6 +8,7 @@ import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactInd
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
+import { observedCaseIdentities, observedCoveredCaseIds } from "../core/observed-coverage.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
@@ -218,9 +219,18 @@ async function assertEvidencePostcondition(workspace: RunWorkspace, output: read
 
 async function assertResultPostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
   await assertRegisteredArtifacts(workspace, output);
-  if (output.length === 0 || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
   const artifacts = await workspace.readRegisteredArtifacts();
-  // Invariance: `artifacts` is read here and this postcondition registers nothing, so both indices serve
+  // An empty output is legal in exactly one state: a filtered run whose whole selection was covered by a
+  // Runtime-Observed Execution, so there was nothing left to drive. Anything else empty is the bug this
+  // check was written for — an execution operation that registered nothing and reported success.
+  //
+  // Conditioned on the observed question rather than relaxed for every caller, because `reproduce-bug`
+  // shares this postcondition and CANNOT legitimately return an empty output: `sourceBugFromReference`
+  // refuses a bug with zero source attempt ids, and the branch then refuses any result set that does not
+  // reproduce every one of those scenarios. Its own refusal is the specific one, and it stays reachable.
+  const observedNothing = observedCaseIdentities(artifacts).size === 0;
+  if ((output.length === 0 && observedNothing) || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
+  // Invariance: `artifacts` is read above and this postcondition registers nothing, so both indices serve
   // every iteration of the loop below. Evidence carries its attempt inside the `subject` union while an
   // Evidence Gap still carries it flat, so the two types are keyed by their own accessor into one index
   // — the `.some()` this replaces admitted exactly those two types and nothing else.
@@ -1096,8 +1106,26 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
       state.regressionAttemptIds = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && !reproduced.has(String(artifact.value.attemptId))).map((artifact) => asString(artifact.value.attemptId, "regression attempt ID"));
       return results as WorkflowOperationOutputMap[Name];
     }
-    if (state.executionCaseIds.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
-    return executeWithRuntime(workspace, runtime, input.runtime ?? {}, state.executionCaseIds) as Promise<WorkflowOperationOutputMap[Name]>;
+    // A filtered run's selection is one filter over TWO lanes: whatever a Runtime-Observed Execution
+    // already covered is not driven again. The identity compared is the triple a batch entry carries
+    // (src/core/observed-coverage.ts); nothing here reads a spec path, because an entry has none.
+    // `state.executionCaseIds` itself is left alone: `snapshotWorkflowState` writes the checkpoint's
+    // `state.executionCases` from the SELECTION, so the residual narrows only what is DRIVEN, and the
+    // checkpoint keeps recording the whole selection for the union comparison to be asked of.
+    const all = await artifacts();
+    const observedCases = observedCoveredCaseIds(all);
+    const residual = state.executionCaseIds.filter((id) => !observedCases.has(id));
+    // Zero residual is legal ONLY when observation covers the whole selection. The original refusal
+    // still fires for the state its message describes: nothing to execute and nothing observed either.
+    if (residual.length === 0 && state.executionCaseIds.length === 0) throw new QaSkillsError("Runtime execution requires imported approved canonical test cases", "ARTIFACT_BINDING");
+    // Deliberately redundant with `executeWithRuntime`, whose per-case loop simply does not run on an
+    // empty worklist — deleting this line changes no test, which was measured rather than assumed. It
+    // stays because "a fully observed selection drives nothing" is decided HERE, where the residual is
+    // computed, instead of being inherited from whether another function happens to tolerate an empty
+    // list: a future empty-worklist refusal there would be reasonable, and would silently break a
+    // lane-2-only run if this branch were not the one answering the question.
+    if (residual.length === 0) return [] as unknown as WorkflowOperationOutputMap[Name];
+    return executeWithRuntime(workspace, runtime, input.runtime ?? {}, residual) as Promise<WorkflowOperationOutputMap[Name]>;
   }
   if (name === "collect-evidence") {
     if (input.mode === "retest") {

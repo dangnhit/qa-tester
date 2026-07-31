@@ -33,10 +33,21 @@ describe("artifact profiles", () => {
     expect(evaluatePublicTerminalProfile(profile, [...lane2, "requirement-analysis", "test-plan", "coverage-obligation", "release-gate"]).valid).toBe(true);
   });
 
-  it.each([["retest"], ["regression"]] as const)("still requires a lane-1 attempt in %s mode, which Phase 8 owns", (profile) => {
+  it("still requires a lane-1 attempt in retest mode, which its own reproduction guarantees", () => {
     const lane2 = ["run-metadata", "environment-profile", "test-case", "test-result-batch", "retest-result", "regression-selection"];
 
-    expect(evaluateArtifactProfile(profile, lane2).diagnostics).toEqual([expect.objectContaining({ artifactType: "test-result" })]);
+    expect(evaluateArtifactProfile("retest", lane2).diagnostics).toEqual([expect.objectContaining({ artifactType: "test-result" })]);
+  });
+
+  it("accepts a regression run whose whole selection was covered by an observed batch", () => {
+    // Phase 8b: one selection filters BOTH lanes, so a regression run drives only what lane 2 did not
+    // observe and legitimately drives nothing when lane 2 observed all of it. Union coverage of the
+    // selection is asserted by the checkpoint chain (src/core/inspect-workspace-state.ts), not here.
+    const lane2 = ["run-metadata", "environment-profile", "test-case", "test-result-batch", "regression-selection"];
+
+    expect(evaluateArtifactProfile("regression", lane2).valid).toBe(true);
+    expect(evaluateArtifactProfile("regression", ["run-metadata", "environment-profile", "test-case", "regression-selection"]).diagnostics)
+      .toEqual([expect.objectContaining({ artifactType: "test-result or test-result-batch" })]);
   });
 
   it("rejects unknown unaudited profile names", () => {

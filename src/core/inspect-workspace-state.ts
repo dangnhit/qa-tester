@@ -16,6 +16,7 @@ import { sha256, sha256Text } from "./checksum.js";
 import { QaSkillsError } from "./errors.js";
 import { assertPathWithin, assertRealpathWithin, manifestRelativePath } from "./fs.js";
 import { operationsForMode, type WorkflowOperationName } from "./modes.js";
+import { observedCoveredCaseIds } from "./observed-coverage.js";
 import { semanticRules, type CrossRunView, type RelatedArtifact, type SemanticContext } from "./semantic-rules.js";
 import { array, canonicalJson, isRecord } from "./values.js";
 
@@ -437,6 +438,12 @@ export async function inspectWorkspaceState(
 
   const checkpoints = artifacts.filter((artifact) => artifact.valid && artifact.record.type === "workflow-checkpoint" && artifact.value !== undefined)
     .sort((left, right) => Number(left.value?.revision) - Number(right.value?.revision));
+  // Hoisted out of the loop below, which — unlike the fixpoint above — cannot change what it reads: every
+  // `invalidate` in it targets its own `workflow-checkpoint`, never a `test-case` or `test-result-batch`,
+  // so the observed set is invariant for the whole loop. Read AFTER the fixpoint has settled on purpose:
+  // a batch its own rule invalidated is already `valid === false` here and therefore covers nothing, which
+  // is what stops a rejected observation from suppressing the requirement to have driven a case.
+  const observedCaseIds = observedCoveredCaseIds(artifacts);
   for (const [index, checkpoint] of checkpoints.entries()) {
     const value = checkpoint.value as Record<string, unknown>;
     const prior = checkpoints[index - 1];
@@ -466,6 +473,16 @@ export async function inspectWorkspaceState(
       const artifact = artifacts.find((candidate) => candidate.record.id === id && candidate.record.type === "test-case");
       return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
     }).filter((item): item is { artifactId: string; sha256: string } => item !== undefined) ?? []);
+    // Union coverage, not equality: a filtered run drives only the cases lane 2 did not observe, so the
+    // selection is satisfied by a driven `test-result` OR a `test-result-batch` entry carrying the same
+    // identity. Observed cases are intersected with the checkpoint's own selection first, so a lane-2
+    // suite that ran EXTRA tagged specs cannot widen what this checkpoint claims. The check stays total:
+    // a selected case covered by neither lane still invalidates.
+    const selectedIds = new Set(array(state?.executionCases).flatMap((item) => isRecord(item) && typeof item.artifactId === "string" ? [item.artifactId] : []));
+    const observedSelectedRefs = [...observedCaseIds].filter((id) => selectedIds.has(id)).flatMap((id) => {
+      const artifact = artifacts.find((candidate) => candidate.record.id === id);
+      return artifact === undefined ? [] : [{ artifactId: artifact.record.id, sha256: artifact.record.sha256 }];
+    });
     const selectionOutputRefs = outputs === undefined ? [] : array(outputs["select-regression"]);
     const selectionOutput = selectionOutputRefs.length === 1 && isRecord(selectionOutputRefs[0]) ? selectionOutputRefs[0] : undefined;
     const selectionArtifact = selectionOutput === undefined ? undefined : artifacts.find((artifact) => artifact.valid && artifact.record.type === "regression-selection" && artifact.record.id === selectionOutput.artifactId && artifact.record.sha256 === selectionOutput.sha256);
@@ -473,7 +490,7 @@ export async function inspectWorkspaceState(
     const selectionStateValid = !completed.includes("select-regression") || (state !== undefined && selectionArtifact !== undefined && selectedExecutionRefs !== undefined && state.selection !== undefined && sameCheckpointRefs([state.selection], selectionOutputRefs) && sameOrderedCheckpointRefs(array(state.executionCases), selectedExecutionRefs));
     const operationStateValid = state !== undefined
       && (!completed.includes("reproduce-bug") || sameCheckpointRefs(array(state.reproductionAttempts), outputs === undefined ? [] : array(outputs["reproduce-bug"])))
-      && (!completed.includes("execute-browser-test") || value.mode === "retest" || sameCheckpointRefs(array(state.executionCases), executionCaseRefs))
+      && (!completed.includes("execute-browser-test") || value.mode === "retest" || sameCheckpointRefs(array(state.executionCases), [...executionCaseRefs, ...observedSelectedRefs]))
       && selectionStateValid;
     if (value.runId !== expectedRunId || value.mode !== metadata.mode || value.inputChecksum === undefined || value.stateChecksum === undefined || new Set(completed).size !== completed.length || !outputReferencesValid || !stateReferencesValid || !operationStateValid || !validInitial || !validSuccessor) {
       changed = invalidate(checkpoint, diagnostics, "INVALID_REFERENCE", "Workflow checkpoints must form an immutable revision chain with verified operation outputs") || changed;

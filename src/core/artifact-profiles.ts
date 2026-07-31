@@ -16,12 +16,20 @@ export type ArtifactProfileEvaluation = { valid: boolean; diagnostics: ProfileDi
  * an observed batch structurally invalid — reporting an unmet obligation where the truth is that the
  * run was executed in the other lane.
  *
- * Deliberately NOT applied to `retest` or `regression`. `retest-result` binds every reproduction
- * scenario to a `sourceAttemptArtifactId` and an `attemptId`, and a batch entry has neither — it is
- * keyed by `entryId` precisely because no attempt was driven. `regression` is the weaker case (its
- * selection keys on the test-case identity triple, not on attempts), but extending either lane-2-ward
- * means deciding how an observed entry is re-executed and compared, which is Phase 8's retest and
- * regression work rather than a line in this table.
+ * Applied to `regression` since Phase 8b, which is the "Phase 8 work" the earlier deferral named. A
+ * regression selection is now ONE filter over both lanes: `execute-browser-test` drives only the selected
+ * cases lane 2 did not observe (src/operations/run-workflow.ts), so a selection an observed batch covered
+ * ENTIRELY legitimately drives nothing, and a profile naming only lane 1's artifact would call that run
+ * structurally invalid for executing everything it was asked to. It does not weaken the obligation: the
+ * checkpoint comparison in src/core/inspect-workspace-state.ts asks union coverage of both lanes, so a
+ * selected case covered by NEITHER still invalidates the run, and a run with nothing selected and nothing
+ * observed is still refused before any of this by `execute-browser-test` itself.
+ *
+ * Still deliberately NOT applied to `retest`. `retest-result` binds every reproduction scenario to a
+ * `sourceAttemptArtifactId` and an `attemptId`, and a batch entry has neither — it is keyed by `entryId`
+ * precisely because no attempt was driven. A retest also always drives its reproduction: the source bug
+ * must name at least one source attempt and `reproduce-bug` refuses any result set that does not
+ * reproduce every one of them, so a lane-1 attempt is not merely required here but guaranteed.
  */
 const executionRecord = ["test-result", "test-result-batch"] as const;
 
@@ -31,7 +39,7 @@ const requirements: Readonly<Record<ArtifactProfileName, readonly (readonly stri
   full: [["run-metadata"], ["environment-profile"], ["test-case"], executionRecord, ["qa-execution-report"], ["evidence", "evidence-gap"]],
   exploratory: [["run-metadata"], ["environment-profile"], ["exploration-charter"]],
   retest: [["run-metadata"], ["environment-profile"], ["test-result"], ["retest-result"]],
-  regression: [["run-metadata"], ["environment-profile"], ["regression-selection"], ["test-case"], ["test-result"]],
+  regression: [["run-metadata"], ["environment-profile"], ["regression-selection"], ["test-case"], executionRecord],
   cleanup: [["run-metadata"], ["environment-profile"], ["cleanup-run"]],
 };
 
