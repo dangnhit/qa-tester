@@ -14,10 +14,18 @@ export type PendingObservedExecution = Readonly<{
 /**
  * Stops in front of `execute-browser-test` while a filtered run still has no Runtime-Observed Execution.
  *
- * The condition is deliberately "no observed identity yet" rather than "no `test-result-batch` record":
- * a batch that failed its semantic rule observed nothing anybody can credit, so it must not clear the
- * pause — the same reason `observedCaseIdentities` (src/core/observed-coverage.ts) ignores it when
- * computing the residual. One fact, one reader.
+ * The condition is deliberately "no CREDITED identity yet" rather than "no `test-result-batch` record",
+ * and the dominant reason is that a batch can be registered and still have credited NOTHING: every entry
+ * `NOT_RUN` because each tagged spec skipped, or every entry `BLOCKED` because the runner was interrupted,
+ * or the batch stamped with a provenance that earns no credit anywhere. A run in that state is exactly
+ * where it was before lane 2 ran, and it says so by pausing again rather than falling back to driving.
+ *
+ * `observedCaseIdentities`'s `valid === false` filter is NOT what does the work on this path, and naming it
+ * as the reason would misdescribe the code: `readRegisteredArtifacts` throws on ANY diagnostic, so a batch
+ * its own semantic rule invalidated makes the resume ERROR OUT before this predicate is reached at all.
+ * That filter is live on the `inspectWorkspaceState` path instead. What the two paths share is the reader,
+ * not the reason: one fact about what lane 2 credited, answered in one place
+ * (src/core/observed-coverage.ts).
  *
  * Self-clearing and idempotent: a resume with still no batch pauses again identically, which is what
  * stops a resume from silently falling back to driving the whole selection.

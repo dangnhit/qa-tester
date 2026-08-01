@@ -92,6 +92,10 @@ export type WorkflowTerminalStatus = "COMPLETED" | "COMPLETED_WITH_FAILURES" | "
 export type WorkflowResult = Readonly<{ runId: string; mode: PublicWorkflowMode; outcome: "AWAITING_RUNTIME" | "AWAITING_HUMAN_INPUT" | "AWAITING_OBSERVED_EXECUTION" | WorkflowTerminalStatus; operationOrder: readonly WorkflowOperationName[]; outputs: Readonly<CorrelatedWorkflowOutputs>; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation; pendingHumanInput?: PendingHumanInput; pendingObservedExecution?: PendingObservedExecution }>;
 
 export type { PendingHumanInput, PendingHumanInputSubject } from "./human-input.js";
+/** Re-exported beside its sibling for the same reason: `WorkflowResult` exposes a
+ *  `pendingObservedExecution` field, so a consumer that handles the field must be able to NAME its
+ *  type without reaching into src/operations/. */
+export type { PendingObservedExecution } from "./observed-pause.js";
 
 /** A checksum-bound immutable source record.  Public workflows never accept a raw draft. */
 export type RegisteredArtifactRef = Readonly<{ artifactId: string; sha256: string }>;
@@ -143,6 +147,15 @@ function asString(value: unknown, label: string): string {
   return value;
 }
 
+/**
+ * The caller-declared half of a run's identity, so a resume cannot silently change what the paused run
+ * agreed to. `changeScope` is absent because it structurally cannot be here: it is a `workflow scaffold`
+ * FILE field, not a `QaWorkflowInput` field, and `runLocalWorkflow` turns it into a `changeScopeSources`
+ * entry in the RUNTIME registry — which this function does not receive and deliberately never checksums,
+ * exactly like `browserManagers`. The change scope is bound instead by its own immutable artifact:
+ * `registerChangeScope` records it with an `inputChecksum` and `changeScopeRule`
+ * (src/core/semantic-rules.ts) recomputes that on every read.
+ */
 function workflowInputChecksum(input: QaWorkflowInput): string {
   return sha256Text(JSON.stringify({ mode: input.mode, environmentProfile: input.environmentProfile, bundle: input.bundle, linkedRunId: input.linkedRunId, testDataHookIds: input.runtime?.testDataHookIds, charter: input.charter, retest: input.retest, observedExecution: input.observedExecution }));
 }

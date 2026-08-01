@@ -345,9 +345,14 @@ Lane 2 is never told what to run beyond `--spec-dir`. Only a spec whose `test(..
 is excluded and named in the command's own output (see [Two execution lanes](#two-execution-lanes) above).
 
 `changeScope` is authored by `--change-scope-file`, and its `provenance.kind` — `"declared-change"` above,
-or `"git-diff"`/`"user-change"` — is a caller-asserted label that `src/regression/change-scope.ts` does not
-verify against an actual diff or approval. Treat it the same way Phase 8a's SARIF export treats a
-change-scope-derived location: informative, never a proof.
+or `"git-diff"`/`"user-change"` — is a caller-asserted label. Two things are true of it and neither is the
+one people assume. It IS immutable once recorded: `registerChangeScope` folds the label into the change
+scope's `inputChecksum`, and `changeScopeRule` (`src/core/semantic-rules.ts`) recomputes that checksum on
+every read, so nobody can edit it afterwards. It is NOT verified: no code compares `"git-diff"` against an
+actual diff, or `"declared-change"` against an approval. It also earns nothing — `selectRegressionCases`
+(`src/regression/selector.ts`) reads only the five mapping arrays, never the label, so every selection
+decision comes from the declared arrays whatever the label claims. Read it as a durable record of what the
+caller said, not as evidence that anything was inspected.
 
 **`retest` mode does not participate in this filter, and `workflow scaffold` refuses
 `--observed-execution` for it.** What is true of `retest` is that it never consults the observed set at
