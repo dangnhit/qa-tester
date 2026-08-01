@@ -198,8 +198,17 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
     // or from `workspace.finalize`, when it already did -- and neither path ever names the run ID or the
     // word "resume". Refused here instead, at the edge: unlike every OTHER run this file reads (source,
     // bug), which all require terminal, a resumable run is by definition the opposite -- not terminal.
-    if (isRecord(resumeMetadataValue) && ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"].includes(String(resumeMetadataValue.status))) {
-      throw new QaSkillsError(`Resume run ${options.resumeRunId} is terminal and cannot be resumed`, "INVALID_ARTIFACT");
+    //
+    // Fails CLOSED on a malformed record too, exactly like its two siblings above (the source-run and
+    // bug-run terminal checks, both `!isRecord(...) || !array.includes(...)`): a `run-metadata.json` that
+    // parses to something other than a record is uninspected, not proven non-terminal, so writing a resume
+    // input around it would defer the same "raw failure three layers downstream" this whole block exists
+    // to prevent. The two conditions are reported with two different, accurate messages -- "terminal" would
+    // be a lie about metadata that was never actually read as a run.
+    if (!isRecord(resumeMetadataValue) || ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"].includes(String(resumeMetadataValue.status))) {
+      throw new QaSkillsError(!isRecord(resumeMetadataValue)
+        ? `Resume run ${options.resumeRunId} metadata could not be read as a run`
+        : `Resume run ${options.resumeRunId} is terminal and cannot be resumed`, "INVALID_ARTIFACT");
     }
   }
 

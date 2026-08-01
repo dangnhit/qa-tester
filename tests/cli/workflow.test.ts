@@ -460,6 +460,23 @@ describe("workflow scaffold: observed execution and resume run wiring", () => {
     await expect(readFile(outputPath, "utf8")).rejects.toThrow(/ENOENT/);
   });
 
+  // Fix round 1: the terminal check (decision 2) must fail CLOSED on malformed metadata, matching its two
+  // siblings (the source-run and bug-run terminal checks above, both of which refuse when the metadata is
+  // not a record at all, not only when it fails their positive condition). A `run-metadata.json` that
+  // parses to something other than a record is exactly the kind of "let the runner discover it three
+  // layers down" gap decisions 1 and 2 exist to close, so it must be refused here too, and the message
+  // must say what is actually wrong rather than guess "terminal" for something that was never inspected.
+  it("refuses a --resume-run-id whose metadata does not parse as a run, rather than silently accepting it", async () => {
+    const malformedRunId = "20260101T000000Z-fedcba";
+    await mkdir(join(root, "qa-results", malformedRunId), { recursive: true });
+    await writeFile(join(root, "qa-results", malformedRunId, "artifact-manifest.json"), JSON.stringify({ artifacts: [] }));
+    await writeFile(join(root, "qa-results", malformedRunId, "run-metadata.json"), JSON.stringify(["not", "a", "record"]));
+    const outputPath = join(root, "malformed-resume-run.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "regression", outputPath, environmentPath: envPath, resumeRunId: malformedRunId }))
+      .rejects.toThrow(new RegExp(`resume run ${malformedRunId} metadata could not be read as a run`, "i"));
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
   // Refusal decision 3 (task-5b-brief.md): `--observed-execution` with a mode that never runs
   // `execute-browser-test` (`plan`, `exploratory`) would otherwise be a silent no-op the operator reads
   // as armed -- refused at the edge instead, for honesty rather than safety.
