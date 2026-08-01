@@ -658,4 +658,31 @@ describe("the residual: one selection, two lanes", () => {
     expect(resumed.validation.valid).toBe(true);
   }, 180_000);
 
+  /**
+   * A lane-2 `FAILED` entry is an OBSERVED FAILURE, and a run holding one must not report success.
+   * `hasExecutionFailures` (src/operations/run-workflow.ts) read only `test-result`, so with the whole
+   * selection observed and one entry FAILED the run finalized `COMPLETED` with `validation.valid` true —
+   * where pre-branch the same case would have been driven, failed, and exited 1.
+   *
+   * The bug disposition is a separate question this deliberately does NOT assert as present: a batch entry
+   * carries `entryId`, never `attemptId`, so `generateBugReport` has nothing to bind a defect to. That
+   * limit is documented rather than papered over — see `assertFailureDispositionPostcondition`.
+   */
+  it("reports failure when lane 2 observed a FAILED entry, with no lane-1 attempt at all", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-observed-failure-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const tester = regressionTester();
+    const paused = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
+    await registerObservedBatch(root, paused.runId, [{ ...identities.a, status: "FAILED" }, identities.b]);
+
+    const resumed = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
+
+    expect(await drivenCaseIds(root, paused.runId)).toEqual([]);
+    expect(resumed.outcome).toBe("COMPLETED_WITH_FAILURES");
+    expect(resumed.validation.valid).toBe(true);
+    const artifacts = await registeredArtifacts(root, paused.runId);
+    expect(artifacts.some((artifact) => artifact.record.type === "bug-report")).toBe(false);
+    const metadata = JSON.parse(await readFile(join(root, "qa-results", paused.runId, "run-metadata.json"), "utf8")) as { status: string };
+    expect(metadata.status).toBe("COMPLETED_WITH_FAILURES");
+  }, 180_000);
 });

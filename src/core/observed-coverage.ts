@@ -49,6 +49,12 @@ export type CoverageArtifactView = Readonly<{
  */
 const observedExecutedStatuses: readonly unknown[] = ["PASSED", "FAILED"];
 
+/** The one Execution Status that means lane 2 ran the case AND the product did not do what was expected.
+ *  Deliberately NOT `!== "PASSED"`, which is how lane 1's `hasExecutionFailures` reads a `test-result`: an
+ *  attempt has a recorded outcome whatever its status, while `NOT_RUN`, `BLOCKED` and `INCONCLUSIVE` mean
+ *  lane 2 observed nothing at all — and by `observedExecutedStatuses` above, a case in one of those states
+ *  is DRIVEN by lane 1 instead, so calling it a failure would report failure for a run that then passed. */
+const observedFailedStatuses: readonly unknown[] = ["FAILED"];
 
 /**
  * The canonical identity triple a lane-2 entry or a `test-case` payload names, or `undefined` when any
@@ -111,13 +117,18 @@ export function caseIdentity(testCaseId: unknown, revisionId: unknown, instanceI
  * and `indexByTestCaseIdentity` buckets repeats anyway. Both callers outside this module ask only whether
  * it is EMPTY — `pendingObservedExecution` (src/operations/observed-pause.ts) and
  * `assertResultPostcondition` (src/operations/run-workflow.ts) — and emptiness is unchanged by duplicates.
+ *
+ * `statuses` is a parameter, not a second traversal, so that `observedFailureIdentities` asks its narrower
+ * question through the SAME batch-level credit gate — type, `valid`, provenance — that this one applies.
+ * A separate loop would be a third reader free to disagree about whether a batch counts, which is the
+ * drift this whole module exists to prevent.
  */
-export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[]): readonly TestCaseIdentity[] {
+export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[], statuses: readonly unknown[] = observedExecutedStatuses): readonly TestCaseIdentity[] {
   const identities: TestCaseIdentity[] = [];
   for (const artifact of artifacts) {
     if (artifact.record.type !== "test-result-batch" || artifact.valid === false || !creditsCoverage(artifact.record.provenance) || !isRecord(artifact.value)) continue;
     for (const entry of array(artifact.value.entries)) {
-      if (!isRecord(entry) || !observedExecutedStatuses.includes(entry.status)) continue;
+      if (!isRecord(entry) || !statuses.includes(entry.status)) continue;
       const identity = caseIdentity(entry.testCaseId, entry.testCaseRevisionId, entry.testCaseInstanceId);
       if (identity !== undefined) identities.push(identity);
     }
@@ -125,6 +136,21 @@ export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[
   return identities;
 }
 
+/**
+ * Every canonical identity lane 2 observed FAILING. A run holding one of these must not report success.
+ *
+ * This exists because "did anything fail" had three readers that all filtered `artifact.record.type ===
+ * "test-result"`, and Phase 8b made a lane-2-only `regression` run reachable: with the whole selection
+ * observed, lane 1 drives nothing, so a FAILED entry produced a run that finalized `COMPLETED` with
+ * `validation.valid` true — where the same case driven in lane 1 would have failed and exited 1.
+ *
+ * `FAILED` credits the IDENTITY (the case was executed) but never the OBLIGATION — `evaluateCoverage`
+ * (src/planning/coverage.ts) refuses any attempt that is not `PASSED` — so the release gate already
+ * reported the unmet obligation. What was missing was the run's own terminal status saying so.
+ */
+export function observedFailureIdentities(artifacts: readonly CoverageArtifactView[]): readonly TestCaseIdentity[] {
+  return observedCaseIdentities(artifacts, observedFailedStatuses);
+}
 
 /** The registered `test-case` artifacts whose exact identity a batch entry observed. Matched component by
  *  component through the shared nested index, never by a joined string — see `caseIdentity`. */

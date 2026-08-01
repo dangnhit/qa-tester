@@ -8,7 +8,7 @@ import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactInd
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
-import { observedCaseIdentities, observedCoveredCaseIds } from "../core/observed-coverage.js";
+import { observedCaseIdentities, observedCoveredCaseIds, observedFailureIdentities } from "../core/observed-coverage.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
@@ -246,6 +246,22 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   }
 }
 
+/**
+ * Every FAILED lane-1 ATTEMPT must have a bug or typed incident bound to it.
+ *
+ * Scoped to `test-result` deliberately, and this is the one half of the two-lane failure question that
+ * stays lane-1 only. A disposition is ATTEMPT-bound: `generate-bug-report` above resolves each defect
+ * through `attempt.value.attemptId`, `bug-report`/`incident` carry `attemptId`, and the index below is
+ * keyed on it. A `test-result-batch` entry carries `entryId` and has no attempt field at all
+ * (`additionalProperties: false` on the entry schema) — the same structural reason a `retest` run's
+ * reproduction cannot use lane 2, which skills/shared/references/observed-execution.md already gives.
+ *
+ * So an observed FAILED entry produces NO bug disposition, and requiring one here would refuse every such
+ * run forever rather than surface anything. What it does instead is honest at the level it can be:
+ * `finalizeWorkflowOutcome` finalizes the run `COMPLETED_WITH_FAILURES`, and the release gate reports the
+ * obligation the failure left unmet. Giving a batch entry a disposition needs a producer that can bind a
+ * defect to an entry rather than to an attempt, which is a contract change, not a fix.
+ */
 async function assertFailureDispositionPostcondition(workspace: RunWorkspace, output: readonly ArtifactRecord[]): Promise<void> {
   await assertRegisteredArtifacts(workspace, output);
   const artifacts = await workspace.readRegisteredArtifacts();
@@ -836,7 +852,17 @@ function releaseRecommendationFromArtifacts(artifacts: readonly RegisteredWorksp
 /** Finalizes once and derives the returned outcome from the same facts persisted in run metadata. */
 export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: PublicWorkflowMode): Promise<{ outcome: Extract<WorkflowTerminalStatus, "COMPLETED" | "COMPLETED_WITH_FAILURES">; validation: WorkspaceValidation; releaseRecommendation?: ReleaseRecommendation }> {
   const artifacts = await workspace.readRegisteredArtifacts();
-  const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED");
+  // "Did anything this run executed fail" — asked of BOTH lanes. A `test-result-batch` is an execution
+  // record wherever a `test-result` is (`executionRecord` in src/core/artifact-profiles.ts), and Phase 8b
+  // made a `regression` run whose whole selection lane 2 observed reachable, so with lane 1 driving nothing
+  // a FAILED entry used to finalize `COMPLETED` with `validation.valid` true. A run must not report success
+  // while holding a failure it is holding, whichever lane observed it.
+  //
+  // Only the terminal STATUS changes. A batch entry carries `entryId` and never `attemptId`, so no bug
+  // disposition can be bound to it — see `assertFailureDispositionPostcondition` — and this line makes no
+  // claim that one exists.
+  const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED")
+    || observedFailureIdentities(artifacts).length > 0;
   const terminal = evaluatePublicTerminalProfile(mode, artifacts.map((artifact) => artifact.record.type));
   const structural = await workspace.finalize(mode, hasExecutionFailures || !terminal.valid ? "COMPLETED_WITH_FAILURES" : undefined);
   const validation = { valid: structural.valid && terminal.valid, diagnostics: [...structural.diagnostics, ...terminal.diagnostics] };
@@ -1157,6 +1183,9 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     return (await artifacts()).filter((artifact) => artifact.record.type === "evidence" || artifact.record.type === "evidence-gap").map((artifact) => artifact.record) as unknown as WorkflowOperationOutputMap[Name];
   }
   if (name === "generate-bug-report") {
+    // Lane 1 only, and structurally so: `generateBugReport` binds a defect to an `attemptId`, which a
+    // `test-result-batch` entry does not carry. See `assertFailureDispositionPostcondition` for what an
+    // observed FAILED entry gets instead — a `COMPLETED_WITH_FAILURES` run and an unmet obligation.
     const failed = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && artifact.value.status === "FAILED");
     const generated: ArtifactRecord[] = [];
     for (const attempt of failed) {
