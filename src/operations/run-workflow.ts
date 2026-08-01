@@ -1110,14 +1110,22 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
       state.regressionAttemptIds = (await artifacts()).filter((artifact) => artifact.record.type === "test-result" && !reproduced.has(String(artifact.value.attemptId))).map((artifact) => asString(artifact.value.attemptId, "regression attempt ID"));
       return results as WorkflowOperationOutputMap[Name];
     }
-    // A filtered run's selection is one filter over TWO lanes: whatever a Runtime-Observed Execution
-    // already covered is not driven again. The identity compared is the triple a batch entry carries
-    // (src/core/observed-coverage.ts); nothing here reads a spec path, because an entry has none.
+    // A filtered `regression` run's selection is one filter over TWO lanes: whatever a Runtime-Observed
+    // Execution already covered is not driven again. The identity compared is the triple a batch entry
+    // carries (src/core/observed-coverage.ts); nothing here reads a spec path, because an entry has none.
     // `state.executionCaseIds` itself is left alone: `snapshotWorkflowState` writes the checkpoint's
     // `state.executionCases` from the SELECTION, so the residual narrows only what is DRIVEN, and the
     // checkpoint keeps recording the whole selection for the union comparison to be asked of.
-    const all = await artifacts();
-    const observedCases = observedCoveredCaseIds(all);
+    //
+    // Gated on `regression`, not merely on "not retest" (Phase 8b human ruling 2). `execute` and `full`
+    // reach this line too — `ensureCanonicalBundle`'s generic fallback populates `executionCaseIds` for
+    // them — and both accept a `test-result-batch` as an execution record, which
+    // skills/shared/references/observed-execution.md documents and this branch never meant to change. But
+    // for them `state.executionCases` is the DRIVEN set exactly, so subtracting an observed case there
+    // would silently cancel an execution their own checkpoint still has to account for. A `regression`
+    // run is the only mode whose checkpoint asks the union question that makes the subtraction sound
+    // (src/core/inspect-workspace-state.ts), so it is the only mode that may subtract.
+    const observedCases = input.mode === "regression" ? observedCoveredCaseIds(await artifacts()) : new Set<string>();
     const residual = state.executionCaseIds.filter((id) => !observedCases.has(id));
     // The original refusal, byte-for-byte, and deliberately still asked of the SELECTION rather than the
     // residual: it means "nothing to execute and nothing observed either", which is a statement about

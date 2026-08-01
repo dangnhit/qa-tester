@@ -473,13 +473,35 @@ export async function inspectWorkspaceState(
       const artifact = artifacts.find((candidate) => candidate.record.id === id && candidate.record.type === "test-case");
       return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
     }).filter((item): item is { artifactId: string; sha256: string } => item !== undefined) ?? []);
-    // Union coverage, not equality: a filtered run drives only the cases lane 2 did not observe, so the
-    // selection is satisfied by a driven `test-result` OR a `test-result-batch` entry carrying the same
-    // identity. Observed cases are intersected with the checkpoint's own selection first, so a lane-2
-    // suite that ran EXTRA tagged specs cannot widen what this checkpoint claims. The check stays total:
-    // a selected case covered by neither lane still invalidates.
+    // Union coverage, not equality: a filtered `regression` run drives only the cases lane 2 did not
+    // observe, so the selection is satisfied by a driven `test-result` OR a `test-result-batch` entry
+    // carrying the same identity. Observed cases are intersected with the checkpoint's own selection
+    // first, so a lane-2 suite that ran EXTRA tagged specs cannot widen what this checkpoint claims.
+    //
+    // What this ENFORCES, rather than assumes: every selected case is named by at least one lane. It does
+    // NOT assume the two lanes are disjoint. Disjointness holds only when a batch is registered BEFORE
+    // `execute-browser-test` computes its residual, and nothing forces that order — `qa-skill execute
+    // playwright` opens any non-terminal run and never asks what has already been driven. So the observed
+    // side contributes only the selected cases lane 1 did not drive, and the comparison below is a SET
+    // comparison. Without that dedup a case named by BOTH lanes made the right side of
+    // `sameCheckpointRefs` longer than the duplicate-free left side (`uniqueRefs`, above) and the
+    // checkpoint invalid FOREVER: no `open`, resume, attestation, finalize, validation or export could
+    // read the run again, and there is no abort command — all from a command that exits 0.
+    //
+    // Tolerating the overlap adds no slack. `executionCaseRefs` names what this checkpoint's own
+    // `execute-browser-test` output drove, and the observed side is intersected with
+    // `state.executionCases` on the line below, so each side is independently a SUBSET of the selection.
+    // Set equality therefore reduces to exactly "every selected case was driven or observed", which is
+    // the property the union clause exists to state; multiplicity was never part of it.
+    //
+    // Gated on `regression`, not on "every mode but retest". The residual subtraction this union answers
+    // is a `regression` mechanism (Phase 8b human ruling 2). `execute` and `full` accept a batch as an
+    // execution record — a capability skills/shared/references/observed-execution.md documents and this
+    // branch did not mean to change — but never subtract one from what they drive, so for them
+    // `state.executionCases` IS the driven set exactly and an observed entry must contribute nothing here.
     const selectedIds = new Set(array(state?.executionCases).flatMap((item) => isRecord(item) && typeof item.artifactId === "string" ? [item.artifactId] : []));
-    const observedSelectedRefs = [...observedCaseIds].filter((id) => selectedIds.has(id)).flatMap((id) => {
+    const drivenCaseIds = new Set(executionCaseRefs.map((reference) => reference.artifactId));
+    const observedSelectedRefs = value.mode !== "regression" ? [] : [...observedCaseIds].filter((id) => selectedIds.has(id) && !drivenCaseIds.has(id)).flatMap((id) => {
       const artifact = artifacts.find((candidate) => candidate.record.id === id);
       return artifact === undefined ? [] : [{ artifactId: artifact.record.id, sha256: artifact.record.sha256 }];
     });

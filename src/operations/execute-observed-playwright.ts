@@ -344,6 +344,18 @@ function runnerWorkingDirOf(report: PlaywrightJsonReport): string | undefined {
  * exactly like `validate`, `approval record` and `attestation record`, a `--root` that does not resolve
  * surfaces as the raw filesystem error `RunWorkspace.open`'s `realpath` throws, which
  * `src/cli/program.ts` maps to `ABORTED_OR_INTERNAL`.
+ *
+ * **It deliberately does NOT refuse a run whose workflow already completed `execute-browser-test`,** and
+ * that is a decision rather than an omission. Registering a batch for a case lane 1 already drove states
+ * one true fact twice, and the checkpoint check it feeds compares SETS
+ * (src/core/inspect-workspace-state.ts), so the overlap is inert; the corruption that made this look like
+ * a needed guard was the missing dedup there, fixed at its source rather than fenced off here. Refusing
+ * would also DELETE a documented capability: skills/shared/references/observed-execution.md says
+ * `execute` and `full` accept a `test-result-batch` wherever they accept a `test-result`, and the natural
+ * order for a supplementary observed suite is exactly drive-then-observe. Reading
+ * `workflow-checkpoint.completedOperations` here would additionally make this producer a second,
+ * independent reader of workflow progress, which is the drift shape this codebase keeps closing. The only
+ * run-level precondition it does assert is the one it cannot work without: a readable Environment Profile.
  */
 export async function executeObservedPlaywright(input: ObservedPlaywrightExecutionInput): Promise<ObservedPlaywrightExecution> {
   const workspace = await RunWorkspace.open(input.root, input.runId);
