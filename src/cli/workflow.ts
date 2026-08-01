@@ -14,6 +14,7 @@ import { createQaTester, type QaWorkflowInput, type WorkflowResult } from "../or
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 import { RunWorkspace } from "../core/run-workspace.js";
 import { readAgentDraft } from "../operations/ingest-requirement-analysis.js";
+import { isChangeScope } from "../regression/change-scope.js";
 import type { CanonicalPlanBundleRef } from "../operations/run-workflow.js";
 
 export type ScaffoldOptions = Readonly<{
@@ -150,10 +151,16 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
   let changeScope: Record<string, unknown> | undefined;
   if (options.changeScopePath !== undefined) {
     const value: unknown = JSON.parse(await readFile(resolve(options.changeScopePath), "utf8"));
-    // Mirrors `registerChangeScope`'s own refusal (src/regression/change-scope.js) rather than deferring
-    // to it: a change scope with no declared changes would otherwise be written into a closed input file
+    // Mirrors `registerChangeScope`'s own refusals (src/regression/change-scope.js) rather than deferring
+    // to them: a change scope with no declared changes would otherwise be written into a closed input file
     // that only fails once `select-regression` runs it through that same check.
     if (!isRecord(value) || !Array.isArray(value.changes) || value.changes.length === 0) throw new QaSkillsError("Change scope requires at least one declared change", "INVALID_ARTIFACT");
+    // The SHAPE of each change, not only the count. A change missing any of the five mapping arrays used to
+    // reach `registerChangeScope`'s sort spread and throw a raw `TypeError` with no error code, surfacing as
+    // `ABORTED_OR_INTERNAL` exit 5 from inside `select-regression` — which is exactly what
+    // skills/shared/references/recovery.md promises this option does NOT do. `isChangeScope` is the
+    // producer's own guard, so the edge and the producer cannot disagree about what is well-formed.
+    if (!value.changes.every(isChangeScope)) throw new QaSkillsError("Change scope change must declare a string id and requirementIds, codeSurfaces, declaredDependencies, gitPaths and userScope as arrays of strings", "INVALID_ARTIFACT");
     changeScope = value;
   }
 

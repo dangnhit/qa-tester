@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExitCode } from "../../src/cli/exit-codes.js";
 import { runCli } from "../../src/cli/program.js";
 import { bootstrapPlanningBundle, runLocalWorkflow, scaffoldWorkflowInput } from "../../src/cli/workflow.js";
+import { QaSkillsError } from "../../src/core/errors.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { createEntityId } from "../../src/core/ids.js";
 import { generateBugReport } from "../../src/operations/generate-bug-report.js";
@@ -243,6 +244,38 @@ describe("workflow scaffold: modes, charter, change scope, and retest wiring", (
 
     await expect(scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "empty.json"), environmentPath: envPath, changeScopePath: scopePath }))
       .rejects.toThrow(/change/i);
+  });
+
+  /**
+   * `recovery.md` promises every scaffold option is validated AT SCAFFOLD TIME under a table headed "Every
+   * refusal below is `INVALID_ARTIFACT`, exit `3`", but only `changes.length > 0` was checked. A change
+   * missing any of the five mapping arrays reached `registerChangeScope`, whose sort spread threw a raw
+   * `TypeError` -- `ABORTED_OR_INTERNAL`, exit 5, from inside `select-regression` rather than at the edge.
+   * Each row below drops exactly one required part, so the guard cannot pass by checking only the first.
+   */
+  it.each([
+    ["a change that is not an object", { changes: ["CHG-1"] }],
+    ["a change with no id", { changes: [{ requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }] }],
+    ["a change whose id is not a string", { changes: [{ id: 7, requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }] }],
+    ["a change missing requirementIds", { changes: [{ id: "CHG-1", codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }] }],
+    ["a change missing codeSurfaces", { changes: [{ id: "CHG-1", requirementIds: [], declaredDependencies: [], gitPaths: [], userScope: [] }] }],
+    ["a change missing declaredDependencies", { changes: [{ id: "CHG-1", requirementIds: [], codeSurfaces: [], gitPaths: [], userScope: [] }] }],
+    ["a change missing gitPaths", { changes: [{ id: "CHG-1", requirementIds: [], codeSurfaces: [], declaredDependencies: [], userScope: [] }] }],
+    ["a change missing userScope", { changes: [{ id: "CHG-1", requirementIds: [], codeSurfaces: [], declaredDependencies: [], gitPaths: [] }] }],
+    ["a mapping array holding something other than strings", { changes: [{ id: "CHG-1", requirementIds: [3], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }] }],
+  ] as const)("refuses %s as INVALID_ARTIFACT at the edge, not a raw TypeError inside select-regression", async (label, scope) => {
+    const scopePath = join(root, `malformed-${label.replace(/[^a-z]+/gi, "-")}.json`);
+    await writeFile(scopePath, JSON.stringify({ ...scope, provenance: { kind: "declared-change", reference: "PR-482" } }));
+    const outputPath = join(root, `malformed-${label.replace(/[^a-z]+/gi, "-")}-input.json`);
+
+    const failure = await scaffoldWorkflowInput({ root, mode: "regression", outputPath, environmentPath: envPath, changeScopePath: scopePath })
+      .then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(QaSkillsError);
+    expect((failure as QaSkillsError).code).toBe("INVALID_ARTIFACT");
+    expect((failure as Error).message).toMatch(/change/i);
+    // A refusal at the edge writes nothing, which is what "before anything is written" has to mean.
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
   });
 
   it("validates a charter at scaffold time rather than deep in the run", async () => {
