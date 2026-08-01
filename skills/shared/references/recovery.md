@@ -211,11 +211,14 @@ anything about that case. A `FAILED` entry does clear the pause (the case was ex
 still will not satisfy its coverage obligation) — only a status nobody observed leaves the pause standing.
 Clear it by running an observed execution that actually executes the tagged spec.
 
-This pause is reachable from any mode that runs `execute-browser-test` with `observedExecution.expected:
-true`, including `retest`. This section documents `regression`'s residual subtraction, which is what this
-branch tests. `retest` drives every case its selection resolves, regardless of which cases the clearing
-batch covered. See [Filtered runs over both lanes](../../../README.md#filtered-runs-over-both-lanes) in
-the README for the full flow and this distinction in more detail.
+This pause gates on the OPERATION rather than on the mode, so it is reachable from any mode that runs
+`execute-browser-test` with `observedExecution.expected: true`. `qa-skill workflow scaffold` nevertheless
+refuses `--observed-execution` for `retest`, because a `retest` run cannot benefit from the pause and cannot
+drop the field on resume — see the option table below. This section documents `regression`'s residual
+subtraction, which is what this branch tests. `retest` never consults the observed set at all, so no batch
+changes what it drives. See [Filtered runs over both
+lanes](../../../README.md#filtered-runs-over-both-lanes) in the README for the full flow and this
+distinction in more detail.
 
 ## `workflow scaffold`'s optional inputs, and what refuses each one
 
@@ -230,7 +233,7 @@ refusal below is `INVALID_ARTIFACT`, exit `3`.
 | `--change-scope-file <json>` | `changeScope`, plus a `local-change-scope` runtime registry entry (`retest` and `regression` modes) | The file declares zero `changes`, or any change is not an object carrying a string `id` and all five mapping arrays — `requirementIds`, `codeSurfaces`, `declaredDependencies`, `gitPaths`, `userScope` — as arrays of strings. Both refusals are `registerChangeScope`'s own, applied through the guard it applies itself (`isChangeScope`, `src/regression/change-scope.ts`) rather than deferred to it, so a bad file fails at scaffold time rather than inside `select-regression`. |
 | `--bug-run-id <id>` | `linkedRunId` and `retest.sourceBug` (`retest` mode) | The named run does not exist under **`--root`** (not `--source-root` — see below); is not terminal; its artifact manifest is invalid; it holds no `bug-report`; or it holds several and `--bug-artifact-id` did not name exactly one. |
 | `--bug-artifact-id <id>` | Which `bug-report` within `--bug-run-id`, when it holds more than one | It does not name a `bug-report` registered in that run — naming some other registered artifact type is refused exactly like naming nothing at all. |
-| `--observed-execution` | `observedExecution: { expected: true }` | `--mode plan` or `--mode exploratory` — neither mode's operation list ever reaches `execute-browser-test`, so the pause this flag arms could never fire; refused here rather than silently doing nothing. |
+| `--observed-execution` | `observedExecution: { expected: true }` | `--mode plan` or `--mode exploratory` — neither mode's operation list ever reaches `execute-browser-test`, so the pause this flag arms could never fire; refused here rather than silently doing nothing. Also `--mode retest`, for the opposite reason: the pause DOES fire there, but `retest` never consults the observed set, and the field is inside `workflowInputChecksum` so it cannot be dropped on resume — arming it can leave a run paused with no remedy and no abort command. |
 | `--resume-run-id <id>` | `resumeRunId`, reopening an existing non-terminal run under `--root` instead of creating a new one | The named run does not exist under `--root`; its metadata does not parse as a run at all; or it is already terminal (`COMPLETED`, `COMPLETED_WITH_FAILURES`, `BLOCKED`, or `ABORTED`). |
 
 **`--bug-run-id` resolves under `--root`, not `--source-root`, even though the same command's bundle

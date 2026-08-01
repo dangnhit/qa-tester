@@ -524,4 +524,30 @@ describe("workflow scaffold: observed execution and resume run wiring", () => {
       .rejects.toThrow(/observed-execution.*exploratory mode/i);
     await expect(readFile(exploratoryOutput, "utf8")).rejects.toThrow(/ENOENT/);
   });
+
+  /**
+   * `retest` was accepted, and it is the WORST mode to accept, because the flag's cost there is not a
+   * no-op — it is a run that can never finish. `retest` runs `execute-browser-test`, so the pause really
+   * arms and really fires; but a `retest-result` binds a reproduction to `sourceAttemptArtifactId` and
+   * `attemptId`, which a batch entry cannot carry, so `retest` is lane-1 by construction (human ruling 2)
+   * and drives its selection whatever a batch observed. Meanwhile `observedExecution` sits inside
+   * `workflowInputChecksum`, so it cannot be dropped on resume, and on a project with no bound tagged spec
+   * `execute playwright` refuses with `OBSERVED_RUN_NO_ENTRIES`. There is no abort command. The flag's own
+   * justification comment applies more strongly here than to the two modes it already refused.
+   */
+  it("refuses --observed-execution with retest mode, which is lane-1 by construction", async () => {
+    const retestOutput = join(root, "retest-observed.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "retest", outputPath: retestOutput, environmentPath: envPath, observedExecution: true }))
+      .rejects.toThrow(/observed-execution.*retest/i);
+    await expect(readFile(retestOutput, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("still accepts --observed-execution for the two modes whose residual it actually feeds", async () => {
+    // The refusal must be a three-mode list, not "every mode but regression": `execute` and `full` accept a
+    // batch as an execution record and can legitimately arm the pause, they simply subtract nothing.
+    for (const mode of ["execute", "full", "regression"] as const) {
+      const input = await scaffoldWorkflowInput({ root, mode, outputPath: join(root, `${mode}-observed.json`), environmentPath: envPath, observedExecution: true });
+      expect(input.observedExecution).toEqual({ expected: true });
+    }
+  });
 });

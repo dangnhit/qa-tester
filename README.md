@@ -349,14 +349,19 @@ or `"git-diff"`/`"user-change"` — is a caller-asserted label that `src/regress
 verify against an actual diff or approval. Treat it the same way Phase 8a's SARIF export treats a
 change-scope-derived location: informative, never a proof.
 
-**`retest` mode does not participate in this filter, even though it can pause on the same
-`--observed-execution` flag.** The pause only asks whether *some* batch was registered
-(`pendingObservedExecution` in `src/operations/observed-pause.ts`), so it can still fire and clear for a
-`retest` run — but `retest`'s own handling of `execute-browser-test` drives every case its selection
-resolves unconditionally (`src/operations/run-workflow.ts`), with no residual subtracted. A
-`retest-result` binds a reproduction to a specific attempt and artifact, and a lane-2 batch entry has
-neither, so a retest's reproduction — and its regression tail — are lane-1 by construction. Do not read
-`--observed-execution` as changing what a `retest` run drives.
+**`retest` mode does not participate in this filter, and `workflow scaffold` refuses
+`--observed-execution` for it.** What is true of `retest` is that it never consults the observed set at
+all: its own handling of `execute-browser-test` (`src/operations/run-workflow.ts`) reads no batch, so no
+observed entry can change what it drives. That is not the same as driving "unconditionally" — the same
+mode filters out every selected case whose identity is one of the source bug's reproduction scenarios, and
+when that empties the list it drives ZERO cases and rehydrates the reproduction attempts instead. A
+`retest-result` binds each scenario to a specific `sourceAttemptArtifactId` and `attemptId`, and a lane-2
+batch entry carries neither, so a retest's reproduction — and its regression tail — are lane-1 by
+construction. The pause predicate itself is mode-agnostic (`pendingObservedExecution` in
+`src/operations/observed-pause.ts` gates on the operation, not the mode, and clears only on a credited
+identity as described above), which is exactly why the flag is refused at the edge instead: armed on a
+`retest` run it really would fire, it cannot be dropped on resume because it is inside
+`workflowInputChecksum`, and it clears only from an observed execution the run cannot use.
 
 ## Environment and side-effect safety
 

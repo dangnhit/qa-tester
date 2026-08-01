@@ -111,6 +111,22 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
   if (options.observedExecution === true && (options.mode === "plan" || options.mode === "exploratory")) {
     throw new QaSkillsError(`--observed-execution has no effect in ${options.mode} mode, which never runs execute-browser-test`, "INVALID_ARTIFACT");
   }
+  // `retest` is refused for the OPPOSITE reason, and it is the stronger one: the pause really does arm and
+  // really does fire there, but nothing in `retest` can benefit from it, and the run can be left with no way
+  // out. A `retest-result` binds a reproduction to `sourceAttemptArtifactId` and `attemptId`, which a
+  // `test-result-batch` entry does not carry, so `retest` drives its selection in lane 1 whatever a batch
+  // observed (Phase 8b human ruling 2; see skills/shared/references/observed-execution.md). Meanwhile the
+  // field sits inside `workflowInputChecksum` (src/operations/run-workflow.ts), so it cannot be dropped on
+  // resume, and on a project with no spec bound to a registered test case `qa-skill execute playwright`
+  // refuses with `OBSERVED_RUN_NO_ENTRIES` -- a permanently paused run, and there is no abort command.
+  if (options.observedExecution === true && options.mode === "retest") {
+    throw new QaSkillsError(
+      "--observed-execution cannot be used with retest mode: a retest drives its reproduction and its regression tail in lane 1 by construction, "
+      + "because a retest-result binds each scenario to a source attempt ID that a test-result-batch entry cannot carry. "
+      + "The flag would arm a pause the run can never benefit from, and cannot be dropped on resume because it is inside the workflow input checksum.",
+      "INVALID_ARTIFACT",
+    );
+  }
   let environmentProfile: Record<string, unknown> | undefined;
   let bundle: Record<string, unknown> | undefined;
   if (options.sourceRoot !== undefined || options.sourceRunId !== undefined) {
