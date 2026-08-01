@@ -28,7 +28,7 @@ export async function pendingObservedExecution(
   expected: boolean,
 ): Promise<PendingObservedExecution | undefined> {
   if (!expected || operation !== "execute-browser-test") return undefined;
-  if (observedCaseIdentities(await workspace.readRegisteredArtifacts()).size > 0) return undefined;
+  if (observedCaseIdentities(await workspace.readRegisteredArtifacts()).length > 0) return undefined;
   return {
     operation,
     command: "execute playwright",

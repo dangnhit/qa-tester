@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { caseIdentityKey, observedCaseIdentities, observedCoveredCaseIds } from "../../src/core/observed-coverage.js";
+import { caseIdentity, observedCaseIdentities, observedCoveredCaseIds } from "../../src/core/observed-coverage.js";
 
 /** `PASSED` is the default status because an entry with NO status covers nothing since Phase 8b Task 3:
  *  these fixtures are about the identity and provenance filters, and would otherwise all test the status
@@ -16,14 +16,21 @@ function testCase(id: string, testCaseId: string, revisionId: string, instanceId
 
 const identity = { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } as const;
 
-describe("caseIdentityKey", () => {
-  it("joins the triple lane 2 binds an entry on", () => {
-    expect(caseIdentityKey("TC-1", "REV-1", "INSTANCE-1")).toBe("TC-1:REV-1:INSTANCE-1");
+describe("caseIdentity", () => {
+  it("keeps the triple lane 2 binds an entry on as three components, under the names the index uses", () => {
+    expect(caseIdentity("TC-1", "REV-1", "INSTANCE-1")).toEqual({ testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" });
   });
 
   it("returns undefined when any part is not a string, so a malformed value cannot forge an identity", () => {
-    expect(caseIdentityKey("TC-1", 2, "INSTANCE-1")).toBeUndefined();
-    expect(caseIdentityKey("TC-1", "REV-1", undefined)).toBeUndefined();
+    expect(caseIdentity("TC-1", 2, "INSTANCE-1")).toBeUndefined();
+    expect(caseIdentity("TC-1", "REV-1", undefined)).toBeUndefined();
+  });
+
+  /** Not a style point: `Map` compares with SameValueZero, so three `undefined` components would MATCH
+   *  each other under the nested index. The guard is what keeps an unparsed `{}` entry from binding to an
+   *  unparsed `{}` test-case payload — a joined key got this for free by returning `undefined`. */
+  it("returns undefined for a wholly absent identity, which would otherwise match another absent one", () => {
+    expect(caseIdentity(undefined, undefined, undefined)).toBeUndefined();
   });
 });
 
@@ -33,14 +40,17 @@ describe("observedCaseIdentities", () => {
       batch("BATCH-1", [{ testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" }]),
       batch("BATCH-2", [{ testCaseId: "TC-2", testCaseRevisionId: "REV-2", testCaseInstanceId: "INSTANCE-2" }]),
     ]);
-    expect([...identities].sort()).toEqual(["TC-1:REV-1:INSTANCE-1", "TC-2:REV-2:INSTANCE-2"]);
+    expect(identities).toEqual([
+      { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" },
+      { testCaseId: "TC-2", testCaseRevisionId: "REV-2", testCaseInstanceId: "INSTANCE-2" },
+    ]);
   });
 
   it("ignores an invalid batch, so a batch that failed its semantic rule cannot suppress driving", () => {
     const identities = observedCaseIdentities([
       batch("BATCH-1", [{ testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" }], false),
     ]);
-    expect(identities.size).toBe(0);
+    expect(identities).toEqual([]);
   });
 
   it("ignores every other artifact type, so only a Runtime-Observed Execution can claim an identity", () => {
@@ -49,30 +59,30 @@ describe("observedCaseIdentities", () => {
     const identities = observedCaseIdentities([
       { record: { id: "RESULT-1", type: "test-result", sha256: "c".repeat(64), provenance: "runtime-execution" }, valid: true, value: { entries: [{ status: "PASSED", ...identity }] } },
     ]);
-    expect(identities.size).toBe(0);
+    expect(identities).toEqual([]);
   });
 
   it.each([["PASSED"], ["FAILED"]] as const)("credits an entry whose status is %s, because the case ran and an outcome was observed", (status) => {
     // FAILED credits the IDENTITY, not the obligation: re-driving a case lane 2 already executed would be
     // a second independent execution, while `evaluateCoverage` (src/planning/coverage.ts) still refuses a
     // non-PASSED attempt, so the obligation stays unmet and the gate still reports it.
-    expect([...observedCaseIdentities([batch("BATCH-1", [{ ...identity, status }])])]).toEqual(["TC-1:REV-1:INSTANCE-1"]);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity, status }])])).toEqual([identity]);
   });
 
   it.each([["NOT_RUN"], ["BLOCKED"], ["INCONCLUSIVE"]] as const)("credits nothing for a %s entry, which names a case nothing was learned about", (status) => {
     // The three statuses `deriveRetestVerdict` (src/retest/verdict.ts) maps to CANNOT_VERIFY. A tagged
     // spec that `test.skip`s maps to NOT_RUN, an interrupted one to BLOCKED — neither executed, so
     // neither may suppress lane-1 driving nor count towards a selection's coverage.
-    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity, status }])]).size).toBe(0);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity, status }])])).toEqual([]);
   });
 
   it("credits nothing for an entry with an unrecognized or missing status, because the list is an allow-list", () => {
-    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity, status: "INVENTED" }])]).size).toBe(0);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity, status: "INVENTED" }])])).toEqual([]);
     // Built without the `batch` helper on purpose: the helper defaults a status in, and a status-less
     // entry is exactly what the allow-list has to refuse.
     expect(observedCaseIdentities([
       { record: { id: "BATCH-1", type: "test-result-batch", sha256: "a".repeat(64), provenance: "runtime-observed" }, valid: true, value: { entries: [{ ...identity }] } },
-    ]).size).toBe(0);
+    ])).toEqual([]);
   });
 
   it("credits per entry, so one execution that skipped some tagged specs covers only the ones that ran", () => {
@@ -80,16 +90,16 @@ describe("observedCaseIdentities", () => {
       { ...identity, status: "PASSED" },
       { testCaseId: "TC-2", testCaseRevisionId: "REV-2", testCaseInstanceId: "INSTANCE-2", status: "NOT_RUN" },
     ])]);
-    expect([...identities]).toEqual(["TC-1:REV-1:INSTANCE-1"]);
+    expect(identities).toEqual([identity]);
   });
 
   it("credits nothing for an agent-draft batch, the same provenance gate the release gate applies", () => {
     // `registerArtifactValue` defaults an unstamped registration to `agent-draft`, so a producer that
     // forgot the stamp must not be able to suppress driving — `creditsCoverage` (src/core/provenance.ts)
     // is the one shared answer, and release-gate.ts already refuses such a batch coverage credit.
-    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "agent-draft")]).size).toBe(0);
-    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime")]).size).toBe(0);
-    expect([...observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime-execution")])]).toEqual(["TC-1:REV-1:INSTANCE-1"]);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "agent-draft")])).toEqual([]);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime")])).toEqual([]);
+    expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime-execution")])).toEqual([identity]);
   });
 });
 
@@ -109,5 +119,31 @@ describe("observedCoveredCaseIds", () => {
       testCase("CASE-1", "TC-1", "REV-1", "INSTANCE-1"),
     ]);
     expect(covered.size).toBe(0);
+  });
+
+  /**
+   * Two DISTINCT canonical cases whose components a `:`-joined key would flatten onto one string:
+   * `("TC-COL:X", "REV", "INST")` and `("TC-COL", "X:REV", "INST")` both join to `TC-COL:X:REV:INST`.
+   * Nothing forbids the colon — `test-case.schema.json` gives all three id fields `{ "type": "string",
+   * "minLength": 1 }` with no `pattern` — so a batch crediting ONE of them must not credit the other.
+   * Crediting both is how a selected case reaches a finalized, valid run executed by neither lane: it is
+   * subtracted from the residual lane 1 would drive AND counted towards the checkpoint's union coverage.
+   */
+  it("does not credit a second case whose components merely rejoin to the same string", () => {
+    const covered = observedCoveredCaseIds([
+      batch("BATCH-1", [{ testCaseId: "TC-COL", testCaseRevisionId: "X:REV", testCaseInstanceId: "INST" }]),
+      testCase("CASE-JOINED-LEFT", "TC-COL:X", "REV", "INST"),
+      testCase("CASE-CREDITED", "TC-COL", "X:REV", "INST"),
+    ]);
+    expect([...covered]).toEqual(["CASE-CREDITED"]);
+  });
+
+  it("does not credit a case whose components rejoin onto an observed entry's split differently", () => {
+    const covered = observedCoveredCaseIds([
+      batch("BATCH-1", [{ testCaseId: "TC-COL:X", testCaseRevisionId: "REV", testCaseInstanceId: "INST" }]),
+      testCase("CASE-CREDITED", "TC-COL:X", "REV", "INST"),
+      testCase("CASE-JOINED-RIGHT", "TC-COL", "X:REV", "INST"),
+    ]);
+    expect([...covered]).toEqual(["CASE-CREDITED"]);
   });
 });

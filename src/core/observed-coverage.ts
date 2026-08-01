@@ -1,3 +1,4 @@
+import { indexByTestCaseIdentity, type TestCaseIdentity } from "./artifact-index.js";
 import { creditsCoverage } from "./provenance.js";
 import { array, isRecord } from "./values.js";
 
@@ -48,11 +49,39 @@ export type CoverageArtifactView = Readonly<{
  */
 const observedExecutedStatuses: readonly unknown[] = ["PASSED", "FAILED"];
 
-/** `testCaseId:revisionId:instanceId`. The instance is part of the identity: one revision can have
- *  several parameterized instances (see RegressionCase in src/regression/change-scope.ts). */
-export function caseIdentityKey(testCaseId: unknown, revisionId: unknown, instanceId: unknown): string | undefined {
+
+/**
+ * The canonical identity triple a lane-2 entry or a `test-case` payload names, or `undefined` when any
+ * component is not a string. The instance is part of the identity: one revision can have several
+ * parameterized instances (see RegressionCase in src/regression/change-scope.ts).
+ *
+ * Returned STRUCTURALLY, and matched through `indexByTestCaseIdentity` (src/core/artifact-index.ts),
+ * because a DELIMITED JOIN of these three fields is free to collide and a collision here CREDITS
+ * EXECUTION. Nothing constrains their charset — `test-case.schema.json` gives `testCaseId`, `revisionId`
+ * and `instanceId` each `{ "type": "string", "minLength": 1 }` with no `pattern`, `revisionId` is never
+ * checked against `sha256Fingerprint`, and the identity-tag regex (src/observed/report-mapping.ts)
+ * forbids only `] [ / @` and whitespace — so `("TC:X", "R", "I")` and `("TC", "X:R", "I")` are two
+ * distinct canonical cases that a `:`-joined key flattens into one. One batch entry would then credit
+ * BOTH: the uncredited case is subtracted from the residual lane 1 would drive AND counted towards the
+ * checkpoint's union coverage, which is precisely the "executed by neither lane" state this module
+ * exists to make unreachable.
+ *
+ * The nested map is the mechanism every OTHER reader of this same triple already uses — `testResultBatchRule`
+ * (src/core/semantic-rules.ts), `selectedExecutionCaseRefs` and `regressionSelectionRule`
+ * (src/core/inspect-workspace-state.ts, src/core/semantic-rules.ts), and `reproduce-bug`
+ * (src/operations/run-workflow.ts) — and `artifact-index.ts`'s own docstring already argues exactly this
+ * point ("a `${a}|${b}|${c}` join would be free to collide. The identity triple is a NESTED map for the
+ * same reason"). Using it rather than restating the assumption is what "one reader" means here, and it
+ * costs this module no dependency it should not have: `artifact-index` is the `src/core/` leaf that
+ * imports nothing.
+ *
+ * The all-strings guard is NOT redundant under nested keys, and is the one thing the join gave for free.
+ * `Map` compares with SameValueZero, so a `{}` batch entry and a `{}` unparsed `test-case` payload would
+ * MATCH on three `undefined` components, where a joined key returned `undefined` and skipped both.
+ */
+export function caseIdentity(testCaseId: unknown, revisionId: unknown, instanceId: unknown): TestCaseIdentity | undefined {
   return typeof testCaseId === "string" && typeof revisionId === "string" && typeof instanceId === "string"
-    ? `${testCaseId}:${revisionId}:${instanceId}`
+    ? { testCaseId, testCaseRevisionId: revisionId, testCaseInstanceId: instanceId }
     : undefined;
 }
 
@@ -77,28 +106,35 @@ export function caseIdentityKey(testCaseId: unknown, revisionId: unknown, instan
  *     driving. Two readers of one artifact must not disagree about whether it counts.
  *   - `observedExecutedStatuses` — see that constant. Per ENTRY, not per batch: one execution can
  *     legitimately run some tagged specs and skip others, and only the ones that ran are covered.
+ *
+ * A LIST rather than a set, because a structural identity has no value equality a `Set` could dedup on
+ * and `indexByTestCaseIdentity` buckets repeats anyway. Both callers outside this module ask only whether
+ * it is EMPTY — `pendingObservedExecution` (src/operations/observed-pause.ts) and
+ * `assertResultPostcondition` (src/operations/run-workflow.ts) — and emptiness is unchanged by duplicates.
  */
-export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[]): ReadonlySet<string> {
-  const identities = new Set<string>();
+export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[]): readonly TestCaseIdentity[] {
+  const identities: TestCaseIdentity[] = [];
   for (const artifact of artifacts) {
     if (artifact.record.type !== "test-result-batch" || artifact.valid === false || !creditsCoverage(artifact.record.provenance) || !isRecord(artifact.value)) continue;
     for (const entry of array(artifact.value.entries)) {
       if (!isRecord(entry) || !observedExecutedStatuses.includes(entry.status)) continue;
-      const key = caseIdentityKey(entry.testCaseId, entry.testCaseRevisionId, entry.testCaseInstanceId);
-      if (key !== undefined) identities.add(key);
+      const identity = caseIdentity(entry.testCaseId, entry.testCaseRevisionId, entry.testCaseInstanceId);
+      if (identity !== undefined) identities.push(identity);
     }
   }
   return identities;
 }
 
-/** The registered `test-case` artifacts whose exact identity a batch entry observed. */
+
+/** The registered `test-case` artifacts whose exact identity a batch entry observed. Matched component by
+ *  component through the shared nested index, never by a joined string — see `caseIdentity`. */
 export function observedCoveredCaseIds(artifacts: readonly CoverageArtifactView[]): ReadonlySet<string> {
-  const identities = observedCaseIdentities(artifacts);
+  const observed = indexByTestCaseIdentity(observedCaseIdentities(artifacts), (identity) => identity);
   const covered = new Set<string>();
   for (const artifact of artifacts) {
     if (artifact.record.type !== "test-case" || artifact.valid === false || !isRecord(artifact.value)) continue;
-    const key = caseIdentityKey(artifact.value.testCaseId, artifact.value.revisionId, artifact.value.instanceId);
-    if (key !== undefined && identities.has(key)) covered.add(artifact.record.id);
+    const identity = caseIdentity(artifact.value.testCaseId, artifact.value.revisionId, artifact.value.instanceId);
+    if (identity !== undefined && observed.get(identity).length > 0) covered.add(artifact.record.id);
   }
   return covered;
 }

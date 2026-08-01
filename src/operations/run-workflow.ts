@@ -228,7 +228,7 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   // shares this postcondition and CANNOT legitimately return an empty output: `sourceBugFromReference`
   // refuses a bug with zero source attempt ids, and the branch then refuses any result set that does not
   // reproduce every one of those scenarios. Its own refusal is the specific one, and it stays reachable.
-  const observedNothing = observedCaseIdentities(artifacts).size === 0;
+  const observedNothing = observedCaseIdentities(artifacts).length === 0;
   if ((output.length === 0 && observedNothing) || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
   // Invariance: `artifacts` is read above and this postcondition registers nothing, so both indices serve
   // every iteration of the loop below. Evidence carries its attempt inside the `subject` union while an
