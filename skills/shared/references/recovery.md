@@ -212,11 +212,10 @@ still will not satisfy its coverage obligation) — only a status nobody observe
 Clear it by running an observed execution that actually executes the tagged spec.
 
 This pause is reachable from any mode that runs `execute-browser-test` with `observedExecution.expected:
-true`, including `retest`. But only a `regression` run's residual actually subtracts what a batch observed
-from what lane 1 drives — a `retest` run still drives every case its own selection resolves once the pause
-clears, regardless of which cases the clearing batch covered. See [Filtered runs over both
-lanes](../../../README.md#filtered-runs-over-both-lanes) in the README for the full flow and this
-distinction in more detail.
+true`, including `retest`. This section documents `regression`'s residual subtraction, which is what this
+branch tests. `retest` drives every case its selection resolves, regardless of which cases the clearing
+batch covered. See [Filtered runs over both lanes](../../../README.md#filtered-runs-over-both-lanes) in
+the README for the full flow and this distinction in more detail.
 
 ## `workflow scaffold`'s optional inputs, and what refuses each one
 
