@@ -70,7 +70,7 @@ Commands that produce output use machine-readable JSON unless noted. Successful 
 | `qa-skill fingerprint --file <json>` | Print the sha256 content fingerprint of a JSON file; matches a registered `test-case`'s `revisionId`. |
 | `qa-skill run create --root <path> --mode <profile> --environment-file <json>` | Create an unlocked, nonterminal Run Workspace for standalone specialist skills and return its run ID as JSON. |
 | `qa-skill workflow bootstrap --root <path> --environment-file <json> --requirement-file <json> --plan-file <json> --test-case-file <json> --coverage-file <json>` | Atomically create the first complete terminal planning run and return its checksum-bound bundle reference; repeat testcase and coverage options as needed. |
-| `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources. |
+| `qa-skill workflow scaffold --root <path> --mode <mode> --output <json> [--environment-file <json>] [--source-root <path> --source-run-id <id>] [--charter-file <json>] [--change-scope-file <json>] [--bug-run-id <id> [--bug-artifact-id <id>]] [--observed-execution] [--resume-run-id <id>]` | Create a closed workflow input using explicit checksum-bound sources; the charter/change-scope/bug options reach `exploratory`/`regression`/`retest`, and the last two drive the pause-and-resume flow below. See [Filtered runs over both lanes](#filtered-runs-over-both-lanes) and the [recovery reference](skills/shared/references/recovery.md#workflow-scaffolds-optional-inputs-and-what-refuses-each-one) for every refusal. |
 | `qa-skill workflow run --input <json>` | Run the closed public QA Tester workflow with local runtime services. |
 | `qa-skill artifact ingest --root <path> --run-id <id> --type <type> --file <json-or-yaml> [--relationship <id>]` | Validate and register an Agent Draft as a Canonical Artifact; success has no stdout. |
 | `qa-skill execute playwright --root <path> --run-id <id> --spec-dir <path> [-- <runner args>]` | Start the project's own committed Playwright suite as a Runtime-Observed Execution and register one `test-result-batch` plus its sanitized runner report as evidence. Everything after `--` reaches the runner verbatim; `--reporter` and `--output` are runtime-owned and refused. |
@@ -286,6 +286,77 @@ Two more refusals, both exiting `4`. **Every spec file the runner's report names
 The registered evidence is a **sanitized projection** of the reporter's output, never the report file the runner wrote: that file carries `config.argv` and, for an ordinary web project, `config.webServer.env`. The payload states its own removals, and the trade is explicit — the artifact records which spec ran and how it ended, not why it failed. The command prints `runnerWorkingDir`, the temporary directory holding the runner's verbatim report and artifacts, so the failure text is still reachable while the run is being diagnosed.
 
 `skills/shared/references/observed-execution.md` is the full adapter document.
+
+## Filtered runs over both lanes
+
+In `regression` mode, the cases a change scope selects are driven by whichever lane covers them: a
+selected case a Runtime-Observed Execution already covered is not driven again by lane 1, and — the other
+half of the same filter — a selected case covered by **neither** lane leaves the run's checkpoint unable
+to validate (`src/core/inspect-workspace-state.ts`) rather than letting the run complete silently short of
+it. `workflow scaffold` carries the
+whole flow with two options added for it, `--observed-execution` and `--resume-run-id`, so nothing here
+needs a hand-edited input file:
+
+```bash
+qa-skill workflow scaffold --root . --mode regression \
+  --source-root . --source-run-id "$PLAN_RUN" \
+  --change-scope-file scope.json --observed-execution \
+  --output regression.json
+qa-skill workflow run --input regression.json > paused.json   # exit 2, AWAITING_OBSERVED_EXECUTION
+RID=$(jq -r .runId < paused.json)
+qa-skill execute playwright --root . --run-id "$RID" --spec-dir specs -- --workers=1
+qa-skill workflow scaffold --root . --mode regression \
+  --source-root . --source-run-id "$PLAN_RUN" \
+  --change-scope-file scope.json --observed-execution \
+  --resume-run-id "$RID" --output resume.json
+qa-skill workflow run --input resume.json                     # exit 0
+```
+
+Run end to end against a real project, this pauses a `regression` run in front of `execute-browser-test`,
+credits one `test-result-batch` from a real `qa-skill execute playwright` run, and resumes to drive only
+the residual — the selected case that batch did not cover. The selection names both cases; exactly one
+`test-result` is registered (the driven one); and `qa-skill validate` reports `{ "valid": true,
+"diagnostics": [] }`.
+
+**`workflow run` exits `2` while it waits for the observed suite, and the run is not finished.** A CI step
+that treats that exit code as a failure to report loses the run; one that treats it as success reports a
+gate that was never written. Read `outcome` (`"AWAITING_OBSERVED_EXECUTION"`) and `pendingObservedExecution`
+from the JSON body, not the exit code alone — see
+[`AWAITING_OBSERVED_EXECUTION`](skills/shared/references/recovery.md#awaiting_observed_execution) in the
+recovery reference.
+
+**`--observed-execution` must be passed again when scaffolding the resume input**, even though the run
+already knows it is waiting for one. The field sits inside the input's own checksum
+(`workflowInputChecksum` in `src/operations/run-workflow.ts`), so a resume that silently drops it no
+longer matches what the paused run's `workflow-checkpoint` recorded, and `workflow run` refuses it —
+`"Resume input does not match its durable workflow checkpoint"`, exit `3` — rather than quietly resuming
+without the pause it needs.
+
+**A suite whose tagged specs were all skipped re-pauses instead of completing.** `execute playwright`
+still succeeds and still registers a batch — a Playwright `skipped` result is a real, valid entry, not an
+error — but a skipped test observed nothing, so it credits no case identity: `observedCaseIdentities`
+(`src/core/observed-coverage.ts`) credits an entry only when its status is `PASSED` or `FAILED`. Resuming
+a run whose only observed batch skipped every tagged spec reaches the identical
+`AWAITING_OBSERVED_EXECUTION` pause again — not a hang — and it clears only once an observed execution
+actually executes the tagged spec.
+
+Lane 2 is never told what to run beyond `--spec-dir`. Only a spec whose `test(...)` title carries
+`[qa:<testCaseId>/<revisionId>/<instanceId>@<surface>]` is observed at all; every other spec in the suite
+is excluded and named in the command's own output (see [Two execution lanes](#two-execution-lanes) above).
+
+`changeScope` is authored by `--change-scope-file`, and its `provenance.kind` — `"declared-change"` above,
+or `"git-diff"`/`"user-change"` — is a caller-asserted label that `src/regression/change-scope.ts` does not
+verify against an actual diff or approval. Treat it the same way Phase 8a's SARIF export treats a
+change-scope-derived location: informative, never a proof.
+
+**`retest` mode does not participate in this filter, even though it can pause on the same
+`--observed-execution` flag.** The pause only asks whether *some* batch was registered
+(`pendingObservedExecution` in `src/operations/observed-pause.ts`), so it can still fire and clear for a
+`retest` run — but `retest`'s own handling of `execute-browser-test` drives every case its selection
+resolves unconditionally (`src/operations/run-workflow.ts`), with no residual subtracted. A
+`retest-result` binds a reproduction to a specific attempt and artifact, and a lane-2 batch entry has
+neither, so a retest's reproduction — and its regression tail — are lane-1 by construction. Do not read
+`--observed-execution` as changing what a `retest` run drives.
 
 ## Environment and side-effect safety
 

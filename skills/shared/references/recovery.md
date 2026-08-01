@@ -22,14 +22,18 @@ wins:
 2. `outcome === "BLOCKED"` → `2` (`BLOCKED`)
 3. `outcome === "AWAITING_RUNTIME"` (nothing executed) → `2` (`BLOCKED`)
 4. `outcome === "AWAITING_HUMAN_INPUT"` (waiting on a person) → `2` (`BLOCKED`)
-5. `validation.valid === false` → `1` (`UNMET_OBLIGATIONS`)
-6. `releaseRecommendation === "NOT_READY"` → `1` (`UNMET_OBLIGATIONS`)
-7. `outcome === "COMPLETED_WITH_FAILURES"` → `1` (`UNMET_OBLIGATIONS`)
-8. otherwise → `0` (`SUCCESS`)
+5. `outcome === "AWAITING_OBSERVED_EXECUTION"` (waiting on an observed suite) → `2` (`BLOCKED`)
+6. `validation.valid === false` → `1` (`UNMET_OBLIGATIONS`)
+7. `releaseRecommendation === "NOT_READY"` → `1` (`UNMET_OBLIGATIONS`)
+8. `outcome === "COMPLETED_WITH_FAILURES"` → `1` (`UNMET_OBLIGATIONS`)
+9. otherwise → `0` (`SUCCESS`)
 
-Both non-terminal outcomes resolve **ahead of** `validation.valid`, and that ordering is load-bearing: a
-paused run legitimately has not yet registered the artifacts its profile requires, so collapsing it into
-`UNMET_OBLIGATIONS` would report an unmet obligation where the truth is "not finished yet".
+All three non-terminal outcomes resolve **ahead of** `validation.valid`, and that ordering is load-bearing:
+a paused run legitimately has not yet registered the artifacts its profile requires, so collapsing it into
+`UNMET_OBLIGATIONS` would report an unmet obligation where the truth is "not finished yet" — and, for the
+newest of the three, not even wrong in a safe direction: a CI step that reads `AWAITING_OBSERVED_EXECUTION`'s
+exit `2` as a completed failure loses the run, and one that reads it as success reports a gate that was
+never written.
 
 `READY_WITH_RISKS` and "no gate registered" (`plan`, `execute`, `exploratory`, and `retest` modes) both
 fall through to `0` — a risk-flagged go verdict is still success at the process boundary; read
@@ -158,6 +162,89 @@ browser too. The approval pause guards `execute-browser-test` only, so a `human-
 `retest` bundle still throws at `reproduce-bug` ("Test case plan binding is not approved") rather than
 pausing. That is unchanged from before this mechanism landed, not a regression it introduced — but it
 means a retest bundle should carry an `auto-approve-safe` plan.
+
+## `AWAITING_OBSERVED_EXECUTION`
+
+`outcome: "AWAITING_OBSERVED_EXECUTION"` means a run that declared `observedExecution.expected: true`
+stopped **immediately before** `execute-browser-test` because no Runtime-Observed Execution has yet
+registered anything the run can credit (`pendingObservedExecution` in
+`src/operations/observed-pause.ts`). Like `AWAITING_RUNTIME` and `AWAITING_HUMAN_INPUT`, this is **not a
+failure and not a terminal run**: nothing was finalized, no `release-gate` was written, the process lock
+is released, and the workspace stays writable. Exit code `2` (`BLOCKED`).
+
+The result body carries `pendingObservedExecution`:
+
+```json
+{
+  "operation": "execute-browser-test",
+  "command": "execute playwright",
+  "reason": "The run expects a Runtime-Observed Execution: run `qa-skill execute playwright --root <root> --run-id <runId> --spec-dir <dir>`, then resume with resumeRunId."
+}
+```
+
+**The exact command that clears it:**
+
+```bash
+qa-skill execute playwright --root <root> --run-id <runId> --spec-dir <dir>
+qa-skill workflow scaffold ... --observed-execution --resume-run-id <runId> --output resume.json
+qa-skill workflow run --input resume.json
+```
+
+Two things about that resume are easy to get wrong:
+
+- **`--observed-execution` must be passed again**, even though the run already knows it is waiting for
+  one. The field sits inside `workflowInputChecksum` (`src/operations/run-workflow.ts`), so a resume input
+  that silently drops it no longer matches the paused run's `workflow-checkpoint`, and `workflow run`
+  refuses it outright — `"Resume input does not match its durable workflow checkpoint"`, exit `3` — rather
+  than quietly resuming without the pause.
+- **Resuming without registering a batch pauses again, identically, and is safe**: no new artifact is
+  registered, no operation re-executes, and the same `pendingObservedExecution` comes back. This is the
+  same idempotence `AWAITING_HUMAN_INPUT` has, through the same `resumeRunId` machinery.
+
+**A suite whose tagged specs were all skipped clears nothing, and the run pauses again — read this before
+treating a second pause as a hang.** `execute playwright` still succeeds and still registers a
+`test-result-batch`; a Playwright `skipped` (or `interrupted`) result is a real, valid entry, not an error.
+But `observedCaseIdentities` (`src/core/observed-coverage.ts`) credits an identity only when its entry's
+status is `PASSED` or `FAILED` — a `skipped` entry maps to `NOT_RUN`, an `interrupted` one to `BLOCKED`,
+and neither clears the pause nor suppresses lane-1 driving, because neither means the runtime learned
+anything about that case. A `FAILED` entry does clear the pause (the case was executed, even though it
+still will not satisfy its coverage obligation) — only a status nobody observed leaves the pause standing.
+Clear it by running an observed execution that actually executes the tagged spec.
+
+This pause is reachable from any mode that runs `execute-browser-test` with `observedExecution.expected:
+true`, including `retest`. But only a `regression` run's residual actually subtracts what a batch observed
+from what lane 1 drives — a `retest` run still drives every case its own selection resolves once the pause
+clears, regardless of which cases the clearing batch covered. See [Filtered runs over both
+lanes](../../../README.md#filtered-runs-over-both-lanes) in the README for the full flow and this
+distinction in more detail.
+
+## `workflow scaffold`'s optional inputs, and what refuses each one
+
+Six options exist only to populate one field each; every one is validated **at scaffold time**, before
+anything is written, so an agent reading only this bundle — not the underlying plan documents — can reach
+all six public workflow modes through `qa-skill workflow scaffold` → `qa-skill workflow run`. Every
+refusal below is `INVALID_ARTIFACT`, exit `3`.
+
+| Option | Feeds | Refused when |
+| --- | --- | --- |
+| `--charter-file <json>` | `charter` (`exploratory` mode) | The file does not satisfy `assertExplorationCharter` (`src/exploratory/charter.ts`) — a missing identity or mission, a non-positive action or time budget, an unauthorized action, or an action list longer than its own budget. |
+| `--change-scope-file <json>` | `changeScope`, plus a `local-change-scope` runtime registry entry (`retest` and `regression` modes) | The file declares zero `changes` — mirrors `registerChangeScope`'s own refusal (`src/regression/change-scope.ts`), checked here rather than deferred to it, so a bad file fails at scaffold time rather than inside `select-regression`. |
+| `--bug-run-id <id>` | `linkedRunId` and `retest.sourceBug` (`retest` mode) | The named run does not exist under **`--root`** (not `--source-root` — see below); is not terminal; its artifact manifest is invalid; it holds no `bug-report`; or it holds several and `--bug-artifact-id` did not name exactly one. |
+| `--bug-artifact-id <id>` | Which `bug-report` within `--bug-run-id`, when it holds more than one | It does not name a `bug-report` registered in that run — naming some other registered artifact type is refused exactly like naming nothing at all. |
+| `--observed-execution` | `observedExecution: { expected: true }` | `--mode plan` or `--mode exploratory` — neither mode's operation list ever reaches `execute-browser-test`, so the pause this flag arms could never fire; refused here rather than silently doing nothing. |
+| `--resume-run-id <id>` | `resumeRunId`, reopening an existing non-terminal run under `--root` instead of creating a new one | The named run does not exist under `--root`; its metadata does not parse as a run at all; or it is already terminal (`COMPLETED`, `COMPLETED_WITH_FAILURES`, `BLOCKED`, or `ABORTED`). |
+
+**`--bug-run-id` resolves under `--root`, not `--source-root`, even though the same command's bundle
+source uses `--source-root`.** A `retest` scaffold therefore names two different runs, both reachable from
+`--root`: a planning-only run for `--source-root`/`--source-run-id` (scaffold refuses a bundle source
+holding non-planning artifacts), and a separate, already-executed run for `--bug-run-id`. The option's own
+`--help` text says this; it is the one place the two flag families disagree, and pointing both at the same
+run reads like a typo rather than the mismatch it actually is.
+
+Before this branch, three of these six modes — `exploratory`, `regression`, and `retest` — could not be
+scaffolded through the CLI at all, for lack of exactly these options; `execute` mode could already be
+scaffolded and run, but no test had ever exercised that path. All six public workflow modes now run end to
+end through `qa-skill workflow scaffold` → `qa-skill workflow run`.
 
 ## Live lock (`LIVE_LOCK`)
 
