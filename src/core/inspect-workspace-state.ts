@@ -499,6 +499,16 @@ export async function inspectWorkspaceState(
     // execution record — a capability skills/shared/references/observed-execution.md documents and this
     // branch did not mean to change — but never subtract one from what they drive, so for them
     // `state.executionCases` IS the driven set exactly and an observed entry must contribute nothing here.
+    //
+    // Measured, so the gate is not mistaken for something it is not: widening it to "every mode but
+    // retest" while the residual stays `regression`-only leaves the whole residual suite GREEN, because
+    // for `execute`/`full` the intersection it would add is provably empty — their selection IS their
+    // driven set, so no selected case is ever undriven for an observed entry to cover. What this gate
+    // therefore does today is keep the pre-branch STRICTNESS of those two modes: with the clause active a
+    // batch could stand in for a drive that is missing for some other reason, and neither mode ever asked
+    // for that. The reverse pairing is the one that bites, and the suite does catch it: widening the
+    // residual (src/operations/run-workflow.ts) without widening this reddens the `execute`-mode test with
+    // the checkpoint-chain diagnostic. The two gates are one decision and must move together.
     const selectedIds = new Set(array(state?.executionCases).flatMap((item) => isRecord(item) && typeof item.artifactId === "string" ? [item.artifactId] : []));
     const drivenCaseIds = new Set(executionCaseRefs.map((reference) => reference.artifactId));
     const observedSelectedRefs = value.mode !== "regression" ? [] : [...observedCaseIds].filter((id) => selectedIds.has(id) && !drivenCaseIds.has(id)).flatMap((id) => {

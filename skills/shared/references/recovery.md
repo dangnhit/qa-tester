@@ -216,7 +216,11 @@ This pause gates on the OPERATION rather than on the mode, so it is reachable fr
 refuses `--observed-execution` for `retest`, because a `retest` run cannot benefit from the pause and cannot
 drop the field on resume — see the option table below. This section documents `regression`'s residual
 subtraction, which is what this branch tests. `retest` never consults the observed set at all, so no batch
-changes what it drives. See [Filtered runs over both
+changes what it drives. Neither do `execute` and `full`: both accept a `test-result-batch` as an execution
+record and both may arm the pause, but the residual subtraction is a `regression` mechanism, so an
+`execute` or `full` run waits for a batch and then drives its **whole** selection anyway
+(`src/operations/run-workflow.ts`). Passing `--observed-execution` to them buys the wait, not a smaller
+drive. See [Filtered runs over both
 lanes](../../../README.md#filtered-runs-over-both-lanes) in the README for the full flow and this
 distinction in more detail.
 
