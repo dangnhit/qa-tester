@@ -142,7 +142,9 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
     .option("--change-scope-file <path>", "Path to a change scope JSON file, inlined into the input (retest and regression modes)")
     .option("--bug-run-id <id>", "Terminal run ID holding the bug report a retest reproduces, looked up under --root (not --source-root)")
     .option("--bug-artifact-id <id>", "Which bug report in --bug-run-id, when it holds several")
-    .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string; charterFile?: string; changeScopeFile?: string; bugRunId?: string; bugArtifactId?: string }) => {
+    .option("--observed-execution", "Pause before driving the browser until a Runtime-Observed Execution is registered (see `qa-skill execute playwright`); pass this again when scaffolding the resume input, or the resume proceeds without the pause it needs")
+    .option("--resume-run-id <id>", "Reopen an existing non-terminal run under --root to resume, rather than creating a new one")
+    .action(async (commandOptions: { root: string; mode: string; output: string; environmentFile?: string; sourceRoot?: string; sourceRunId?: string; charterFile?: string; changeScopeFile?: string; bugRunId?: string; bugArtifactId?: string; observedExecution?: boolean; resumeRunId?: string }) => {
       stdout += `${JSON.stringify(await scaffoldWorkflowInput({
         root: commandOptions.root, mode: commandOptions.mode, outputPath: commandOptions.output,
         ...(commandOptions.environmentFile === undefined ? {} : { environmentPath: commandOptions.environmentFile }),
@@ -152,6 +154,8 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
         ...(commandOptions.changeScopeFile === undefined ? {} : { changeScopePath: commandOptions.changeScopeFile }),
         ...(commandOptions.bugRunId === undefined ? {} : { bugRunId: commandOptions.bugRunId }),
         ...(commandOptions.bugArtifactId === undefined ? {} : { bugArtifactId: commandOptions.bugArtifactId }),
+        ...(commandOptions.observedExecution === undefined ? {} : { observedExecution: commandOptions.observedExecution }),
+        ...(commandOptions.resumeRunId === undefined ? {} : { resumeRunId: commandOptions.resumeRunId }),
       }))}\n`;
     });
   workflowCommand.command("bootstrap")

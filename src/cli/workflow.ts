@@ -27,6 +27,8 @@ export type ScaffoldOptions = Readonly<{
   changeScopePath?: string;
   bugRunId?: string;
   bugArtifactId?: string;
+  observedExecution?: boolean;
+  resumeRunId?: string;
 }>;
 export type BootstrapOptions = Readonly<{ root: string; environmentPath: string; requirementPath: string; planPath: string; testCasePaths: readonly string[]; coveragePaths: readonly string[] }>;
 
@@ -99,6 +101,15 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
   // boundary (a caller-supplied value, not yet a `PublicWorkflowMode`), so nothing upstream of this line
   // stops a typo from being written into a workflow input that only fails deep inside `workflow run`.
   if (!(publicWorkflowModes as readonly string[]).includes(options.mode)) throw new QaSkillsError(`Workflow mode must be one of ${publicWorkflowModes.join(", ")}`, "INVALID_ARTIFACT");
+  // Refused here, at the edge, rather than left a silent no-op the operator would read as armed
+  // (task-5b-brief.md, decision 3): `plan` and `exploratory` are the only public modes whose operation
+  // list (`directOperations` in src/core/modes.ts) excludes `execute-browser-test`, and the pause this
+  // flag arms (`pendingObservedExecution` in src/operations/observed-pause.ts) gates on that exact
+  // operation name, so it could never fire for either mode. This is about honesty at the edge, not
+  // safety -- the pause predicate itself already gates on the operation regardless of this check.
+  if (options.observedExecution === true && (options.mode === "plan" || options.mode === "exploratory")) {
+    throw new QaSkillsError(`--observed-execution has no effect in ${options.mode} mode, which never runs execute-browser-test`, "INVALID_ARTIFACT");
+  }
   let environmentProfile: Record<string, unknown> | undefined;
   let bundle: Record<string, unknown> | undefined;
   if (options.sourceRoot !== undefined || options.sourceRunId !== undefined) {
@@ -172,12 +183,34 @@ export async function scaffoldWorkflowInput(options: ScaffoldOptions): Promise<R
     sourceBug = { artifactId: selected.id as string, sha256: selected.sha256 as string };
   }
 
+  if (options.resumeRunId !== undefined) {
+    const resumeRunPath = join(resolve(options.root), "qa-results", options.resumeRunId);
+    // Refusal (task-5b-brief.md, decision 1): reuses the exact helper Task 4 built for `--bug-run-id`
+    // and `--source-run-id` so a typo'd or already-cleaned-up run ID is refused here, cleanly, naming the
+    // run -- rather than surfacing as the raw ENOENT measured (not guessed) from `RunWorkspace.open`
+    // itself (src/core/run-workspace.ts) moments later, deep inside `workflow run`.
+    const { metadataValue: resumeMetadataValue } = await readRunManifestAndMetadata(resumeRunPath, options.resumeRunId, "Resume");
+    // Refusal (task-5b-brief.md, decision 2): measured, not guessed from the other paths' shape, that
+    // `RunWorkspace.open` does NOT itself refuse a terminal run -- it opens successfully, without
+    // acquiring a lock (src/core/run-workspace.ts). The refusal instead surfaces deep inside
+    // `workflow run`, as `QaSkillsError("Terminal workspace is immutable", "TERMINAL_WORKSPACE")` thrown
+    // by `assertWritable` -- either from the resume's first checkpoint write, when the run never had one,
+    // or from `workspace.finalize`, when it already did -- and neither path ever names the run ID or the
+    // word "resume". Refused here instead, at the edge: unlike every OTHER run this file reads (source,
+    // bug), which all require terminal, a resumable run is by definition the opposite -- not terminal.
+    if (isRecord(resumeMetadataValue) && ["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"].includes(String(resumeMetadataValue.status))) {
+      throw new QaSkillsError(`Resume run ${options.resumeRunId} is terminal and cannot be resumed`, "INVALID_ARTIFACT");
+    }
+  }
+
   const input: Record<string, unknown> = {
     root: resolve(options.root), mode: options.mode, environmentProfile,
     ...(bundle === undefined ? {} : { bundle }),
     ...(charter === undefined ? {} : { charter }),
     ...(changeScope === undefined ? {} : { changeScope, runtime: { changeScopeSourceId: "local-change-scope" } }),
     ...(sourceBug === undefined ? {} : { linkedRunId: options.bugRunId, retest: { sourceBug } }),
+    ...(options.observedExecution === true ? { observedExecution: { expected: true } } : {}),
+    ...(options.resumeRunId === undefined ? {} : { resumeRunId: options.resumeRunId }),
   };
   await writeFile(resolve(options.outputPath), `${JSON.stringify(input, null, 2)}\n`, "utf8");
   return input;

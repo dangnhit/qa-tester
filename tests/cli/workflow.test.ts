@@ -381,3 +381,97 @@ describe("workflow scaffold: modes, charter, change scope, and retest wiring", (
     await expect(runLocalWorkflow({ cwd: root, inputPath })).rejects.toThrow(/canonical plan bundle/i);
   });
 });
+
+// Phase 8b Task 5b: the two flags the two-lane flow needs between pause and resume --
+// `--observed-execution` and `--resume-run-id` -- so an operator scaffolds the resume input instead of
+// hand-editing the JSON `tests/cli/workflow-modes.test.ts`'s two-lane test currently produces by hand.
+describe("workflow scaffold: observed execution and resume run wiring", () => {
+  let root: string;
+  let envPath: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "qa-workflow-resume-"));
+    roots.push(root);
+    envPath = join(root, "environment.json");
+    await writeFile(envPath, JSON.stringify(environment));
+  });
+
+  it("emits observedExecution: { expected: true } and changes nothing else", async () => {
+    const withoutFlag = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "without.json"), environmentPath: envPath });
+    const withFlag = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "with.json"), environmentPath: envPath, observedExecution: true });
+    expect(withFlag).toEqual({ ...withoutFlag, observedExecution: { expected: true } });
+  });
+
+  it("emits resumeRunId", async () => {
+    const openRun = await RunWorkspace.create({ root, mode: "regression", environmentProfile: environment });
+    await openRun.close();
+    const withoutFlag = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "without.json"), environmentPath: envPath });
+    const withFlag = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "with.json"), environmentPath: envPath, resumeRunId: openRun.runId });
+    expect(withFlag).toEqual({ ...withoutFlag, resumeRunId: openRun.runId });
+  });
+
+  // Both flags together must produce EXACTLY the shape `tests/cli/workflow-modes.test.ts`'s two-lane test
+  // hand-edits today (`{ ...pausedInput, resumeRunId: pausedResult.runId }`, where `pausedInput` is the
+  // scaffolded input plus `observedExecution: { expected: true }`) -- that test already proves the real
+  // runner accepts exactly that shape as a resume, end to end with a real browser and a real Playwright
+  // runner. Reproducing the identical shape here, cheaply and without either, is the proof this task owns;
+  // the full end-to-end re-proof through the flags themselves is Task 6's.
+  it("both flags together produce exactly the shape the two-lane flow's hand-edited resume input has", async () => {
+    const openRun = await RunWorkspace.create({ root, mode: "regression", environmentProfile: environment });
+    await openRun.close();
+    const baseInput = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "base.json"), environmentPath: envPath });
+    const resumeInput = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "resume.json"), environmentPath: envPath, observedExecution: true, resumeRunId: openRun.runId });
+    expect(resumeInput).toEqual({ ...baseInput, observedExecution: { expected: true }, resumeRunId: openRun.runId });
+  });
+
+  // The regression guard for every existing caller: a scaffold with NEITHER flag must carry neither KEY,
+  // not merely an undefined value for each -- `JSON.stringify` drops undefined-valued keys either way, so
+  // only checking the key's presence (rather than its value) would leave a hand-rolled `"key" in object`
+  // spread bug undetected.
+  it("emits neither observedExecution nor resumeRunId when neither flag is given", async () => {
+    const input = await scaffoldWorkflowInput({ root, mode: "regression", outputPath: join(root, "neither.json"), environmentPath: envPath });
+    expect("observedExecution" in input).toBe(false);
+    expect("resumeRunId" in input).toBe(false);
+  });
+
+  // Refusal decision 1 (task-5b-brief.md): a --resume-run-id naming a run that does not exist under
+  // --root must refuse cleanly, naming the run, rather than crashing on the raw ENOENT measured from
+  // `RunWorkspace.open` itself.
+  it("refuses a --resume-run-id that does not exist, rather than crashing on a raw ENOENT", async () => {
+    const outputPath = join(root, "no-such-resume-run.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "regression", outputPath, environmentPath: envPath, resumeRunId: "20260101T000000Z-abcdef" }))
+      .rejects.toThrow(/resume run 20260101T000000Z-abcdef was not found/i);
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  // Refusal decision 2 (task-5b-brief.md): a --resume-run-id naming a TERMINAL run must refuse cleanly
+  // and by name -- measured (not guessed from the other paths' shape, which all require terminal) that
+  // `RunWorkspace.open` itself does not refuse a terminal run, so without this check the deep failure
+  // would instead be `QaSkillsError("Terminal workspace is immutable", "TERMINAL_WORKSPACE")`, several
+  // operations later inside `workflow run`, naming neither the run nor "resume".
+  it("refuses a --resume-run-id naming a terminal run, rather than the runner's own deep TERMINAL_WORKSPACE failure", async () => {
+    const terminal = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment });
+    await terminal.finalize("plan");
+    const terminalRunId = terminal.runId;
+    await terminal.close();
+    const outputPath = join(root, "terminal-resume-run.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "regression", outputPath, environmentPath: envPath, resumeRunId: terminalRunId }))
+      .rejects.toThrow(new RegExp(`resume run ${terminalRunId} is terminal`, "i"));
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  // Refusal decision 3 (task-5b-brief.md): `--observed-execution` with a mode that never runs
+  // `execute-browser-test` (`plan`, `exploratory`) would otherwise be a silent no-op the operator reads
+  // as armed -- refused at the edge instead, for honesty rather than safety.
+  it("refuses --observed-execution with plan or exploratory mode, which never run execute-browser-test", async () => {
+    const planOutput = join(root, "plan-observed.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: planOutput, environmentPath: envPath, observedExecution: true }))
+      .rejects.toThrow(/observed-execution.*plan mode/i);
+    await expect(readFile(planOutput, "utf8")).rejects.toThrow(/ENOENT/);
+
+    const exploratoryOutput = join(root, "exploratory-observed.json");
+    await expect(scaffoldWorkflowInput({ root, mode: "exploratory", outputPath: exploratoryOutput, environmentPath: envPath, observedExecution: true }))
+      .rejects.toThrow(/observed-execution.*exploratory mode/i);
+    await expect(readFile(exploratoryOutput, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+});
