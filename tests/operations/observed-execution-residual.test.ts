@@ -68,22 +68,6 @@ const identities: IdentitySet = {
   outside: { testCaseId: "TC-REG-OUTSIDE", revisionId: "REV-REG-OUTSIDE", instanceId: "INSTANCE-REG-OUTSIDE" },
 };
 
-/**
- * Two SELECTED cases whose identity components a `:`-joined key flattens onto one string, while the nested
- * index keeps them apart: `("TC-COL:X", "REV-COL", "INSTANCE-COL")` and
- * `("TC-COL", "X:REV-COL", "INSTANCE-COL")` both join to `TC-COL:X:REV-COL:INSTANCE-COL`.
- *
- * Every part of this is schema-valid with no tampering. `shared/schemas/test-case.schema.json` gives
- * `testCaseId`, `revisionId` and `instanceId` each `{ "type": "string", "minLength": 1 }` with no
- * `pattern`; `test-result-batch` constrains only `commitSha` and `specTreeSha256`; and `revisionId` is
- * never checked against `sha256Fingerprint`. So a batch crediting ONE of these must not credit the other.
- */
-const collidingIdentities: IdentitySet = {
-  a: { testCaseId: "TC-COL:X", revisionId: "REV-COL", instanceId: "INSTANCE-COL" },
-  b: { testCaseId: "TC-COL", revisionId: "X:REV-COL", instanceId: "INSTANCE-COL" },
-  outside: { testCaseId: "TC-COL-OUTSIDE", revisionId: "REV-COL-OUTSIDE", instanceId: "INSTANCE-COL-OUTSIDE" },
-};
-
 /** A required manual accessibility obligation, so a run pauses `AWAITING_HUMAN_INPUT` in front of
  *  `generate-qa-report` — the only way to reach a NON-TERMINAL run that has ALREADY driven its cases,
  *  which is where a batch registered after the drive lands. Lifted in shape from `COV-A11Y` in
@@ -95,7 +79,7 @@ const manualAccessibilityObligation = {
   accessibilityMethod: "keyboard", risk: "low", required: true, outcome: "Saved",
 } as const;
 
-type BundleOptions = Readonly<{ identitySet?: IdentitySet; manualAttestation?: boolean }>;
+type BundleOptions = Readonly<{ manualAttestation?: boolean }>;
 
 /**
  * A terminal `plan` run for `regression` mode holding THREE canonical cases in one `auto-approve-safe`
@@ -113,7 +97,6 @@ type BundleOptions = Readonly<{ identitySet?: IdentitySet; manualAttestation?: b
  * `regressionIndex` excludes this one without an unapproved plan in the way).
  */
 async function residualBundle(root: string, options: BundleOptions = {}): Promise<CanonicalPlanBundleRef> {
-  const identitySet = options.identitySet ?? identities;
   const source = await RunWorkspace.create({ root, mode: "plan", environmentProfile: environment });
   const requirement = await source.registerArtifactValue({ type: "requirement-analysis", relationships: [], value: {
     artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-REG",
@@ -132,9 +115,9 @@ async function residualBundle(root: string, options: BundleOptions = {}): Promis
     artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-REG",
     approvalPolicy: { mode: "auto-approve-safe" },
     testCases: [
-      planCase(identitySet.a, "Save email (selected A)"),
-      planCase(identitySet.b, "Save email (selected B)"),
-      planCase(identitySet.outside, "Save email (outside the selection)"),
+      planCase(identities.a, "Save email (selected A)"),
+      planCase(identities.b, "Save email (selected B)"),
+      planCase(identities.outside, "Save email (outside the selection)"),
     ],
   } });
   const canonicalCase = (identity: Identity, title: string, behavior: string, excluded: boolean) => source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
@@ -144,9 +127,9 @@ async function residualBundle(root: string, options: BundleOptions = {}): Promis
     coverage: { requirementId: "REQ-REG", role: "member", behavior, browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
     ...(excluded ? { regressionIndex: { requirementIds: [], codeSurfaces: ["outside-surface"], declaredDependencies: [], gitPaths: [], userScope: [] } } : {}),
   } });
-  const caseA = await canonicalCase(identitySet.a, "Save email (selected A)", "save email", false);
-  const caseB = await canonicalCase(identitySet.b, "Save email (selected B)", "save email again", false);
-  const caseOutside = await canonicalCase(identitySet.outside, "Save email (outside the selection)", "save email outside", true);
+  const caseA = await canonicalCase(identities.a, "Save email (selected A)", "save email", false);
+  const caseB = await canonicalCase(identities.b, "Save email (selected B)", "save email again", false);
+  const caseOutside = await canonicalCase(identities.outside, "Save email (outside the selection)", "save email outside", true);
   const obligation = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
     artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
@@ -543,55 +526,16 @@ describe("the residual: one selection, two lanes", () => {
     expect(await drivenCaseIds(root, paused.runId)).toEqual([]);
   }, 180_000);
 
-  /**
-   * The identity is matched COMPONENT BY COMPONENT, never as a `:`-joined string. `collidingIdentities.a`
-   * and `.b` are two distinct schema-valid canonical cases that join to one string, so a joined key let a
-   * batch crediting `a` also credit `b`: the residual emptied, lane 1 drove nothing, the checkpoint's union
-   * counted the case anyway, and the run finalized COMPLETED with `validation.valid` true — a case in
-   * `state.executionCases` executed by NEITHER lane, with no tampering at all. See `caseIdentity` in
-   * src/core/observed-coverage.ts.
-   *
-   * BOTH cases are in the selection, and keeping them apart THERE is what makes this test's own claim
-   * reproducible. `selectRegressionCases` (src/regression/selector.ts) keyed its decision map on the same
-   * join, so the pair collapsed to one decision and the survivor was whichever one arrived last — an
-   * order no fixture chooses, because an imported bundle is ordered by source artifact id
-   * (`buildCanonicalPlanImportBatch`, src/operations/run-workflow.ts) and those are ULIDs that tie when
-   * two registrations land in the same millisecond. On the runs where `a` won instead of `b`, the batch
-   * credited the only selected case, the residual emptied, and this test failed on nothing driven. That
-   * selector keys the identity structurally now, so the selection holds `a` and `b`, the batch credits
-   * `a` alone, and `b` is the selected case whose execution that credit must not cancel — which is what
-   * this asserts, whatever order the two cases were registered in.
-   *
-   * SKIPPED as of the Phase 9 Task 1 schema bump: `test-case.schema.json`'s `testCaseId`/`revisionId`/
-   * `instanceId` now carry `"pattern": "^[^:]+$"`, so `collidingIdentities.a` and `.b` — both deliberately
-   * containing a `:` so their naive join collides — can no longer be REGISTERED at all;
-   * `residualBundle`'s own `source.registerArtifactValue({ type: "test-case", ... })` now throws
-   * `/testCaseId must match pattern/` before this test's scenario is ever reached. That is not a fixture
-   * bug: forbidding `:` in every component makes the naive join injective for ANY two valid identities,
-   * so no registrable fixture can ever reconstruct this scenario again — the collision this test guards
-   * against is now structurally unrepresentable, one layer below the reader fix it was written to pin.
-   * Left skipped rather than deleted or reworked: rewriting it to "exercise the collision at the function
-   * boundary rather than through registration" is exactly the shape of work the Phase 9 plan assigns to
-   * Task 2 for this same file (`docs/superpowers/plans/2026-08-02-phase9-debt-clearing.md`, Task 2 Step 1),
-   * and inventing that boundary here would be logic work outside Task 1's scope ("nothing but the bump and
-   * its sweep"). Task 2 should replace this test with that function-boundary equivalent, or delete it if
-   * the structural fix already makes it redundant, rather than silently leaving it skipped. */
-  it.skip("credits only the case a batch entry names, not another whose components rejoin to the same string", async () => {
-    const root = await mkdtemp(join(tmpdir(), "qa-residual-collide-")); roots.push(root);
-    const bundle = await residualBundle(root, { identitySet: collidingIdentities });
-    const tester = regressionTester();
-    const paused = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true } });
-    expect(paused.outcome).toBe("AWAITING_OBSERVED_EXECUTION");
-    await registerObservedBatch(root, paused.runId, [collidingIdentities.a]);
-
-    const resumed = await tester({ ...regressionInput(root, bundle), observedExecution: { expected: true }, resumeRunId: paused.runId });
-
-    // The residual still holds `b`, whose identity differs from the credited one only in WHERE the colon
-    // falls. A joined key leaves this EMPTY, with nothing driven and the run still valid.
-    expect(await drivenCaseIds(root, paused.runId)).toEqual([collidingIdentities.b.testCaseId]);
-    expect(resumed.outcome).toBe("COMPLETED");
-    expect(resumed.validation.valid).toBe(true);
-  }, 180_000);
+  // A colliding-identity end-to-end case ("`collidingIdentities.a`/`.b` join to one string, so a batch
+  // crediting `a` must not also credit `b`") lived here through the Phase 9 Task 1 schema bump. Its
+  // fixture is no longer constructible at all: `test-case.schema.json` now forbids `:` in `testCaseId`/
+  // `revisionId`/`instanceId`, so no two DISTINCT valid identities can ever rejoin to the same string,
+  // and `residualBundle`'s own registration would throw `/testCaseId must match pattern/` before this
+  // scenario was reached. The property it pinned survives at the shape it always ultimately rested on:
+  // `tests/core/observed-coverage.test.ts`'s two collision tests build the same colliding triples as
+  // plain objects (bypassing registration) and assert `observedCoveredCaseIds` still keeps them apart.
+  // Deleted rather than left `.skip`'d, since a permanently unrepresentable scenario is not a pending
+  // test — it is dead weight against this suite's zero-skip baseline.
 
   /**
    * The overlap the union comparison must survive, reached exactly the way the whole-branch review

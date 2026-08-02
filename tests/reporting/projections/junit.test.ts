@@ -102,10 +102,11 @@ describe("renderJUnit output is well-formed XML", () => {
 
   /**
    * The path that makes this reachable, end to end and by real field names.
-   * `coverage-obligation.schema.json:12` types `obligationId` as `{"type": "string", "minLength": 1}`
-   * with no pattern, `ingest-coverage-obligation.ts:19-24` registers the agent draft verbatim, and the
-   * id reaches `release-gate.ts:96`'s `Required coverage missing: <ids>.` — this exact `<failure
-   * message="...">`. Every XML-illegal class rides in on it at once.
+   * `coverage-obligation.schema.json` types `obligationId` as `{"type": "string", "minLength": 1}`, now
+   * with a `pattern` that forbids a literal colon but nothing about control characters —
+   * `hostileId` below contains none — `ingest-coverage-obligation.ts:19-24` registers the agent draft
+   * verbatim, and the id reaches `release-gate.ts:96`'s `Required coverage missing: <ids>.` — this exact
+   * `<failure message="...">`. Every XML-illegal class rides in on it at once.
    */
   const hostileId = `COV-${character(0x1b)}[31m${character(0x00)}${character(0x0b)}${character(0x0c)}${character(0x0e)}${character(0x1f)}${character(0xfffe)}${character(0xffff)}${character(0xd800)}-1`;
 

@@ -62,24 +62,26 @@ const observedFailedStatuses: readonly unknown[] = ["FAILED"];
  * parameterized instances (see RegressionCase in src/regression/change-scope.ts).
  *
  * Returned STRUCTURALLY, and matched through `indexByTestCaseIdentity` (src/core/artifact-index.ts),
- * because a DELIMITED JOIN of these three fields is free to collide and a collision here CREDITS
- * EXECUTION. Nothing constrains their charset — `test-case.schema.json` gives `testCaseId`, `revisionId`
- * and `instanceId` each `{ "type": "string", "minLength": 1 }` with no `pattern`, `revisionId` is never
- * checked against `sha256Fingerprint`, and the identity-tag regex (src/observed/report-mapping.ts)
- * forbids only `] [ / @` and whitespace — so `("TC:X", "R", "I")` and `("TC", "X:R", "I")` are two
- * distinct canonical cases that a `:`-joined key flattens into one. One batch entry would then credit
- * BOTH: the uncredited case is subtracted from the residual lane 1 would drive AND counted towards the
- * checkpoint's union coverage, which is precisely the "executed by neither lane" state this module
- * exists to make unreachable.
+ * because a DELIMITED JOIN of these three fields WAS free to collide and a collision here CREDITS
+ * EXECUTION. Nothing used to constrain their charset — `test-case.schema.json` gave `testCaseId`,
+ * `revisionId` and `instanceId` each `{ "type": "string", "minLength": 1 }` with no `pattern`, so
+ * `("TC:X", "R", "I")` and `("TC", "X:R", "I")` were two distinct canonical cases that a `:`-joined key
+ * flattened into one; `test-case.schema.json` now forbids `:` in each, closing exactly that gap, but
+ * `revisionId` is still never checked against `sha256Fingerprint`, and the identity-tag regex
+ * (src/observed/report-mapping.ts) still forbids only `] [ / @` and whitespace, so a structural match
+ * stays the defense rather than a join over whichever charset a field currently happens to admit. One
+ * batch entry would then credit BOTH: the uncredited case is subtracted from the residual lane 1 would
+ * drive AND counted towards the checkpoint's union coverage, which is precisely the "executed by neither
+ * lane" state this module exists to make unreachable.
  *
  * The nested map is the mechanism every OTHER reader of this same triple already uses — `testResultBatchRule`
  * (src/core/semantic-rules.ts), `selectedExecutionCaseRefs` and `regressionSelectionRule`
  * (src/core/inspect-workspace-state.ts, src/core/semantic-rules.ts), and `reproduce-bug`
  * (src/operations/run-workflow.ts) — and `artifact-index.ts`'s own docstring already argues exactly this
- * point ("a `${a}|${b}|${c}` join would be free to collide. The identity triple is a NESTED map for the
- * same reason"). Using it rather than restating the assumption is what "one reader" means here, and it
- * costs this module no dependency it should not have: `artifact-index` is the `src/core/` leaf that
- * imports nothing.
+ * point ("a `${a}|${b}|${c}` join would have been free to collide [...] The identity triple is a NESTED
+ * map for the same reason"). Using it rather than restating the assumption is what "one reader" means
+ * here, and it costs this module no dependency it should not have: `artifact-index` is the `src/core/`
+ * leaf that imports nothing.
  *
  * The all-strings guard is NOT redundant under nested keys, and is the one thing the join gave for free.
  * `Map` compares with SameValueZero, so a `{}` batch entry and a `{}` unparsed `test-case` payload would

@@ -28,10 +28,11 @@ const isXmlChar = (code: number): boolean =>
  * anywhere in this document makes the whole file unparseable, and the projection is lost entire: the
  * export still exits 0 and the sidecar still certifies the malformed bytes.
  *
- * It is reachable. `coverage-obligation.schema.json:12` types `obligationId` as
- * `{"type": "string", "minLength": 1}` with no pattern, `ingest-coverage-obligation.ts:19-24` registers
- * the agent draft verbatim, and that id reaches `ruleInputs.coverage.requiredMissing` and from there
- * `release-gate.ts:96`'s `Required coverage missing: <ids>.` — straight into a `<failure message="...">`.
+ * It is reachable. `coverage-obligation.schema.json` types `obligationId` as `{"type": "string",
+ * "minLength": 1}`, now with a `pattern` that forbids a literal colon but nothing about control
+ * characters, and `ingest-coverage-obligation.ts:19-24` registers the agent draft verbatim, and that id
+ * reaches `ruleInputs.coverage.requiredMissing` and from there `release-gate.ts:96`'s `Required coverage
+ * missing: <ids>.` — straight into a `<failure message="...">`.
  * Measured on this runtime: an id carrying an ESC byte produced `not well-formed (invalid token)` from a
  * real parser. `projection-model.ts`'s `identifierOnlyGateRules` names the same field as the one nothing
  * in code protects.

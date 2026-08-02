@@ -124,10 +124,13 @@ describe("observedCoveredCaseIds", () => {
   /**
    * Two DISTINCT canonical cases whose components a `:`-joined key would flatten onto one string:
    * `("TC-COL:X", "REV", "INST")` and `("TC-COL", "X:REV", "INST")` both join to `TC-COL:X:REV:INST`.
-   * Nothing forbids the colon — `test-case.schema.json` gives all three id fields `{ "type": "string",
-   * "minLength": 1 }` with no `pattern` — so a batch crediting ONE of them must not credit the other.
-   * Crediting both is how a selected case reaches a finalized, valid run executed by neither lane: it is
-   * subtracted from the residual lane 1 would drive AND counted towards the checkpoint's union coverage.
+   * Nothing used to forbid the colon — `test-case.schema.json` gave all three id fields
+   * `{ "type": "string", "minLength": 1 }` with no `pattern`; it now forbids `:` in each, so this exact
+   * pair can no longer both be registered through a real run, but `observedCoveredCaseIds` takes plain
+   * objects and never re-validates them against the schema, so a batch crediting ONE of them must still
+   * not credit the other. Crediting both is how a selected case reaches a finalized, valid run executed
+   * by neither lane: it is subtracted from the residual lane 1 would drive AND counted towards the
+   * checkpoint's union coverage.
    */
   it("does not credit a second case whose components merely rejoin to the same string", () => {
     const covered = observedCoveredCaseIds([

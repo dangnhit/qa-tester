@@ -31,12 +31,14 @@ function identityOf(entry: Readonly<{ testCaseId: string; revisionId: string; in
  * A TOTAL order over identities: the historical `:`-joined key first, then component by component.
  *
  * The joined key stays the primary term so that every non-colliding input keeps exactly the order it has
- * always had — the tie-break can only fire where two joined keys are EQUAL. That happens in one of two
- * ways, and nothing constrains the charset that separates them: `test-case.schema.json` gives
+ * always had — the tie-break can only fire where two joined keys are EQUAL. That used to happen in one of
+ * two ways, and nothing used to constrain the charset that separates them: `test-case.schema.json` gave
  * `testCaseId`, `revisionId` and `instanceId` each `{ "type": "string", "minLength": 1 }` with no
- * `pattern`, so `("TC:X", "R", "I")` and `("TC", "X:R", "I")` are two DISTINCT canonical cases that
- * rejoin to one string. Either they are the same identity (the comparison is 0, as before), or they are
- * a collision — and then the components decide, deterministically.
+ * `pattern`, so `("TC:X", "R", "I")` and `("TC", "X:R", "I")` were two DISTINCT canonical cases that
+ * rejoined to one string; `test-case.schema.json` now forbids `:` in each component, closing that
+ * specific pair, but the tie-break stays as the deterministic fallback for any other charset a field is
+ * ever left free to admit. Either they are the same identity (the comparison is 0, as before), or they
+ * are a collision — and then the components decide, deterministically.
  *
  * Without this the two colliding cases compared equal, `Array.prototype.sort` left them in input order,
  * and the surviving decision was whichever one the CALLER happened to pass last. That order is not the
@@ -62,9 +64,10 @@ function compareIdentity(
  * "Deterministic" is a property of the input SET, not of the order it arrives in, and both halves of
  * that are load-bearing. The decision store is keyed STRUCTURALLY through the shared nested index rather
  * than by a `:`-joined string, for the reason `caseIdentity` (src/core/observed-coverage.ts) and
- * `artifact-index.ts`'s own docstring already give: a delimited join of the three identity components is
- * free to collide, and here a collision made two distinct canonical cases share ONE decision. The
- * consequences were both directions of wrong. The one that survived was decided by the caller's input
+ * `artifact-index.ts`'s own docstring already give: a delimited join of the three identity components
+ * was free to collide before `test-case.schema.json` forbade `:` in each, and here a collision made two
+ * distinct canonical cases share ONE decision. The consequences were both directions of wrong. The one
+ * that survived was decided by the caller's input
  * order — see `compareIdentity` — so a regression run's selection was not reproducible; and where only
  * one of a colliding pair matched a declared change, the other vanished from `selected` AND from
  * `excluded`, which is the one outcome this function must never produce, since a case in neither list is

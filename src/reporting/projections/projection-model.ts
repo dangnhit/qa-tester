@@ -105,8 +105,9 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
  *    interpolate `bugId`, which bug-report.schema.json:12 constrains to `^BUG-[A-Z0-9-]+$` — enforced BY
  *    SCHEMA: no lowercase, no space, no punctuation a sentence needs.
  *  - `REQUIRED_HIGH_RISK_PASSED` and `REQUIRED_COVERAGE_COMPLETE` interpolate `obligationId`, which
- *    coverage-obligation.schema.json:12 leaves as `{"type": "string", "minLength": 1}` — no pattern —
- *    and which `ingest-coverage-obligation.ts` registers verbatim from an agent-authored draft, unedited.
+ *    coverage-obligation.schema.json now forbids a literal colon but is otherwise still just
+ *    `{"type": "string", "minLength": 1}` — nothing about control characters — and which
+ *    `ingest-coverage-obligation.ts` registers verbatim from an agent-authored draft, unedited.
  *    These two are identifier-only BY CONVENTION ONLY (every authoring template names the field like an
  *    id, e.g. `artifact-drafts.ts`'s `"COV-PLACEHOLDER-1"`); nothing in code stops an authored sentence
  *    from reaching this reducer today.

@@ -15,9 +15,11 @@
  *    SameValueZero, which coincides with `===` for every value `JSON.parse` can produce (JSON has no
  *    `NaN`; `0` and `-0` compare equal under both), so an indexed lookup admits exactly the items the
  *    original `===` predicate admitted. Nothing is serialized into a delimited string, so no charset
- *    assumption is made about ids — `test-case`/`test-result` only constrain their identity fields to
- *    `{ "type": "string", "minLength": 1 }`, so a `` `${a}|${b}|${c}` `` join would be free to collide.
- *    The identity triple is a NESTED map for the same reason.
+ *    assumption is made about ids — `test-case`/`test-result` used to constrain their identity fields to
+ *    only `{ "type": "string", "minLength": 1 }`, so a `` `${a}|${b}|${c}` `` join would have been free to
+ *    collide; `test-case.schema.json`/`test-result.schema.json` now forbid `:` in each, but constrain no
+ *    OTHER separator, so a delimited join is still not a safe substitute for this index. The identity
+ *    triple is a NESTED map for the same reason.
  * 4. **`get` returns the live bucket, not a copy.** `readonly T[]` blocks mutation at the type level,
  *    and every current consumer only reads a bucket — via `.length`, `[0]`, `.filter`, `.some`, or
  *    `.find`, all of which allocate — so no consumer may assume it owns the returned array or cast
