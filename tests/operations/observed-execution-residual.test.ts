@@ -551,11 +551,16 @@ describe("the residual: one selection, two lanes", () => {
    * `state.executionCases` executed by NEITHER lane, with no tampering at all. See `caseIdentity` in
    * src/core/observed-coverage.ts.
    *
-   * Only `b` is in the selection, and that is a SECOND, pre-existing collision this test does not fix:
-   * `selectRegressionCases` (src/regression/selector.ts, unchanged since long before this branch) keys its
-   * own decision map on the same join, so the two cases collapse to one decision and `b` — the later
-   * insertion — wins. That makes `b` the selected case whose execution a credit of `a` must not cancel,
-   * which is what this asserts.
+   * BOTH cases are in the selection, and keeping them apart THERE is what makes this test's own claim
+   * reproducible. `selectRegressionCases` (src/regression/selector.ts) keyed its decision map on the same
+   * join, so the pair collapsed to one decision and the survivor was whichever one arrived last — an
+   * order no fixture chooses, because an imported bundle is ordered by source artifact id
+   * (`buildCanonicalPlanImportBatch`, src/operations/run-workflow.ts) and those are ULIDs that tie when
+   * two registrations land in the same millisecond. On the runs where `a` won instead of `b`, the batch
+   * credited the only selected case, the residual emptied, and this test failed on nothing driven. That
+   * selector keys the identity structurally now, so the selection holds `a` and `b`, the batch credits
+   * `a` alone, and `b` is the selected case whose execution that credit must not cancel — which is what
+   * this asserts, whatever order the two cases were registered in.
    */
   it("credits only the case a batch entry names, not another whose components rejoin to the same string", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-residual-collide-")); roots.push(root);

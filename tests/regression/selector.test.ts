@@ -34,6 +34,59 @@ describe("regression selection", () => {
     expect(result.selected).toEqual([expect.objectContaining({ testCaseId: "TC-SHARED", source: "requirement-mapping", rationale: "requirement-mapping matched REQ-A for change-a; requirement-mapping matched REQ-B for change-b" })]);
   });
 
+  /**
+   * The identity is three components, never one `:`-joined string. `("TC-COL:X", "REV-COL", "I")` and
+   * `("TC-COL", "X:REV-COL", "I")` are two schema-valid canonical cases — `test-case.schema.json`
+   * constrains each component only to a non-empty string — that rejoin to one key.
+   *
+   * A joined decision key collapsed them into ONE decision, and which one survived was decided by the
+   * order the caller passed them in. No caller chooses that order: an imported bundle arrives sorted by
+   * source artifact id (`buildCanonicalPlanImportBatch`, src/operations/run-workflow.ts), and those are
+   * ULIDs whose relative order is random when two registrations land in the same millisecond. So the
+   * assertion below is about reproducibility as much as about correctness — a selection that is not a
+   * function of its input SET is one a resumed run cannot recompute.
+   */
+  const collidingChange = { id: "change-col", requirementIds: ["REQ-COL"], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] };
+  const collidingCase = (testCaseId: string, revisionId: string, requirementIds: readonly string[]) =>
+    ({ testCaseId, revisionId, instanceId: "INSTANCE-COL", requirementIds: [...requirementIds], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] });
+
+  it("keeps two identities that rejoin to the same string apart, in an order their arrival cannot change", () => {
+    const first = collidingCase("TC-COL:X", "REV-COL", ["REQ-COL"]);
+    const second = collidingCase("TC-COL", "X:REV-COL", ["REQ-COL"]);
+    const forward = selectRegressionCases({ changes: [collidingChange], testCases: [first, second] });
+    const reversed = selectRegressionCases({ changes: [collidingChange], testCases: [second, first] });
+
+    expect(forward.selected.map((decision) => [decision.testCaseId, decision.revisionId])).toEqual([["TC-COL", "X:REV-COL"], ["TC-COL:X", "REV-COL"]]);
+    expect(forward.excluded).toEqual([]);
+    expect(reversed).toEqual(forward);
+  });
+
+  it("keeps the collision apart when the colon crosses the revision boundary instead of the id one", () => {
+    // The same rejoin, one component over: `("TC-COL", "REV:X", "INSTANCE-COL")` and
+    // `("TC-COL", "REV", "X:INSTANCE-COL")` share a testCaseId as well as a joined key, so the order is
+    // settled by the revision — the term after the id in the total order.
+    const first = { ...collidingCase("TC-COL", "REV:X", ["REQ-COL"]), instanceId: "INSTANCE-COL" };
+    const second = { ...collidingCase("TC-COL", "REV", ["REQ-COL"]), instanceId: "X:INSTANCE-COL" };
+    const forward = selectRegressionCases({ changes: [collidingChange], testCases: [first, second] });
+    const reversed = selectRegressionCases({ changes: [collidingChange], testCases: [second, first] });
+
+    expect(forward.selected.map((decision) => [decision.revisionId, decision.instanceId])).toEqual([["REV", "X:INSTANCE-COL"], ["REV:X", "INSTANCE-COL"]]);
+    expect(reversed).toEqual(forward);
+  });
+
+  it("excludes the colliding case no change selected, rather than dropping it from both lists", () => {
+    // Only the first maps to the declared change. Under a joined key the second matched the decision the
+    // FIRST one had already written, so it appeared in neither `selected` nor `excluded` — a registered
+    // case nobody was accountable for executing.
+    const result = selectRegressionCases({
+      changes: [collidingChange],
+      testCases: [collidingCase("TC-COL:X", "REV-COL", ["REQ-COL"]), collidingCase("TC-COL", "X:REV-COL", [])],
+    });
+
+    expect(result.selected.map((decision) => [decision.testCaseId, decision.revisionId])).toEqual([["TC-COL:X", "REV-COL"]]);
+    expect(result.excluded.map((decision) => [decision.testCaseId, decision.revisionId])).toEqual([["TC-COL", "X:REV-COL"]]);
+  });
+
   it("exposes every canonical mapping source from the public QA Tester surface and preserves its priority", () => {
     expect(regressionMappingSources).toEqual(["requirement-mapping", "code-surface-mapping", "declared-dependency", "git-diff-heuristic", "user-scope"]);
     const result = selectRegressionCases({
