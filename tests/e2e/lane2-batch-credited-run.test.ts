@@ -44,7 +44,7 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 }
 
 const testCase = {
-  artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0",
+  artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0",
   testCaseId: "TC-LEDGER", revisionId: "REV-1", instanceId: "INST-1", title: "The ledger balances",
   steps: [{ id: "call", action: "navigate", sideEffect: "none" }],
   coverage: { requirementId: "REQ-LEDGER", role: "auditor", behavior: "balance the ledger", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "The ledger balances" },
@@ -99,7 +99,7 @@ async function newRun(root: string): Promise<string> {
   });
   await planning.registerArtifactValue({
     type: "coverage-obligation", relationships: [],
-    value: { artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "0.1.0", obligationId: "COV-API", requirementAnalysisArtifactId: analysis.id, requirementId: "REQ-LEDGER", role: "auditor", behavior: "balance the ledger", executionSurface: "api", accessibilityMethod: null, risk: "high", required: true, outcome: "The ledger balances" },
+    value: { artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "0.1.0", obligationId: "COV-API", requirementAnalysisArtifactId: analysis.id, requirementId: "REQ-LEDGER", role: "auditor", behavior: "balance the ledger", executionSurface: "api", accessibilityMethod: null, risk: "high", required: true, outcome: "The ledger balances" },
   });
   await planning.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
   await planning.close();

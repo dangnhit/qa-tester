@@ -97,13 +97,13 @@ async function planBundle(root: string, options: BundleOptions = {}): Promise<Ca
     }],
   } });
   const testcase = await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-HUMAN", revisionId: "REV-HUMAN", instanceId: "INSTANCE-HUMAN",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-HUMAN", revisionId: "REV-HUMAN", instanceId: "INSTANCE-HUMAN",
     title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-HUMAN", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   const obligations = await Promise.all((options.obligations ?? [browserObligation]).map((spec) => source.registerArtifactValue({
     type: "coverage-obligation", relationships: [requirement.id], value: {
-      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+      artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
       obligationId: spec.obligationId, requirementAnalysisArtifactId: requirement.id, requirementId: spec.requirementId ?? "REQ-HUMAN",
       role: "member", behavior: spec.behavior ?? "save email", executionSurface: spec.executionSurface,
       ...(spec.executionSurface === "browser" ? { browser: "chromium", viewport: { width: 1280, height: 720 } } : {}),
@@ -175,12 +175,12 @@ async function regressionBundleWithExcludedHumanReviewPlan(root: string): Promis
     }],
   } });
   const includedCase = await source.registerArtifactValue({ type: "test-case", relationships: [includedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
     title: "Save email (selected by regression)", steps: [{ id: "plan-open-included", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   const excludedCase = await source.registerArtifactValue({ type: "test-case", relationships: [excludedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
     title: "Save email (excluded by regression)", steps: [{ id: "plan-open-excluded", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email, excluded", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
     // Explicit and empty/unmatched, so the default requirement-fallback in `regressionCaseFromCanonical`
@@ -190,7 +190,7 @@ async function regressionBundleWithExcludedHumanReviewPlan(root: string): Promis
     regressionIndex: { requirementIds: [], codeSurfaces: ["excluded-surface"], declaredDependencies: [], gitPaths: [], userScope: [] },
   } });
   const obligation = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",

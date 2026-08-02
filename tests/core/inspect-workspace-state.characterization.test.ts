@@ -52,7 +52,7 @@ const environmentProfile = {
 function testCase(id: string) {
   return {
     artifactType: "test-case",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     testCaseId: id,
     revisionId: `REV-${id}`,
@@ -69,7 +69,7 @@ function testCase(id: string) {
 function testResult(workspace: RunWorkspace, testCaseId: string, attemptId: string) {
   return {
     artifactType: "test-result",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     attemptId,
     runId: workspace.runId,

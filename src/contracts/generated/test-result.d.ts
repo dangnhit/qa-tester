@@ -2,7 +2,7 @@
 
 export interface TestResult {
   artifactType: "test-result";
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   producerVersion: string;
   attemptId: string;
   runId: string;

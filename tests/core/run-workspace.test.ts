@@ -47,7 +47,7 @@ function metadata(workspace: RunWorkspace, overrides: Record<string, unknown> = 
 function testCase(id: string) {
   return {
     artifactType: "test-case",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     testCaseId: id,
     revisionId: `REV-${id}`,
@@ -64,7 +64,7 @@ function testCase(id: string) {
 function testResult(workspace: RunWorkspace, testCaseId: string, attemptId = "ATTEMPT-1") {
   return {
     artifactType: "test-result",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     attemptId,
     runId: workspace.runId,
@@ -102,7 +102,7 @@ function batchEntry(overrides: Record<string, unknown> = {}) {
 function testResultBatch(workspace: RunWorkspace, entries: readonly Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
   return {
     artifactType: "test-result-batch",
-    schemaVersion: "3.0.0",
+    schemaVersion: "4.0.0",
     producerVersion: "1.0.0",
     executionId: "EXEC-1",
     runId: workspace.runId,
@@ -696,7 +696,7 @@ describe("RunWorkspace", () => {
     const gapPath = join(directory, "gap.yaml");
     await writeFile(gapPath, [
       "artifactType: evidence-gap",
-      "schemaVersion: 1.0.0",
+      "schemaVersion: 2.0.0",
       "producerVersion: 1.0.0",
       "evidenceGapId: GAP-1",
       `runId: ${workspace.runId}`,
@@ -716,7 +716,7 @@ describe("RunWorkspace", () => {
     const gapPath = join(directory, "gap.json");
     await writeFile(gapPath, JSON.stringify({
       artifactType: "evidence-gap",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       runId: workspace.runId,
       reason: "The upstream system redacted the response.",

@@ -89,7 +89,7 @@ const collidingIdentities: IdentitySet = {
  *  which is where a batch registered after the drive lands. Lifted in shape from `COV-A11Y` in
  *  tests/operations/awaiting-human-input.test.ts. */
 const manualAccessibilityObligation = {
-  artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+  artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
   obligationId: "COV-REG-A11Y", requirementId: "REQ-REG",
   role: "member", behavior: "save email with the keyboard alone", executionSurface: "manual",
   accessibilityMethod: "keyboard", risk: "low", required: true, outcome: "Saved",
@@ -138,7 +138,7 @@ async function residualBundle(root: string, options: BundleOptions = {}): Promis
     ],
   } });
   const canonicalCase = (identity: Identity, title: string, behavior: string, excluded: boolean) => source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     testCaseId: identity.testCaseId, revisionId: identity.revisionId, instanceId: identity.instanceId,
     title, steps: [{ id: `plan-open-${identity.testCaseId}`, action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior, browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
@@ -148,7 +148,7 @@ async function residualBundle(root: string, options: BundleOptions = {}): Promis
   const caseB = await canonicalCase(identitySet.b, "Save email (selected B)", "save email again", false);
   const caseOutside = await canonicalCase(identitySet.outside, "Save email (outside the selection)", "save email outside", true);
   const obligation = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
@@ -314,7 +314,7 @@ async function registerObservedBatch(root: string, runId: string, observed: read
       },
     });
     return await workspace.registerArtifactValue({ type: "test-result-batch", provenance: "runtime-observed", relationships: [bundle.descriptor.id, ...cases.map((artifact) => artifact.record.id)], value: {
-      artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+      artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "1.0.0",
       executionId, runId, commitSha: "0".repeat(40), specTreeSha256: "1".repeat(64),
       startedAt: "2026-07-31T00:00:00.000Z", finishedAt: "2026-07-31T00:00:01.000Z",
       // `failureClassification` follows the status the way `mapObservedReport` derives it: `PASSED` pairs
@@ -561,8 +561,22 @@ describe("the residual: one selection, two lanes", () => {
    * selector keys the identity structurally now, so the selection holds `a` and `b`, the batch credits
    * `a` alone, and `b` is the selected case whose execution that credit must not cancel — which is what
    * this asserts, whatever order the two cases were registered in.
-   */
-  it("credits only the case a batch entry names, not another whose components rejoin to the same string", async () => {
+   *
+   * SKIPPED as of the Phase 9 Task 1 schema bump: `test-case.schema.json`'s `testCaseId`/`revisionId`/
+   * `instanceId` now carry `"pattern": "^[^:]+$"`, so `collidingIdentities.a` and `.b` — both deliberately
+   * containing a `:` so their naive join collides — can no longer be REGISTERED at all;
+   * `residualBundle`'s own `source.registerArtifactValue({ type: "test-case", ... })` now throws
+   * `/testCaseId must match pattern/` before this test's scenario is ever reached. That is not a fixture
+   * bug: forbidding `:` in every component makes the naive join injective for ANY two valid identities,
+   * so no registrable fixture can ever reconstruct this scenario again — the collision this test guards
+   * against is now structurally unrepresentable, one layer below the reader fix it was written to pin.
+   * Left skipped rather than deleted or reworked: rewriting it to "exercise the collision at the function
+   * boundary rather than through registration" is exactly the shape of work the Phase 9 plan assigns to
+   * Task 2 for this same file (`docs/superpowers/plans/2026-08-02-phase9-debt-clearing.md`, Task 2 Step 1),
+   * and inventing that boundary here would be logic work outside Task 1's scope ("nothing but the bump and
+   * its sweep"). Task 2 should replace this test with that function-boundary equivalent, or delete it if
+   * the structural fix already makes it redundant, rather than silently leaving it skipped. */
+  it.skip("credits only the case a batch entry names, not another whose components rejoin to the same string", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-residual-collide-")); roots.push(root);
     const bundle = await residualBundle(root, { identitySet: collidingIdentities });
     const tester = regressionTester();

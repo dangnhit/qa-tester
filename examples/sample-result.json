@@ -1,6 +1,6 @@
 {
   "artifactType": "test-result",
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "producerVersion": "0.1.0",
   "attemptId": "ATT-SAMPLE-REDACTED",
   "runId": "20260723T000000Z-000000",

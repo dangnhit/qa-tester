@@ -47,7 +47,7 @@ const otherArtifactContracts = [
     requiredField: "steps",
     valid: {
       artifactType: "test-case",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       testCaseId: "TC-1",
       revisionId: "REV-1",
@@ -78,7 +78,7 @@ const otherArtifactContracts = [
     requiredField: "failureClassification",
     valid: {
       artifactType: "test-result",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
@@ -162,7 +162,7 @@ const otherArtifactContracts = [
     requiredField: "affectedClaim",
     valid: {
       artifactType: "evidence-gap",
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       producerVersion: "1.0.0",
       evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
       reason: "The upstream system redacted the response.",
@@ -174,7 +174,7 @@ const otherArtifactContracts = [
     requiredField: "entries",
     valid: {
       artifactType: "test-result-batch",
-      schemaVersion: "3.0.0",
+      schemaVersion: "4.0.0",
       producerVersion: "1.0.0",
       executionId: "EXEC-1",
       runId: "20260723T123456Z-a1b2c3",
@@ -513,7 +513,7 @@ describe("evidence schema 3.0.0 (runner-report)", () => {
  *  enumerate. An enum could not make a wrong-but-plausible engine detectable — only rejectable an
  *  honest one, which is the single failure an audit record cannot afford. An unrecognized engine
  *  simply matches no obligation, which is already the fail-closed outcome. */
-describe("test-result schema 2.0.0 (observed engine)", () => {
+describe("test-result schema 3.0.0 (observed engine)", () => {
   const result = otherArtifactContracts[4].valid;
 
   it("rejects a test result that does not record the engine it observed", () => {
@@ -561,7 +561,7 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
   /** Plus the two only the browser surface owns — the same pair `coverage-obligation` conditions on. */
   const entry = { ...surfacelessEntry, executionSurface: "browser", observedEngine: "chromium", viewport: { width: 1440, height: 900 } };
   const batch = {
-    artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     executionId: "EXEC-1", runId: "20260723T123456Z-a1b2c3",
     commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
     startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
@@ -600,12 +600,14 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
     expect(validateArtifact("test-result-batch", { ...batch, provenance: "runtime-observed" }).valid).toBe(false);
   });
 
-  it("rejects a batch declaring any schemaVersion other than 3.0.0", () => {
+  it("rejects a batch declaring any schemaVersion other than 4.0.0", () => {
     expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "1.0.0" }).valid).toBe(false);
     // 2.0.0 is the shape whose entries carried no Execution Surface at all, so both readers stamped
     // them `browser`. A hard break with no migration layer: that shape must stop validating outright.
     expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "2.0.0" }).valid).toBe(false);
-    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "4.0.0" }).valid).toBe(false);
+    // 3.0.0 is the shape whose identity fields carried no colon pattern, so a joined triple could
+    // collide across artifacts. A hard break with no migration layer: superseded, not merely stale.
+    expect(validateArtifact("test-result-batch", { ...batch, schemaVersion: "3.0.0" }).valid).toBe(false);
   });
 
   it.each(["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "executionSurface", "steps"] as const)("rejects an entry missing %s", (field) => {
@@ -726,13 +728,13 @@ describe("test-result-batch schema (Runtime-Observed Execution)", () => {
  *  FORBIDDEN, not merely optional, for the same reason Phase 5 forbade geometry on non-screenshot
  *  evidence — an optional field lets a fabricated value survive into a checksummed audit record.
  *
- *  It arrived as `coverage-obligation` 2.0.0; the fixtures below say `3.0.0` because the
- *  `accessibilityMethod` enum broke the same schema a second time within Phase 6. The version in this
- *  block's name is deliberately the shipped one, not the one this field arrived in. */
-describe("coverage-obligation schema 3.0.0 (executionSurface)", () => {
+ *  It arrived as `coverage-obligation` 2.0.0; the fixtures below say `4.0.0` because the
+ *  `accessibilityMethod` enum and the identity `pattern` each broke the same schema again since. The
+ *  version in this block's name is deliberately the shipped one, not the one this field arrived in. */
+describe("coverage-obligation schema 4.0.0 (executionSurface)", () => {
   /** Everything an obligation carries no matter which surface it declares. */
   const common = {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-1", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
     role: "member", behavior: "sign in",
     accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
@@ -785,15 +787,15 @@ describe("coverage-obligation schema 3.0.0 (executionSurface)", () => {
  *  obligation says it names NO accessibility method at all. A free-form string is no longer a legal
  *  value anywhere: an arbitrary label in a checksummed audit record is a claim nothing can check, and
  *  (until Task 35) label equality is exactly what credits the obligation. */
-describe("accessibilityMethod is an enum (coverage-obligation 3.0.0, test-case 2.0.0)", () => {
+describe("accessibilityMethod is an enum (coverage-obligation 4.0.0, test-case 3.0.0)", () => {
   const obligation = {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-A11Y", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
     role: "member", behavior: "sign in", executionSurface: "manual",
     accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
   };
   const testCase = {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     testCaseId: "TC-1", revisionId: "REV-1", instanceId: "TC-1--INSTANCE-1", title: "A valid test case",
     steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
     coverage: {
@@ -857,9 +859,9 @@ describe("accessibilityMethod is an enum (coverage-obligation 3.0.0, test-case 2
  *  the exact obligation it attests to BY CHECKSUM (so the claim is independently auditable against
  *  immutable bytes, not against whatever the manifest resolves later), the person and moment it was
  *  made, and — the substance — a `statement` of what was actually done. */
-describe("human-attestation schema 1.0.0", () => {
+describe("human-attestation schema 2.0.0", () => {
   const attestation = {
-    artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+    artifactType: "human-attestation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
     attestationId: "ATTESTATION-1", runId: "20260723T123456Z-a1b2c3", obligationId: "COV-A11Y",
     obligationSha256: "b".repeat(64), method: "keyboard",
     attestedBy: "accessibility-reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z",
@@ -923,8 +925,10 @@ describe("human-attestation schema 1.0.0", () => {
     expect(validateArtifact("human-attestation", { ...attestation, attestedAt: "yesterday" }).valid).toBe(false);
   });
 
-  it("rejects any schemaVersion other than 1.0.0", () => {
-    expect(validateArtifact("human-attestation", { ...attestation, schemaVersion: "2.0.0" }).valid).toBe(false);
+  it("rejects any schemaVersion other than 2.0.0", () => {
+    // 1.0.0 is the shape whose obligationId carried no colon pattern, so a joined triple could
+    // collide across artifacts. A hard break with no migration layer: superseded, not merely stale.
+    expect(validateArtifact("human-attestation", { ...attestation, schemaVersion: "1.0.0" }).valid).toBe(false);
   });
 
   it("keeps the TypeScript manual-method mirror equal to the schema's method enum", () => {
@@ -932,6 +936,100 @@ describe("human-attestation schema 1.0.0", () => {
 
     expect(methodEnum).toEqual([...manualAccessibilityMethods]);
     expect(methodEnum).not.toContain("automated-analysis");
+  });
+});
+
+/** The colon-collision class: a testCaseId/revisionId/instanceId (or equivalent identity) triple
+ *  joined naively as "a:b:c" collides across artifacts whose components differ only in where the
+ *  colon falls -- e.g. ("TC","R","A:B") and ("TC","R:A","B") produce the same joined string. That bug
+ *  was fixed three times at the reader side (the observed-coverage reader, the checkpoint comparison,
+ *  the regression decision store) while the data shape stayed free to produce it. Forbidding ":" in
+ *  every identity-bearing field closes the class at the shape, making a colliding artifact
+ *  unregisterable rather than relying on every reader to guard against it. */
+describe("identity fields forbid a colon (closes the collision class at the data shape)", () => {
+  const testCase = {
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    testCaseId: "TC-1", revisionId: "REV-1", instanceId: "TC-1--INSTANCE-1", title: "A valid test case",
+    steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }],
+    coverage: {
+      requirementId: "REQ-1", role: "member", behavior: "sign in", browser: "chromium",
+      viewport: { width: 1440, height: 900 }, accessibilityMethod: null, risk: "medium", outcome: "account opens",
+    },
+  };
+
+  it("rejects a test case whose identity components could rejoin to another case's", () => {
+    expect(validateArtifact("test-case", { ...testCase, instanceId: "A:B" }).valid).toBe(false);
+    expect(validateArtifact("test-case", { ...testCase, revisionId: "R:A" }).valid).toBe(false);
+    expect(validateArtifact("test-case", { ...testCase, testCaseId: "TC:X" }).valid).toBe(false);
+  });
+
+  const testResult = {
+    artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
+    testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+    status: "PASSED", failureClassification: "NONE", observedEngine: "chromium",
+    steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
+    startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
+  };
+
+  it("rejects a test result whose identity components could rejoin to another result's", () => {
+    expect(validateArtifact("test-result", { ...testResult, testCaseId: "TC:X" }).valid).toBe(false);
+    expect(validateArtifact("test-result", { ...testResult, testCaseRevisionId: "R:A" }).valid).toBe(false);
+    expect(validateArtifact("test-result", { ...testResult, testCaseInstanceId: "A:B" }).valid).toBe(false);
+  });
+
+  const batch = {
+    artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "1.0.0",
+    executionId: "EXEC-1", runId: "20260723T123456Z-a1b2c3",
+    commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
+    startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z",
+    entries: [{
+      entryId: "ENTRY-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+      status: "PASSED", failureClassification: "NONE", executionSurface: "browser",
+      observedEngine: "chromium", viewport: { width: 1440, height: 900 },
+      steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }],
+    }],
+  };
+
+  it("rejects a test-result-batch entry whose identity components could rejoin to another entry's", () => {
+    const entry = batch.entries[0];
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, testCaseId: "TC:X" }] }).valid).toBe(false);
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, testCaseRevisionId: "R:A" }] }).valid).toBe(false);
+    expect(validateArtifact("test-result-batch", { ...batch, entries: [{ ...entry, testCaseInstanceId: "A:B" }] }).valid).toBe(false);
+  });
+
+  const obligation = {
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
+    obligationId: "COV-1", requirementId: "REQ-1", requirementAnalysisArtifactId: "RA-1",
+    role: "member", behavior: "sign in", executionSurface: "manual",
+    accessibilityMethod: null, risk: "high", required: true, outcome: "account page opens",
+  };
+
+  it("rejects a coverage obligation whose obligationId could rejoin to another's", () => {
+    expect(validateArtifact("coverage-obligation", { ...obligation, obligationId: "COV:1" }).valid).toBe(false);
+  });
+
+  const evidenceGap = {
+    artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
+    reason: "The upstream system redacted the response.",
+    affectedClaim: "The order was persisted successfully.",
+  };
+
+  it("rejects an evidence gap whose evidenceGapId could rejoin to another's", () => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGap, evidenceGapId: "GAP:1" }).valid).toBe(false);
+  });
+
+  const attestation = {
+    artifactType: "human-attestation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    attestationId: "ATTESTATION-1", runId: "20260723T123456Z-a1b2c3", obligationId: "COV-A11Y",
+    obligationSha256: "b".repeat(64), method: "keyboard",
+    attestedBy: "accessibility-reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z",
+    statement: "Navigated the checkout flow using only the keyboard; every control was reachable and focus was visible.",
+  };
+
+  it("rejects a human attestation whose obligationId could rejoin to another's", () => {
+    expect(validateArtifact("human-attestation", { ...attestation, obligationId: "COV:1" }).valid).toBe(false);
   });
 });
 

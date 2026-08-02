@@ -61,7 +61,11 @@ export type SideEffectClass = (typeof sideEffectClasses)[number];
 
 export type ArtifactEnvelope<T extends object = object> = {
   artifactType: ArtifactType;
-  schemaVersion: "1.0.0";
+  // Illustrative literal, not load-bearing: this generic template is unused outside this file (its
+  // `artifactType` spans the whole `ArtifactType` union, so no single schemaVersion const can be
+  // "correct" for it). Kept in step with test-case -- the first of the six identity schemas bumped
+  // in Phase 9 Task 1 -- rather than left pinned to the project's original 1.0.0 baseline.
+  schemaVersion: "3.0.0";
   producerVersion: string;
 } & T;
 

@@ -5,7 +5,7 @@
  */
 export interface HumanAttestation {
   artifactType: "human-attestation";
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   producerVersion: string;
   attestationId: string;
   runId: string;

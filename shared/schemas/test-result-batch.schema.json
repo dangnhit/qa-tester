@@ -7,7 +7,7 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "executionId", "runId", "commitSha", "specTreeSha256", "startedAt", "finishedAt", "entries"],
   "properties": {
     "artifactType": { "const": "test-result-batch" },
-    "schemaVersion": { "const": "3.0.0" },
+    "schemaVersion": { "const": "4.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "executionId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
@@ -24,9 +24,9 @@
         "required": ["entryId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId", "status", "failureClassification", "executionSurface", "steps"],
         "properties": {
           "entryId": { "type": "string", "minLength": 1 },
-          "testCaseId": { "type": "string", "minLength": 1 },
-          "testCaseRevisionId": { "type": "string", "minLength": 1 },
-          "testCaseInstanceId": { "type": "string", "minLength": 1 },
+          "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
+          "testCaseRevisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
+          "testCaseInstanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
           "status": { "enum": ["PASSED", "FAILED", "BLOCKED", "INCONCLUSIVE", "NOT_RUN"] },
           "failureClassification": { "enum": ["PRODUCT_DEFECT", "TEST_DEFECT", "ENVIRONMENT_DEFECT", "UNDETERMINED", "NONE"] },
           "executionSurface": {

@@ -7,9 +7,9 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "obligationId", "requirementId", "requirementAnalysisArtifactId", "role", "behavior", "executionSurface", "accessibilityMethod", "risk", "required", "outcome"],
   "properties": {
     "artifactType": { "const": "coverage-obligation" },
-    "schemaVersion": { "const": "3.0.0" },
+    "schemaVersion": { "const": "4.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
-    "obligationId": { "type": "string", "minLength": 1 },
+    "obligationId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
     "requirementId": { "type": "string", "minLength": 1 },
     "requirementAnalysisArtifactId": { "type": "string", "minLength": 1 },
     "role": { "type": "string", "minLength": 1 },

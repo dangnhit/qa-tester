@@ -19,7 +19,7 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "ENV-EXPORT", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } as const;
-const testCase = { artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
+const testCase = { artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
 
 /**
  * The bytes lane 2 actually registers as the sanitized runner report — shaped exactly as
@@ -82,7 +82,7 @@ async function registerObservation(workspace: RunWorkspace, entry: Observation, 
   await workspace.registerArtifactValue({
     type: "test-result-batch", provenance: "runtime-observed", relationships: [registeredCase.id, bundle.descriptor.id],
     value: {
-      artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "0.1.0",
+      artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "0.1.0",
       executionId, runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64),
       startedAt: "2026-07-29T00:00:00.000Z", finishedAt: "2026-07-29T00:01:00.000Z",
       entries: [{ entryId: `E-${entry.suffix}`, testCaseId: entry.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", steps: [{ stepId: "S1", status: "FAILED", durationMs: 500 }], evidenceArtifactIds: [bundle.descriptor.id] }],
@@ -104,7 +104,7 @@ async function finalizedRun(observations: readonly Observation[] = [observation(
   for (const entry of observations) await registerObservation(workspace, entry, root);
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
-    value: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
+    value: { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
   });
   await generateQaReport({ workspace });
   await workspace.finalize("execute");

@@ -74,7 +74,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   },
   "test-case": {
     artifactType: "test-case",
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     producerVersion: "1.0.0",
     testCaseId: "TC-PLACEHOLDER-1",
     revisionId: "REPLACE_WITH_QA_SKILL_FINGERPRINT_OUTPUT",
@@ -96,7 +96,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   },
   "coverage-obligation": {
     artifactType: "coverage-obligation",
-    schemaVersion: "3.0.0",
+    schemaVersion: "4.0.0",
     producerVersion: "1.0.0",
     obligationId: "COV-PLACEHOLDER-1",
     requirementId: "REQ-PLACEHOLDER-1",

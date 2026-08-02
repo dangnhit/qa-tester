@@ -77,7 +77,7 @@ async function fixture(obligationMethod: string | null = "keyboard"): Promise<Fi
   const obligation = await workspace.registerArtifactValue({
     type: "coverage-obligation", relationships: [],
     value: {
-      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-A11Y",
+      artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0", obligationId: "COV-A11Y",
       requirementAnalysisArtifactId: analysis.id, requirementId: "REQ", role: "member", behavior: "complete checkout",
       executionSurface: "manual", accessibilityMethod: obligationMethod, risk: "high", required: true,
       outcome: "Order confirmation is shown",
@@ -89,7 +89,7 @@ async function fixture(obligationMethod: string | null = "keyboard"): Promise<Fi
 /** A schema-valid attestation for `fixture()`'s obligation, before any override. */
 function attestation(obligation: ArtifactRecord, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0",
+    artifactType: "human-attestation", schemaVersion: "2.0.0", producerVersion: "1.0.0",
     attestationId: "ATTESTATION-1", runId: "REPLACED-BY-CALLER", obligationId: "COV-A11Y",
     obligationSha256: obligation.sha256, method: "keyboard",
     attestedBy: "reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z", statement,
@@ -147,7 +147,7 @@ describe("recordHumanAttestation (the producer)", () => {
     const value = JSON.parse(await readFile(join(workspace.path, record.relativePath), "utf8")) as Record<string, unknown>;
     expect(validateArtifact("human-attestation", value).valid).toBe(true);
     expect(value).toMatchObject({
-      artifactType: "human-attestation", schemaVersion: "1.0.0", runId: workspace.runId,
+      artifactType: "human-attestation", schemaVersion: "2.0.0", runId: workspace.runId,
       obligationId: "COV-A11Y", method: "keyboard", attestedBy: "reviewer@example.test", statement,
     });
     // The claim is auditable against immutable bytes, not against whatever the manifest resolves later.
@@ -353,7 +353,7 @@ describe("human-attestation semantic rule", () => {
     await workspace.registerArtifactValue({
       type: "coverage-obligation", relationships: [],
       value: {
-        artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-A11Y",
+        artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0", obligationId: "COV-A11Y",
         requirementAnalysisArtifactId: otherAnalysis.id, requirementId: "REQ-OTHER", role: "member", behavior: "an unrelated behavior",
         executionSurface: "manual", accessibilityMethod: "screen-reader", risk: "low", required: true,
         outcome: "An unrelated outcome",

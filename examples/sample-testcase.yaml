@@ -1,5 +1,5 @@
 artifactType: test-case
-schemaVersion: "2.0.0"
+schemaVersion: "3.0.0"
 producerVersion: "0.1.0"
 testCaseId: TC-PROFILE-SAVE
 revisionId: REV-PROFILE-SAVE-1

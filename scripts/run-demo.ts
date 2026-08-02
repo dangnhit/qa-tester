@@ -118,7 +118,7 @@ async function createSourceBundle(root: string, baseUrl: string, testcase: DemoT
         type: "test-case",
         relationships: [plan.id],
         value: {
-          artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0",
+          artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0",
           testCaseId: testcase.testCase.id, revisionId: testcase.testCase.revisionId, instanceId: instance.instanceId, title: testcase.testCase.title,
           steps: [{ id: `plan-${instance.instanceId}`, action: "navigate", sideEffect: "none" }],
           coverage: { requirementId: testcase.requirement.id, role: "member", behavior: "save profile", browser: "chromium", viewport: instance.viewport, accessibilityMethod: null, risk: "high", outcome: testcase.testCase.expectedText },
@@ -130,7 +130,7 @@ async function createSourceBundle(root: string, baseUrl: string, testcase: DemoT
       type: "coverage-obligation",
       relationships: [requirement.id],
       value: {
-        artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "0.1.0", obligationId: "COV-DEMO-SAVE", requirementAnalysisArtifactId: requirement.id,
+        artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "0.1.0", obligationId: "COV-DEMO-SAVE", requirementAnalysisArtifactId: requirement.id,
         requirementId: testcase.requirement.id, role: "member", behavior: "save profile", executionSurface: "browser", browser: "chromium", viewport: testcase.matrix[0]!.viewport, accessibilityMethod: null, risk: "high", outcome: testcase.testCase.expectedText, required: true,
       },
     });

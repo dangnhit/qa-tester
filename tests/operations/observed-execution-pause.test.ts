@@ -90,18 +90,18 @@ async function regressionBundleWithExcludedHumanReviewPlan(root: string): Promis
     }],
   } });
   const includedCase = await source.registerArtifactValue({ type: "test-case", relationships: [includedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
     title: "Save email (selected by regression)", steps: [{ id: "plan-open-included", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   const excludedCase = await source.registerArtifactValue({ type: "test-case", relationships: [excludedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
     title: "Save email (excluded by regression)", steps: [{ id: "plan-open-excluded", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email, excluded", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
     regressionIndex: { requirementIds: [], codeSurfaces: ["excluded-surface"], declaredDependencies: [], gitPaths: [], userScope: [] },
   } });
   const obligation = await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
@@ -165,7 +165,7 @@ async function registerObservedBatch(root: string, runId: string, identity: { te
       && artifact.value.testCaseId === identity.testCaseId && artifact.value.revisionId === identity.revisionId && artifact.value.instanceId === identity.instanceId);
     if (!testCase) throw new Error(`Expected an already-registered test-case for ${identity.testCaseId}/${identity.revisionId}/${identity.instanceId}`);
     await workspace.registerArtifactValue({ type: "test-result-batch", relationships: [testCase.record.id], provenance: "runtime-observed", value: {
-      artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+      artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "1.0.0",
       executionId: `EXEC-${identity.testCaseId}`, runId, commitSha: "0".repeat(40), specTreeSha256: "1".repeat(64),
       startedAt: "2026-07-31T00:00:00.000Z", finishedAt: "2026-07-31T00:00:01.000Z",
       entries: [{

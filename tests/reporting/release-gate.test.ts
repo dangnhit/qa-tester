@@ -185,7 +185,7 @@ describe("evaluateReleaseGate", () => {
       record: { id: "GAP-1", sha256: "a".repeat(64), type: "evidence-gap" },
       value: {
         artifactType: "evidence-gap",
-        schemaVersion: "1.0.0",
+        schemaVersion: "2.0.0",
         producerVersion: "0.1.0",
         evidenceGapId: "GAP-1",
         runId: "RUN-1",
@@ -223,7 +223,7 @@ describe("evaluateReleaseGate", () => {
     const attestation = (obligationChecksum: string, provenance = "human-attestation:reviewer@example.test") => ({
       record: { id: "ATT-A11Y", sha256: "e".repeat(64), type: "human-attestation", provenance },
       value: {
-        artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-1",
+        artifactType: "human-attestation", schemaVersion: "2.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-1",
         runId: "RUN-1", obligationId: "COV-A11Y", obligationSha256: obligationChecksum, method: "screen-reader",
         attestedBy: "reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z",
         statement: "Drove the whole checkout flow with VoiceOver; every control was announced with its role and current state.",

@@ -103,12 +103,12 @@ async function planningRun(root: string, identity: Identity, requirementId: stri
     }],
   } });
   await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", ...identity,
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", ...identity,
     title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId, role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: `COV-${identity.testCaseId}`, requirementAnalysisArtifactId: requirement.id, requirementId,
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
@@ -151,18 +151,18 @@ async function regressionPlanningRun(root: string): Promise<string> {
     }],
   } });
   await source.registerArtifactValue({ type: "test-case", relationships: [includedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-INCLUDED", revisionId: "REV-REG-INCLUDED", instanceId: "INSTANCE-REG-INCLUDED",
     title: "Save email (selected by regression)", steps: [{ id: "plan-open-included", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   await source.registerArtifactValue({ type: "test-case", relationships: [excludedPlan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-REG-EXCLUDED", revisionId: "REV-REG-EXCLUDED", instanceId: "INSTANCE-REG-EXCLUDED",
     title: "Save email (excluded by regression)", steps: [{ id: "plan-open-excluded", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-REG", role: "member", behavior: "save email, excluded", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
     regressionIndex: { requirementIds: [], codeSurfaces: ["excluded-surface"], declaredDependencies: [], gitPaths: [], userScope: [] },
   } });
   await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-REG", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-REG",
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
@@ -192,12 +192,12 @@ async function bugRun(root: string, identity: Identity, requirementId: string): 
     testCases: [{ testCaseId: identity.testCaseId, title: "Save email", expectedResults: [{ id: `ER-BUG-${identity.testCaseId}`, requirementId, authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "plan-open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }],
   } });
   const testcase = await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", ...identity,
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", ...identity,
     title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId, role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   const attempt = await source.registerArtifactValue({ type: "test-result", relationships: [testcase.id], value: {
-    artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "1.0.0", attemptId, runId: source.runId,
+    artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "1.0.0", attemptId, runId: source.runId,
     testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId,
     status: "FAILED", failureClassification: "PRODUCT_DEFECT", observedEngine: "chromium",
     steps: [{ stepId: "plan-open", status: "FAILED", durationMs: 1 }],
@@ -243,8 +243,8 @@ describe("every public workflow mode, reached through `qa-skill workflow run`", 
       writeFile(paths.environment, JSON.stringify(environment)),
       writeFile(paths.requirement, JSON.stringify({ artifactType: "requirement-analysis", schemaVersion: "1.0.0", producerVersion: "1.0.0", requirementAnalysisId: "RA-PLAN", statements: [{ requirementId: "REQ-PLAN", sourceProvenance: { kind: "user", reference: "phase8b-task5" }, normalizedText: "Member must be able to save an email.", authority: "AUTHORITATIVE", role: "member", rules: [], risks: [], assumptions: [], openQuestions: [] }] })),
       writeFile(paths.plan, JSON.stringify({ artifactType: "test-plan", schemaVersion: "1.0.0", producerVersion: "1.0.0", testPlanId: "PLAN-PLAN", approvalPolicy: { mode: "auto-approve-safe" }, testCases: [{ testCaseId: "TC-PLAN", title: "Save email", expectedResults: [{ id: "ER-PLAN", requirementId: "REQ-PLAN", authority: "AUTHORITATIVE", text: "Saved" }], steps: [{ id: "plan-open", action: { kind: "navigate", url: "/" }, sideEffect: "none" }], openQuestions: [] }] })),
-      writeFile(paths.testcase, JSON.stringify({ artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-PLAN", revisionId: "REV-PLAN", instanceId: "INSTANCE-PLAN", title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-PLAN", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } })),
-      writeFile(paths.coverage, JSON.stringify({ artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-PLAN", requirementAnalysisArtifactId: "replaced-atomically", requirementId: "REQ-PLAN", role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", required: true, outcome: "Saved" })),
+      writeFile(paths.testcase, JSON.stringify({ artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-PLAN", revisionId: "REV-PLAN", instanceId: "INSTANCE-PLAN", title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-PLAN", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" } })),
+      writeFile(paths.coverage, JSON.stringify({ artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0", obligationId: "COV-PLAN", requirementAnalysisArtifactId: "replaced-atomically", requirementId: "REQ-PLAN", role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", required: true, outcome: "Saved" })),
     ]);
 
     const bootstrapped = await runCli(["workflow", "bootstrap", "--root", root,
@@ -449,23 +449,23 @@ async function twoLanePlanningRun(root: string): Promise<string> {
     ],
   } });
   await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", ...drivenIdentity,
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", ...drivenIdentity,
     title: "Save email", steps: [{ id: "plan-open", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-LANE", role: "member", behavior: "save email", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "Saved" },
   } });
   await source.registerArtifactValue({ type: "test-case", relationships: [plan.id], value: {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", ...observedIdentity,
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", ...observedIdentity,
     title: "The ledger balances", steps: [{ id: "plan-call", action: "navigate", sideEffect: "none" }],
     coverage: { requirementId: "REQ-LANE", role: "member", behavior: "balance the ledger", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "low", outcome: "The ledger balances" },
   } });
   await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-LANE-BROWSER", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-LANE",
     role: "member", behavior: "save email", executionSurface: "browser", browser: "chromium", viewport: { width: 1280, height: 720 },
     accessibilityMethod: null, risk: "low", required: true, outcome: "Saved",
   } });
   await source.registerArtifactValue({ type: "coverage-obligation", relationships: [requirement.id], value: {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     obligationId: "COV-LANE-API", requirementAnalysisArtifactId: requirement.id, requirementId: "REQ-LANE",
     role: "member", behavior: "balance the ledger", executionSurface: "api",
     accessibilityMethod: null, risk: "low", required: true, outcome: "The ledger balances",

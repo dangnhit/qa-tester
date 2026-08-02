@@ -8,11 +8,11 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "attestationId", "runId", "obligationId", "obligationSha256", "method", "attestedBy", "attestedAt", "statement"],
   "properties": {
     "artifactType": { "const": "human-attestation" },
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "2.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "attestationId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
-    "obligationId": { "type": "string", "minLength": 1 },
+    "obligationId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
     "obligationSha256": {
       "description": "The sha256 of the registered coverage-obligation artifact this attests to. Carried for the same reason approval-decision carries planSha256: it pins the claim to the exact immutable bytes the attester saw, so a reader of the attestation alone can verify what was attested to without trusting whatever the manifest resolves later.",
       "type": "string",

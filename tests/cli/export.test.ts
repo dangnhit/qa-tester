@@ -43,7 +43,7 @@ async function notReadyRun(report = '{ "sanitization": { "policy": "p", "removed
   });
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
-    value: { artifactType: "evidence-gap", schemaVersion: "1.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
+    value: { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
   });
   await generateQaReport({ workspace });
   await workspace.finalize("execute");

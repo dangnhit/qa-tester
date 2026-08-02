@@ -52,28 +52,28 @@ async function setup(overrides: {
   // `browser` + `viewport` belong to the browser surface only; the schema forbids them elsewhere.
   const surface = overrides.obligationSurface ?? "browser";
   await register("coverage-obligation", {
-    artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
+    artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0", obligationId: "COV-SAVE", requirementAnalysisArtifactId: requirement.id,
     executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.obligation,
   });
   if (overrides.extraObligation !== undefined) {
     await register("coverage-obligation", {
-      artifactType: "coverage-obligation", schemaVersion: "3.0.0", producerVersion: "1.0.0", obligationId: "COV-OTHER", requirementAnalysisArtifactId: requirement.id,
+      artifactType: "coverage-obligation", schemaVersion: "4.0.0", producerVersion: "1.0.0", obligationId: "COV-OTHER", requirementAnalysisArtifactId: requirement.id,
       executionSurface: surface, ...(surface === "browser" ? dimensions : surfacelessDimensions), required: true, ...overrides.extraObligation,
     });
   }
   const { coverage: coverageOverride, ...testCaseOverrides } = overrides.testCase ?? {};
   const testCase = await register("test-case", {
-    artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
+    artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "1.0.0", testCaseId: "TC-SAVE", revisionId: "REV-SAVE", instanceId: "TC-SAVE--INSTANCE-1", title: "Saves a profile",
     steps: [{ id: "save", action: "click", sideEffect: "none" }], coverage: { ...dimensions, ...(coverageOverride ?? {}) }, ...testCaseOverrides,
   });
   if (overrides.omitResult !== true) {
     await workspace.registerArtifactValue({ type: "test-result", relationships: [testCase.id], provenance: overrides.resultProvenance ?? "runtime-execution", value: {
-      artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
+      artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "1.0.0", attemptId: "ATTEMPT-SAVE", runId: workspace.runId, testCaseId: "TC-SAVE", testCaseRevisionId: "REV-SAVE", testCaseInstanceId: "TC-SAVE--INSTANCE-1", status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "save", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", ...overrides.result,
     } });
   }
   if (overrides.batchEntries !== undefined) {
     await workspace.registerArtifactValue({ type: "test-result-batch", relationships: [testCase.id], provenance: overrides.batchProvenance ?? "runtime-observed", value: {
-      artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
+      artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "1.0.0", executionId: "EXEC-SAVE", runId: workspace.runId,
       commitSha: "b".repeat(40), specTreeSha256: "c".repeat(64),
       startedAt: "2026-07-23T12:34:56.000Z", finishedAt: "2026-07-23T12:35:56.000Z", entries: overrides.batchEntries,
     } });
@@ -366,7 +366,7 @@ describe("evaluateWorkspaceCoverage — accessibility obligations", () => {
     await workspace.registerArtifactValue({
       type: "human-attestation", relationships: [obligation.record.id], provenance: "agent-draft",
       value: {
-        artifactType: "human-attestation", schemaVersion: "1.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-FORGED",
+        artifactType: "human-attestation", schemaVersion: "2.0.0", producerVersion: "1.0.0", attestationId: "ATTESTATION-FORGED",
         runId: workspace.runId, obligationId: "COV-SAVE", obligationSha256: obligation.record.sha256, method: "screen-reader",
         attestedBy: "reviewer@example.test", attestedAt: "2026-07-25T09:00:00.000Z", statement: attested.statement,
       },

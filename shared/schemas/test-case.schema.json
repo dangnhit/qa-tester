@@ -7,11 +7,11 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "testCaseId", "revisionId", "instanceId", "title", "steps", "coverage"],
   "properties": {
     "artifactType": { "const": "test-case" },
-    "schemaVersion": { "const": "2.0.0" },
+    "schemaVersion": { "const": "3.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
-    "testCaseId": { "type": "string", "minLength": 1 },
-    "revisionId": { "type": "string", "minLength": 1 },
-    "instanceId": { "type": "string", "minLength": 1 },
+    "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
+    "revisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
+    "instanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
     "title": { "type": "string", "minLength": 1 },
     "steps": {
       "type": "array",

@@ -420,7 +420,7 @@ export async function executeObservedPlaywright(input: ObservedPlaywrightExecuti
       provenance: "runtime-observed",
       relationships: [bundle.descriptor.id, ...caseArtifactIds],
       value: {
-        artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: runtimeVersion,
+        artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: runtimeVersion,
         executionId, runId: workspace.runId,
         commitSha: run.anchor.commitSha, specTreeSha256: run.anchor.specTreeSha256,
         startedAt: run.startedAt, finishedAt: run.finishedAt,

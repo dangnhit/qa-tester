@@ -42,12 +42,12 @@ async function registerRaw(workspace: RunWorkspace, options: { attemptId?: strin
   const testCase = await workspace.registerArtifactValue({
     type: "test-case",
     relationships: [],
-    value: { artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0", testCaseId: "TC-ANNOTATION", revisionId: "REV-ANNOTATION", instanceId: "INSTANCE-ANNOTATION", title: "Annotation source", steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-ANNOTATION", role: "member", behavior: "annotate", browser: "chromium", viewport: { width: 120, height: 80 }, accessibilityMethod: null, risk: "low", outcome: "annotated" } },
+    value: { artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0", testCaseId: "TC-ANNOTATION", revisionId: "REV-ANNOTATION", instanceId: "INSTANCE-ANNOTATION", title: "Annotation source", steps: [{ id: "step-1", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-ANNOTATION", role: "member", behavior: "annotate", browser: "chromium", viewport: { width: 120, height: 80 }, accessibilityMethod: null, risk: "low", outcome: "annotated" } },
   });
   const result = await workspace.registerArtifactValue({
     type: "test-result",
     relationships: [testCase.id],
-    value: { artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", observedEngine: "chromium", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
+    value: { artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "0.1.0", attemptId, runId: workspace.runId, testCaseId: "TC-ANNOTATION", testCaseRevisionId: "REV-ANNOTATION", testCaseInstanceId: "INSTANCE-ANNOTATION", status: "FAILED", failureClassification: "TEST_DEFECT", observedEngine: "chromium", steps: [{ stepId: "step-1", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:00:01.000Z" },
   });
   const bytes = options.bytes ?? await patternedPng();
   return workspace.registerEvidenceBundle({

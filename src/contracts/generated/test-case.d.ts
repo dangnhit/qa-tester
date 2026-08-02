@@ -4,7 +4,7 @@ export type Strings = string[];
 
 export interface TestCase {
   artifactType: "test-case";
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   producerVersion: string;
   testCaseId: string;
   revisionId: string;

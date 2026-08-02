@@ -61,7 +61,7 @@ export async function recordHumanAttestation(input: {
       provenance: `human-attestation:${attestedBy}`,
       value: {
         artifactType: "human-attestation",
-        schemaVersion: "1.0.0",
+        schemaVersion: "2.0.0",
         producerVersion: runtimeVersion,
         attestationId: createEntityId(),
         runId: workspace.runId,

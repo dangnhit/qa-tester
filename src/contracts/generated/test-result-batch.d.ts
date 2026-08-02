@@ -2,7 +2,7 @@
 
 export interface TestResultBatch {
   artifactType: "test-result-batch";
-  schemaVersion: "3.0.0";
+  schemaVersion: "4.0.0";
   producerVersion: string;
   executionId: string;
   runId: string;

@@ -12,10 +12,10 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "ENV-REPORT", name: "test", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } as const;
-const testCase = { artifactType: "test-case", schemaVersion: "2.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
+const testCase = { artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
 
 function result(runId: string, attemptId: string, classification: "PRODUCT_DEFECT" | "TEST_DEFECT" = "PRODUCT_DEFECT") {
-  return { artifactType: "test-result", schemaVersion: "2.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, observedEngine: "chromium", steps: [{ stepId: "open", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
+  return { artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "0.1.0", attemptId, runId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: classification, observedEngine: "chromium", steps: [{ stepId: "open", status: "FAILED", durationMs: 1, failureOrigin: "assertion" }], startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z" } as const;
 }
 
 async function evidence(workspace: RunWorkspace, attemptId: string) {
@@ -74,7 +74,7 @@ describe("report generation operations", () => {
     const entry = (entryId: string, status: "PASSED" | "NOT_RUN") => ({ entryId, testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status, failureClassification: status === "PASSED" ? "NONE" : "UNDETERMINED", executionSurface: "api", steps: [{ stepId: "result-0", status, durationMs: 1 }] });
     await workspace.registerArtifactValue({
       type: "test-result-batch", provenance: "runtime-observed", relationships: [registeredCase.id],
-      value: { artifactType: "test-result-batch", schemaVersion: "3.0.0", producerVersion: "0.1.0", executionId: "EXEC-1", runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64), startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z", entries: [entry("E-1", "PASSED"), entry("E-2", "NOT_RUN")] },
+      value: { artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "0.1.0", executionId: "EXEC-1", runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64), startedAt: "2026-07-23T00:00:00.000Z", finishedAt: "2026-07-23T00:01:00.000Z", entries: [entry("E-1", "PASSED"), entry("E-2", "NOT_RUN")] },
     });
 
     const report = await generateQaReport({ workspace });
