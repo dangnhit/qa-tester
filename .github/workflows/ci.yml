@@ -47,6 +47,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # tests/cli now launches a real Chromium: Phase 8b's six-mode CLI tests and the two-lane
+      # flow drive `workflow run` end to end, and this job's selection includes tests/cli. Without
+      # this step they fail with "Executable doesn't exist", which is what turned this job red the
+      # first time they ran here. No --with-deps: that flag installs Linux system libraries and is
+      # a no-op cost on windows-latest.
+      - run: npx playwright install chromium
       - name: Unit, path, init, and installer lifecycle tests
         run: npm test -- tests/core tests/contracts tests/cli tests/installer
       - run: npm run build
