@@ -216,6 +216,41 @@ function indexResultsByAttempt(artifacts: readonly RegisteredWorkspaceArtifact[]
   return indexByAttemptId(artifacts.filter((artifact) => artifact.record.type === "test-result"), (artifact) => artifact.value.attemptId);
 }
 
+/** The retest branch of `select-regression`'s own exclusion: a case the regression selection picked
+ *  whose identity triple exactly matches one of the retest's OWN source scenarios must not also be driven
+ *  as a "new" residual case — `reproduce-bug` already drove it. Structural, following the same
+ *  index-the-available-test-cases-by-identity-then-probe-with-the-scenario's-fields idiom
+ *  `reproduce-bug`'s own exact-reproduction lookup above already uses, rather than a `:`-joined string:
+ *  two distinct canonical cases can rejoin to the same joined key, which would wrongly drop the unrelated
+ *  one from the residual too — a join computes the scenario key and the candidate key with the same
+ *  expression, so it always matches the true source case against itself; the only failure mode a
+ *  join-based version of this exclusion had was over-exclusion, never a failure to exclude the source case
+ *  itself. Kept as its own function so that collision can be proven at a function boundary with plain
+ *  objects, the way `observedCoveredCaseIds` (src/core/observed-coverage.ts) proves its own — Task 1's
+ *  schema pattern keeps two such cases from ever being registered together through a real run, but this
+ *  function takes plain data and never re-validates it against the schema. */
+function excludeRetestSourceCases(
+  executionCaseIds: readonly string[],
+  scenarios: readonly Readonly<{ testCaseId: string; revisionId: string; instanceId: string }>[],
+  artifacts: readonly RegisteredWorkspaceArtifact[],
+): string[] {
+  const casesByIdentity = indexTestCasesByIdentity(artifacts);
+  const sourceCaseIds = new Set<string>();
+  for (const scenario of scenarios) {
+    const match = casesByIdentity.get({ testCaseId: scenario.testCaseId, testCaseRevisionId: scenario.revisionId, testCaseInstanceId: scenario.instanceId })[0];
+    if (match) sourceCaseIds.add(match.record.id);
+  }
+  return executionCaseIds.filter((id) => !sourceCaseIds.has(id));
+}
+
+export function excludeRetestSourceCasesForTests(
+  executionCaseIds: readonly string[],
+  scenarios: readonly Readonly<{ testCaseId: string; revisionId: string; instanceId: string }>[],
+  artifacts: readonly RegisteredWorkspaceArtifact[],
+): string[] {
+  return excludeRetestSourceCases(executionCaseIds, scenarios, artifacts);
+}
+
 async function assertRegisteredArtifacts(workspace: RunWorkspace, output: WorkflowOutput | readonly ArtifactRecord[]): Promise<void> {
   const records = Array.isArray(output) ? output.filter(artifactRecord) : artifactRecord(output) ? [output] : [];
   const artifacts = await workspace.readRegisteredArtifacts();
@@ -1128,15 +1163,9 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     state.selection = selection;
     state.executionCaseIds = selectedCaseArtifactIds(selection, await artifacts());
     if (input.mode === "retest" && state.retestSource) {
-      const sourceIds = new Set(state.retestSource.scenarios.map((scenario) => `${scenario.testCaseId}:${scenario.revisionId}:${scenario.instanceId}`));
-      const all = await artifacts();
-      // Invariance: `all` is read here and consulted only in the filter below; the selection artifact is
-      // registered afterwards, by the `registerSelection` this branch falls through to.
-      const byId = indexByArtifactId(all);
-      state.executionCaseIds = state.executionCaseIds.filter((id) => {
-        const value = byId.get(id)[0]?.value;
-        return value === undefined || !sourceIds.has(`${asString(value.testCaseId, "selected testcase ID")}:${asString(value.revisionId, "selected testcase revision ID")}:${asString(value.instanceId, "selected testcase instance ID")}`);
-      });
+      // Invariance: `await artifacts()` is read here and consulted only by the exclusion below; the
+      // selection artifact is registered afterwards, by the `registerSelection` this branch falls through to.
+      state.executionCaseIds = excludeRetestSourceCases(state.executionCaseIds, state.retestSource.scenarios, await artifacts());
     }
     return registerSelection(workspace, selection, scope) as Promise<WorkflowOperationOutputMap[Name]>;
   }

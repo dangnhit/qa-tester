@@ -12,7 +12,7 @@ import { sha256Text } from "../../src/core/checksum.js";
 import { createEntityId } from "../../src/core/ids.js";
 import { inspectWorkspaceState } from "../../src/core/inspect-workspace-state.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
-import { createQaTester, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
+import { createQaTester, excludeRetestSourceCasesForTests, type CanonicalPlanBundleRef } from "../../src/operations/run-workflow.js";
 import { sha256Fingerprint } from "../../src/planning/testcase-revision.js";
 import { TestDataHookRegistry } from "../../src/test-data/hooks.js";
 import { serveBrowserFixture } from "../../fixtures/browser/server.js";
@@ -536,6 +536,84 @@ describe("the residual: one selection, two lanes", () => {
   // plain objects (bypassing registration) and assert `observedCoveredCaseIds` still keeps them apart.
   // Deleted rather than left `.skip`'d, since a permanently unrepresentable scenario is not a pending
   // test — it is dead weight against this suite's zero-skip baseline.
+
+  /**
+   * Phase 9 Task 2, item 1.2: the retest branch of `select-regression` (src/operations/run-workflow.ts)
+   * held the LAST `:`-joined identity comparison in the identity family, excluding a selected case from
+   * the regression follow-up whenever its identity joined to the same string as one of the retest's own
+   * source scenarios. Same unrepresentable-through-registration situation as the deleted case above —
+   * `test-case.schema.json` now forbids `:` in `testCaseId`/`revisionId`/`instanceId`, so the colliding
+   * pair below can never both be registered through a real run — so this proves the fix the same way:
+   * `excludeRetestSourceCasesForTests` takes plain data and never re-validates it against the schema.
+   */
+  it("keeps a non-source selected case in the drive list when its identity merely rejoins to a source scenario's string", () => {
+    const testCaseArtifact = (id: string, testCaseId: string, revisionId: string, instanceId: string) => ({
+      record: { id, type: "test-case" as const, relativePath: `${id}.json`, sha256: "a".repeat(64), provenance: `runtime-import:RUN-SOURCE:${id}`, relationships: [] },
+      value: { testCaseId, revisionId, instanceId },
+    });
+    const sourceCase = testCaseArtifact("CASE-SOURCE", "TC-COL", "X:REV", "INST");
+    // `TC-COL:X` / `REV` / `INST` and the source scenario's `TC-COL` / `X:REV` / `INST` are two DISTINCT
+    // triples that a `:`-join flattens onto the same string (`TC-COL:X:REV:INST`), so a join-based
+    // exclusion would drop this case from the drive list even though nothing names it as reproduced.
+    const otherCase = testCaseArtifact("CASE-OTHER", "TC-COL:X", "REV", "INST");
+    const drive = excludeRetestSourceCasesForTests(
+      [sourceCase.record.id, otherCase.record.id],
+      [{ testCaseId: "TC-COL", revisionId: "X:REV", instanceId: "INST" }],
+      [sourceCase, otherCase],
+    );
+    expect(drive).toEqual(["CASE-OTHER"]);
+  });
+
+  /**
+   * Phase 9 Task 2, item 1.3: `executionCaseRefs` (src/core/inspect-workspace-state.ts) is built from
+   * every `test-result` `execute-browser-test` itself registered, with no dedup by test-case artifact id,
+   * while the left side of the `sameCheckpointRefs` comparison it feeds — `state.executionCases` — is
+   * already duplicate-free. `run-workflow.ts`'s retest reproduction path is the real producer of this
+   * shape: its `occurrence` logic registers one `test-result` per occurrence and deliberately keeps
+   * duplicate source occurrences ("each one is a real reproduction attempt"), so a retest whose source bug
+   * names two attempts against the same case triple drives it twice.
+   *
+   * That exact scenario turns out not to reach this comparison at all, measured rather than assumed:
+   * `value.mode === "retest"` bypasses it unconditionally, so a retest's own checkpoint is valid with or
+   * without the dedup below — confirmed against
+   * `tests/orchestration/runtime-public.e2e.test.ts`'s "replays repeated source occurrences" retest, which
+   * already drives one case twice and stays valid before and after this fix. The gap is real for every
+   * OTHER mode the comparison DOES run for, though nothing in the live orchestrator can put two refs to
+   * the SAME case into `execute-browser-test`'s own output for them: `selectRegressionCases`
+   * (src/regression/selector.ts) already dedupes to one decision per identity, and `executeWithRuntime`'s
+   * per-id loop only repeats an id when its OWN input array already does, which none of
+   * `execute`/`full`/`regression`'s own callers ever pass.
+   *
+   * So this test reconstructs the shape directly rather than through retest: a normal two-case regression
+   * run, then a tamper of the checkpoint's OWN recorded `execute-browser-test` output — not a lane-2
+   * batch, which is what every other tamper in this file rewrites — crediting the driven case a second
+   * time, exactly as a within-lane retry would.
+   */
+  it("keeps a checkpoint valid when its own execute-browser-test output credits one driven case twice", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-residual-retry-")); roots.push(root);
+    const bundle = await residualBundle(root);
+    const tester = regressionTester();
+    const result = await tester(regressionInput(root, bundle));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.validation.valid).toBe(true);
+    expect(await drivenCaseIds(root, result.runId)).toEqual(["TC-REG-A", "TC-REG-B"]);
+
+    const workspace = await RunWorkspace.open(root, result.runId);
+    const artifacts = await workspace.readRegisteredArtifacts();
+    const checkpoint = artifacts.filter((artifact) => artifact.record.type === "workflow-checkpoint").at(-1);
+    if (!checkpoint) throw new Error("Expected a workflow checkpoint");
+    const resultForA = artifacts.find((artifact) => artifact.record.type === "test-result" && artifact.value.testCaseId === identities.a.testCaseId);
+    if (!resultForA) throw new Error("Expected a driven result for the first selected case");
+    await rechecksumRegisteredArtifact(workspace, checkpoint.record.id, (value) => {
+      const outputs = value.operationOutputs as Record<string, { artifactId: string; sha256: string }[]>;
+      outputs["execute-browser-test"] = [...(outputs["execute-browser-test"] ?? []), { artifactId: resultForA.record.id, sha256: resultForA.record.sha256 }];
+    });
+    await workspace.close();
+
+    expect(await workspaceDiagnostics(root, result.runId)).not.toContain(checkpointChainDiagnostic);
+    const reopened = await RunWorkspace.open(root, result.runId);
+    await reopened.close();
+  }, 180_000);
 
   /**
    * The overlap the union comparison must survive, reached exactly the way the whole-branch review

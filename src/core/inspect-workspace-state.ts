@@ -469,10 +469,44 @@ export async function inspectWorkspaceState(
     const expectedRelationships = index === 0 ? [] : [prior?.record.id, ...(Array.isArray(newOutputs) ? newOutputs.map((item) => isRecord(item) ? item.artifactId : undefined) : [])].filter((id): id is string => typeof id === "string").sort();
     const validSuccessor = index === 0 || (value.revision === index + 1 && value.supersedesArtifactId === prior?.record.id && Array.isArray(prior?.value?.completedOperations) && JSON.stringify(completed.slice(0, -1)) === JSON.stringify(prior.value.completedOperations) && JSON.stringify([...checkpoint.record.relationships].sort()) === JSON.stringify(expectedRelationships));
     const executionResultRefs: readonly unknown[] = outputs === undefined ? [] : array(outputs["execute-browser-test"]);
-    const executionCaseRefs = executionResultRefs.flatMap((reference) => !isRecord(reference) ? [] : artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256)?.record.relationships.map((id) => {
+    const drivenCaseRefs = executionResultRefs.flatMap((reference) => !isRecord(reference) ? [] : artifacts.find((artifact) => artifact.record.id === reference.artifactId && artifact.record.sha256 === reference.sha256)?.record.relationships.map((id) => {
       const artifact = artifacts.find((candidate) => candidate.record.id === id && candidate.record.type === "test-case");
       return artifact === undefined ? undefined : { artifactId: artifact.record.id, sha256: artifact.record.sha256 };
     }).filter((item): item is { artifactId: string; sha256: string } => item !== undefined) ?? []);
+    // Deduped by `artifactId` before it reaches the `sameCheckpointRefs` comparison below. `run-workflow.ts`'s
+    // `occurrence` logic registers one `test-result` per occurrence, and its retest reproduction path
+    // deliberately keeps duplicate source occurrences ("each one is a real reproduction attempt") —
+    // uniqueness there is enforced per `attemptId`, not per test-case artifact id — so ONE selected case
+    // driven by TWO `test-result`s is a legitimate retry, not corruption, and `drivenCaseRefs` above can
+    // repeat that case's ref once per `test-result` that named it.
+    //
+    // Measured, not assumed: retest is the only mode whose own execution can put such a duplicate into
+    // `drivenCaseRefs` today (`selectRegressionCases`, src/regression/selector.ts, already dedupes to one
+    // decision per identity, and every other mode's input array comes from a registered-artifact scan that
+    // never repeats an id) — and retest is also the one mode the comparison below never reaches: its own
+    // `value.mode === "retest"` clause bypasses the whole thing unconditionally. So this dedup changes no
+    // observable outcome for any run reachable today. It is defense-in-depth for `regression`/`execute`/
+    // `full`, the modes the comparison DOES run for, and it is what stops a future narrowing of that retest
+    // bypass from reintroducing the exact multiplicity failure this comparison already had once, for the
+    // cross-lane (driven-and-observed) variant of the same union: an undeduped right side would make a
+    // healthy run's length diverge from its duplicate-free left side (`state.executionCases`, kept
+    // duplicate-free by `uniqueRefs` above as part of `stateReferencesValid`) and fail the sort-then-compare
+    // MULTISET equality `sameCheckpointRefs` performs — reading the checkpoint as broken, permanently: no
+    // open, resume, attestation, finalize, validation or export could read the run again, and there is no
+    // abort command.
+    //
+    // The one behavioural change this DOES make today: a checkpoint whose own `execute-browser-test` output
+    // lists the same `test-result` ref twice — a tamper, not anything a live run produces — now validates
+    // where it previously would not have. That incidental tamper detection was a side effect of multiset
+    // equality, not a property this clause was ever written to assert; it is about coverage (was every
+    // selected case named by a lane), never about how many times a lane named it.
+    const seenDrivenCaseIds = new Set<string>();
+    const executionCaseRefs: { artifactId: string; sha256: string }[] = [];
+    for (const reference of drivenCaseRefs) {
+      if (seenDrivenCaseIds.has(reference.artifactId)) continue;
+      seenDrivenCaseIds.add(reference.artifactId);
+      executionCaseRefs.push(reference);
+    }
     // Union coverage, not equality: a filtered `regression` run drives only the cases lane 2 did not
     // observe, so the selection is satisfied by a driven `test-result` OR a `test-result-batch` entry
     // carrying the same identity. Observed cases are intersected with the checkpoint's own selection
