@@ -624,15 +624,26 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
     await executeTestInstance({ workspace, browser: manager.browser, attemptId, testCaseArtifactId, environment: executionEnvironment, ...(externalPermitRegistry === undefined ? {} : { externalPermitRegistry }), ...(resolver === undefined ? {} : { resolveSecret: resolver }), ...(traceActive ? { onSessionActive: async ({ session }) => { await session.context.tracing.start({ screenshots: true, snapshots: true }); } } : {}), onBeforeSessionClose: async ({ attempt, session }) => {
       const retainForStatus = policy.trace === "always" || policy.trace === "required" || (policy.trace === "on-failure" && attempt.status !== "PASSED");
       if (traceActive) {
+        // Read once, before deciding whether the trace is retainable at all: an engine that cannot be
+        // determined is exactly the same kind of "cannot prove this bundle safe" failure as an unscrubbed
+        // secret or a protected environment, so it folds into the same gap rather than a separate throw.
+        const engine = observedEvidenceEngine(session);
         const unsafeTraceReason = capturePolicy.protectedEnvironment
           ? "Trace bytes are unavailable for a protected environment because deterministic archive redaction cannot be proven"
           : session.secrets.size > 0
             ? "Trace bytes are unavailable after secret resolution because deterministic archive redaction cannot be proven"
-            : undefined;
+            : engine === undefined
+              ? "Trace bytes are unavailable because the browser that ran could not be determined"
+              : undefined;
         if (!retainForStatus || unsafeTraceReason !== undefined) {
           await session.context.tracing.stop();
           if (retainForStatus && unsafeTraceReason !== undefined) await recordEvidenceGap({ workspace, attemptId, reason: unsafeTraceReason, affectedClaim: "trace capture" });
         } else {
+          // Reaching here means `unsafeTraceReason === undefined`, and `engine === undefined` is one of
+          // that value's own disjuncts — so `engine` is a `string` in every real execution. Asserted
+          // rather than cast, both to narrow the type for TypeScript and so a future edit that decouples
+          // the two conditions fails loudly here instead of writing an `undefined` engine into evidence.
+          if (engine === undefined) throw new QaSkillsError("Trace capture requires a browser that reports the engine it runs", "ARTIFACT_BINDING");
           const traceDirectory = await mkdtemp(join(tmpdir(), "qa-skills-trace-"));
           const tracePath = join(traceDirectory, "trace.zip");
           try {
@@ -652,7 +663,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
               provenance: "runtime",
               descriptor: (binaries) => {
                 const binary = binaries[0]!;
-                const value = { artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: observedEvidenceEngine(session), build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+                const value = { artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: engine, build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
                 const validation = validateArtifact("evidence", value);
                 if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
                 return value;

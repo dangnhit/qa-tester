@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { chromium } from "@playwright/test";
+import { chromium, type BrowserContext, type Page } from "@playwright/test";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +23,13 @@ async function registerAttempt(workspace: RunWorkspace, attemptId: string): Prom
   await workspace.registerArtifactValue({ type: "test-result", value: {
     artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "test", attemptId, runId: workspace.runId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1", status: "PASSED", failureClassification: "NONE", observedEngine: "chromium", steps: [{ stepId: "step-1", status: "PASSED", durationMs: 1 }], startedAt: "2026-07-23T12:00:00.000Z", finishedAt: "2026-07-23T12:00:01.000Z",
   }, relationships: [testCase.id], provenance: "test" });
+}
+
+/** A context double whose `.browser()` reports `null`, standing in for a context created outside the
+ *  normal `browser.newContext()` flow. Both refusal cases below check the engine before touching
+ *  `session.page` at all, so a real page is never needed to prove either one. */
+function noEngineContext(): BrowserContext {
+  return { browser: () => null } as unknown as BrowserContext;
 }
 
 describe("live evidence collector", () => {
@@ -219,5 +226,33 @@ describe("live evidence collector", () => {
       const persisted = await Promise.all((await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "evidence").map((artifact) => readFile(join(workspace.path, artifact.record.relativePath), "utf8")));
       expect(persisted.join("\n")).not.toContain(pii);
     } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
+  });
+
+  it("registers a screenshot gap instead of throwing when the session's context cannot report an engine", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-no-engine-screenshot-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-no-engine-screenshot", name: "No engine", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
+    const attemptId = "attempt-no-engine-screenshot";
+    await registerAttempt(workspace, attemptId);
+    activeBrowserSessions.set(attemptId, { context: noEngineContext(), page: {} as Page, telemetry: { findings: [], responseStatuses: new Map(), networkRecords: [] }, secrets: new Set() });
+    try {
+      const result = await captureEvidence({ workspace, attemptId, callerAttemptId: attemptId, protectedEnvironment: false, redaction: { domSelectors: [], regions: [] } });
+      expect(result).toMatchObject({ kind: "evidence-gap", gap: expect.objectContaining({ affectedClaim: "screenshot capture", reason: expect.stringMatching(/engine/i) }) });
+      const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { type: string }[] };
+      expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence")).toHaveLength(0);
+    } finally { activeBrowserSessions.delete(attemptId); await workspace.close(); }
+  });
+
+  it("registers a telemetry gap instead of throwing when the session's context cannot report an engine", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-evidence-no-engine-telemetry-"));
+    const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: { artifactType: "environment-profile", schemaVersion: "1.0.0", producerVersion: "0.1.0", environmentProfileId: "env-no-engine-telemetry", name: "No engine", classification: "test", baseUrl: "https://example.test", productionReadOnly: false } });
+    const attemptId = "attempt-no-engine-telemetry";
+    await registerAttempt(workspace, attemptId);
+    activeBrowserSessions.set(attemptId, { context: noEngineContext(), page: {} as Page, telemetry: { findings: [{ kind: "console", level: "error", message: "boom", timestamp: new Date().toISOString() }], responseStatuses: new Map(), networkRecords: [] }, secrets: new Set() });
+    try {
+      const result = await attachEvidence({ workspace, attemptId, callerAttemptId: attemptId, telemetry: "console" });
+      expect(result).toMatchObject({ kind: "evidence-gap", gap: expect.objectContaining({ affectedClaim: "console telemetry", reason: expect.stringMatching(/engine/i) }) });
+      const manifest = JSON.parse(await readFile(join(workspace.path, "artifact-manifest.json"), "utf8")) as { artifacts: { type: string }[] };
+      expect(manifest.artifacts.filter((artifact) => artifact.type === "evidence")).toHaveLength(0);
+    } finally { activeBrowserSessions.delete(attemptId); await workspace.close(); }
   });
 });

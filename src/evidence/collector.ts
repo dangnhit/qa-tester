@@ -29,16 +29,17 @@ function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowse
  *
  * `context.browser()` can return `null` for a context created outside the normal `browser.newContext()`
  * flow, and the result is read structurally rather than trusted through its `Browser` type for the same
- * reason `observedEngineOf` does: a double or a future non-Playwright driver can still reach here. An
- * engine that cannot be determined is refused, not defaulted to "playwright".
+ * reason `observedEngineOf` does: a double or a future non-Playwright driver can still reach here.
+ *
+ * Returns `undefined` rather than throwing, unlike `observedEngineOf`: that function gates an ATTEMPT
+ * before anything is driven, where refusing outright is correct, but this one runs from inside
+ * `captureEvidence`/`attachEvidence`, whose whole contract is "never throw — an unprovable capture is an
+ * Evidence Gap, not an exception." Every caller here must check for `undefined` and register a gap.
  */
-export function observedEvidenceEngine(session: ActiveBrowserSession): string {
+export function observedEvidenceEngine(session: ActiveBrowserSession): string | undefined {
   const browser = session.context.browser();
   const reported: unknown = (browser as { browserType?: () => { name?: () => unknown } | undefined } | null)?.browserType?.()?.name?.();
-  if (typeof reported !== "string" || reported.length === 0) {
-    throw new Error("Evidence capture requires a browser that reports the engine it runs");
-  }
-  return reported;
+  return typeof reported === "string" && reported.length > 0 ? reported : undefined;
 }
 
 type AttemptBinding = Readonly<{ artifactId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }>;
@@ -125,6 +126,8 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
 export async function captureEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; protectedEnvironment: boolean; redaction: Pick<RedactionPlan, "domSelectors" | "regions">; build?: string; testcaseId?: string; bugId?: string }): Promise<EvidenceCaptureResult> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
   if (!session) return registerGap(input.workspace, input.attemptId, "No active caller-owned browser evidence session is available", "screenshot capture");
+  const engine = observedEvidenceEngine(session);
+  if (engine === undefined) return registerGap(input.workspace, input.attemptId, "Screenshot capture requires a browser that reports the engine it runs", "screenshot capture");
   if (session.secrets.size > 0) return registerGap(input.workspace, input.attemptId, "Screenshot pixels are unavailable after secret resolution because deterministic secret-derived masking cannot be proven", "screenshot capture");
   const plan = validateRedactionPlan({ protectedEnvironment: input.protectedEnvironment, domSelectors: input.redaction.domSelectors, regions: input.redaction.regions });
   if (!plan.safe) return registerGap(input.workspace, input.attemptId, plan.gap.reason, plan.gap.affectedClaim);
@@ -139,7 +142,7 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
       const binding = await attemptBinding(input.workspace, input.attemptId);
       if (!binding) return registerGap(input.workspace, input.attemptId, "The evidence attempt is not a registered canonical test result", "screenshot capture");
       const evidenceId = createEntityId();
-      const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: observedEvidenceEngine(session), build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+      const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: engine, build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
       const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: evidenceFilename(evidenceId, "sanitized-raw"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: metadata.width, height: metadata.height } }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance }), relationships: [binding.artifactId], provenance: "runtime" });
       const binary = bundle.binaries[0];
       if (!binary) throw new Error("Evidence bundle did not register a screenshot");
@@ -154,6 +157,8 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
 export async function attachEvidence(input: { workspace: RunWorkspace; attemptId: string; callerAttemptId: string; telemetry: "console" | "network" | "log"; protectedEnvironment?: boolean; telemetryScrubber?: TelemetryScrubber; testcaseId?: string; bugId?: string }): Promise<EvidenceAttachment> {
   const session = activeSession(input.attemptId, input.callerAttemptId);
   if (!session) return registerGap(input.workspace, input.attemptId, "An active caller-owned browser evidence session is required; closed-session telemetry cannot be reconstructed", `${input.telemetry} telemetry`);
+  const engine = observedEvidenceEngine(session);
+  if (engine === undefined) return registerGap(input.workspace, input.attemptId, "Telemetry capture requires a browser that reports the engine it runs", `${input.telemetry} telemetry`);
   // Known secret redaction is not a policy capable of deterministically
   // scrubbing arbitrary PII. Protected telemetry is therefore absent unless a
   // registered policy explicitly proves all channels are scrubbed.
@@ -182,7 +187,7 @@ export async function attachEvidence(input: { workspace: RunWorkspace; attemptId
   // Telemetry is captured from the session's recorded channels, not from a rendered page: this capture
   // measures no dimensions, device pixel ratio, scroll position, or clip. Those fields are therefore
   // absent rather than defaulted — the evidence contract forbids them on a non-screenshot capture.
-  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, url: "about:blank", browser: observedEvidenceEngine(session), build: "unknown", capturedAt: now, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, url: "about:blank", browser: engine, build: "unknown", capturedAt: now, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
   const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance, telemetryFindings: scrubbedFindings }), relationships: [binding.artifactId], provenance: "runtime" });
   const binary = bundle.binaries[0];
   if (!binary) throw new Error("Evidence bundle did not register telemetry");
