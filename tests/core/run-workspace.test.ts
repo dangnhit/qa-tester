@@ -421,7 +421,8 @@ describe("RunWorkspace", () => {
   // Item 2.3: a missing root or a missing run directory used to throw a raw `ENOENT` from `realpath`
   // (bare at run-workspace.ts, and inside fs.ts's `assertRealpathWithin`), which is not a `QaSkillsError`
   // and so fell through `program.ts`'s catch-all to `ABORTED_OR_INTERNAL` (exit 5) with a filesystem path
-  // in the message -- for what is, in both cases below, simply a run ID that does not exist.
+  // in the message -- for a bad `--root` or a bad `--run-id`, two DIFFERENT bad inputs that must each name
+  // the argument that was actually wrong, not just share a fixed exit code.
   it("refuses an unknown run id under a real root, naming the run rather than the raw ENOENT", async () => {
     const directory = await root();
     const error: unknown = await RunWorkspace.open(directory, "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
@@ -431,11 +432,17 @@ describe("RunWorkspace", () => {
     expect((error as Error).message).not.toMatch(/ENOENT/);
   });
 
-  it("refuses a root that does not exist at all the same way, not a raw ENOENT from the first realpath", async () => {
+  // A bad `--root` is a DIFFERENT mistake than a bad `--run-id`, and must be reported as one: a caller who
+  // typos the root should not be told a run ID (which they typed correctly) "was not found" and go hunting
+  // for the wrong argument.
+  it("refuses a root that does not exist as its own refusal, not the run-id message, and not a raw ENOENT", async () => {
     const directory = await root();
     const error: unknown = await RunWorkspace.open(join(directory, "does-not-exist"), "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(QaSkillsError);
-    expect((error as Error).message).toMatch(/run 20260101T000000Z-abcdef was not found/i);
+    expect((error as QaSkillsError).code).toBe("INVALID_ARTIFACT");
+    expect((error as Error).message).toMatch(/project root does not exist/i);
+    expect((error as Error).message).not.toMatch(/20260101T000000Z-abcdef/);
+    expect((error as Error).message).not.toMatch(/ENOENT/);
   });
 
   // The translation above must not widen into swallowing every realpath failure: a root path that climbs

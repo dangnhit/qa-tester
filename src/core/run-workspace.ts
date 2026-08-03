@@ -59,24 +59,29 @@ function isArtifactType(value: string): value is ArtifactType {
 /**
  * The one wrap behind `RunWorkspace.open`'s nine reaching CLI commands (`validate`, `approval record`,
  * `attestation record`, `execute playwright`, `export`, the three `artifact ingest` subcommands, and
- * `workflow run --resume-run-id`): a missing project root or a missing run directory used to surface as
+ * `workflow run --resume-run-id`): a missing project root OR a missing run directory used to surface as
  * a raw `ENOENT` from `realpath` — uncaught by `program.ts`'s `QaSkillsError` branch, so it fell to the
- * generic catch and answered `ABORTED_OR_INTERNAL` (exit 5) with a filesystem path in the message, for
- * what is, in every case here, a caller-supplied run ID that simply does not exist.
+ * generic catch and answered `ABORTED_OR_INTERNAL` (exit 5) with a filesystem path in the message.
+ *
+ * Takes the refusal message rather than deriving one from a run ID, because the two callers in `open`
+ * below are refusing two DIFFERENT bad inputs: a caller-supplied `--root` that does not exist, and a
+ * caller-supplied `--run-id` that does not exist under an otherwise-real root. Collapsing both into one
+ * "run not found" message would send a `--root` typo hunting for a run ID that was never wrong — the
+ * message would still be naming the WRONG argument even after the exit code was fixed.
  *
  * Translates `ENOENT` ONLY, to the same `INVALID_ARTIFACT` refusal `readRunManifestAndMetadata`
  * (`src/cli/workflow.ts`) already gives an unknown `--bug-run-id`/`--source-run-id`/`--resume-run-id`,
- * naming the run rather than the resolved path. Any other errno — a permission error, an I/O error, a
- * symlink-escape `QaSkillsError` from `assertRealpathWithin` itself — is a real fault (or an unrelated,
- * already-coded refusal) and is rethrown untouched: folding it into "not found" would misreport an
- * internal failure as a user typo, which is strictly worse than the crash it replaces.
+ * naming the offending argument rather than the resolved path. Any other errno — a permission error, an
+ * I/O error, a symlink-escape `QaSkillsError` from `assertRealpathWithin` itself — is a real fault (or an
+ * unrelated, already-coded refusal) and is rethrown untouched: folding it into "not found" would
+ * misreport an internal failure as a user typo, which is strictly worse than the crash it replaces.
  */
-async function translateMissingRun<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+async function translateMissingRun<T>(message: string, operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
   } catch (error: unknown) {
     if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new QaSkillsError(`Run ${runId} was not found`, "INVALID_ARTIFACT");
+      throw new QaSkillsError(message, "INVALID_ARTIFACT");
     }
     throw error;
   }
@@ -161,8 +166,8 @@ export class RunWorkspace {
   }
 
   public static async open(root: string, runId: string): Promise<RunWorkspace> {
-    const realRoot = await translateMissingRun(runId, () => realpath(root));
-    const path = await translateMissingRun(runId, () => assertRealpathWithin(realRoot, join("qa-results", runId)));
+    const realRoot = await translateMissingRun("Project root does not exist", () => realpath(root));
+    const path = await translateMissingRun(`Run ${runId} was not found`, () => assertRealpathWithin(realRoot, join("qa-results", runId)));
     const inspected = await inspectWorkspaceState(path, runId, RunWorkspace.reopenRun);
     if (inspected.diagnostics.length > 0) {
       throw new QaSkillsError(`Workspace artifact binding is invalid: ${inspected.diagnostics[0]?.message ?? "unknown error"}`, "ARTIFACT_BINDING");

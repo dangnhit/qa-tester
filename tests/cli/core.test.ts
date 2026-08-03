@@ -165,11 +165,16 @@ describe("CLI core", () => {
     expect(run.stderr).toMatch(/no-such-run/);
   });
 
-  it("refuses a --root that does not exist the same way as an unknown run id", async () => {
+  // A bad `--root` and a bad `--run-id` are different mistakes, and the message must say which one: a
+  // caller who typos `--root` must not be told a run ID (that they typed correctly) "was not found" and
+  // go hunting for the wrong argument.
+  it("refuses a --root that does not exist with its own message, not the run-id refusal", async () => {
     const directory = await root();
     const run = await runCli(["validate", "--root", join(directory, "does-not-exist"), "--run-id", "no-such-run"], { cwd: directory });
     expect(run.exitCode).toBe(ExitCode.INVALID_INPUT);
     expect(run.stderr).not.toMatch(/ENOENT/);
+    expect(run.stderr).toMatch(/project root does not exist/i);
+    expect(run.stderr).not.toMatch(/no-such-run/);
   });
 
   // The constraint that matters most: only ENOENT is translated. A root path that climbs through a plain
