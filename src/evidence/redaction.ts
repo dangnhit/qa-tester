@@ -1,3 +1,5 @@
+import { runtimeVersion } from "../installer/manifest.js";
+
 export type CssBox = { x: number; y: number; width: number; height: number };
 export type RedactionPlan = { protectedEnvironment: boolean; domSelectors: readonly string[]; regions: readonly CssBox[] };
 export type EvidenceGap = { artifactType: "evidence-gap"; schemaVersion: "2.0.0"; producerVersion: string; evidenceGapId: string; runId: string; scope: "attempt"; attemptId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string; reason: string; affectedClaim: string } | { artifactType: "evidence-gap"; schemaVersion: "2.0.0"; producerVersion: string; evidenceGapId: string; runId: string; scope: "operational"; reason: string; affectedClaim: string };
@@ -7,7 +9,7 @@ export type NetworkRecord = { url: string; requestHeaders?: Record<string, strin
 const sensitiveKey = /(?:authorization|proxy-authorization|cookie|set-cookie|password|passcode|secret|token|api[-_]?key|credential)/i;
 
 function gap(reason: string, affectedClaim: string): EvidenceGap {
-  return { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceGapId: "unknown", runId: "unknown", scope: "operational", reason, affectedClaim };
+  return { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: runtimeVersion, evidenceGapId: "unknown", runId: "unknown", scope: "operational", reason, affectedClaim };
 }
 
 function validBox(box: CssBox): boolean {

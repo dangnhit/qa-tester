@@ -8,6 +8,7 @@ import { evidenceAttemptId } from "../core/artifact-record.js";
 import { QaSkillsError } from "../core/errors.js";
 import { createEntityId } from "../core/ids.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { isRecord } from "../core/values.js";
 
 type Values = Readonly<Record<string, unknown>>;
@@ -94,7 +95,7 @@ export async function generateBugReport(input: Readonly<{
     const gaps = artifacts.filter((artifact) => artifact.record.type === "evidence-gap" && artifact.value.attemptId === original.attemptId && artifact.value.runId === original.runId);
     if (evidence.length === 0 && gaps.length === 0) throw new QaSkillsError("Incident generation requires registered evidence or an evidence gap for its attempt", "ARTIFACT_BINDING");
     const value = {
-      artifactType: "incident", schemaVersion: "1.0.0", producerVersion: "0.1.0", incidentId: `INC-${createEntityId()}`,
+      artifactType: "incident", schemaVersion: "1.0.0", producerVersion: runtimeVersion, incidentId: `INC-${createEntityId()}`,
       runId: original.runId, attemptId: original.attemptId, kind: incident.kind,
       summary: `${incident.kind} observed for ${original.testCaseId}.`, environment,
       ...(evidence.length > 0 ? { evidenceIds: evidence.map((item) => string(item.value.evidenceId, "evidence ID")) } : {}),
@@ -139,7 +140,7 @@ export async function generateBugReport(input: Readonly<{
   const mergedAttemptArtifacts = mergedAttemptIds.map((attemptId) => resultsByAttempt.get(attemptId)[0]).filter((artifact): artifact is RegisteredWorkspaceArtifact => artifact !== undefined);
   const mergedReproduction = evaluateReproduction(mergedAttemptArtifacts.map(attemptFrom), mergedAttemptIds.length === 1 && input.unsafeRerunReason !== undefined ? { unsafeRerunReason: input.unsafeRerunReason } : {});
   const value = {
-    artifactType: "bug-report", schemaVersion: "1.0.0", producerVersion: "0.1.0",
+    artifactType: "bug-report", schemaVersion: "1.0.0", producerVersion: runtimeVersion,
     bugId: superseded ? string(superseded.value.bugId, "prior bug ID") : createRunScopedBugId(feature, original.runId, new Set(existing.map((artifact) => String(artifact.value.bugId))).size + 1), runId: original.runId, attemptId: original.attemptId,
     ...triage, testPriority: triage.triageStatus === "TRIAGED" ? triage.testPriority : "medium",
     expected, actual, environment, reproduction: mergedReproduction,

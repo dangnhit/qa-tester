@@ -1,4 +1,5 @@
 import type { ArtifactType } from "../contracts/types.js";
+import { runtimeVersion } from "../installer/manifest.js";
 
 /**
  * The 4 artifact types an agent authors directly (the only types ever registered with
@@ -36,7 +37,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   "requirement-analysis": {
     artifactType: "requirement-analysis",
     schemaVersion: "1.0.0",
-    producerVersion: "1.0.0",
+    producerVersion: runtimeVersion,
     requirementAnalysisId: "REQUIREMENT-ANALYSIS-PLACEHOLDER",
     statements: [
       {
@@ -55,7 +56,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   "test-plan": {
     artifactType: "test-plan",
     schemaVersion: "1.0.0",
-    producerVersion: "1.0.0",
+    producerVersion: runtimeVersion,
     testPlanId: "TEST-PLAN-PLACEHOLDER",
     approvalPolicy: { mode: "human-review" },
     testCases: [
@@ -75,7 +76,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   "test-case": {
     artifactType: "test-case",
     schemaVersion: "3.0.0",
-    producerVersion: "1.0.0",
+    producerVersion: runtimeVersion,
     testCaseId: "TC-PLACEHOLDER-1",
     revisionId: "REPLACE_WITH_QA_SKILL_FINGERPRINT_OUTPUT",
     instanceId: "TC-PLACEHOLDER-1--REPLACE_WITH_FIRST_16_HEX_CHARS_OF_FINGERPRINT",
@@ -97,7 +98,7 @@ export const agentDraftSkeletons: Readonly<Record<AgentDraftType, Readonly<Recor
   "coverage-obligation": {
     artifactType: "coverage-obligation",
     schemaVersion: "4.0.0",
-    producerVersion: "1.0.0",
+    producerVersion: runtimeVersion,
     obligationId: "COV-PLACEHOLDER-1",
     requirementId: "REQ-PLACEHOLDER-1",
     requirementAnalysisArtifactId: "REPLACE_WITH_REGISTERED_REQUIREMENT_ANALYSIS_ARTIFACT_ID",

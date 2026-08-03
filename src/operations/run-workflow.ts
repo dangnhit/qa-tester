@@ -8,6 +8,7 @@ import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactInd
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { caseIdentity, observedCoveredCaseIds, observedSelectedCaseIdentities, observedSelectedFailureIdentities } from "../core/observed-coverage.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
@@ -15,7 +16,7 @@ import type { SecretResolver } from "../browser/types.js";
 import { executeTestInstance } from "./execute-browser-test.js";
 import { pendingHumanInput, type PendingHumanInput } from "./human-input.js";
 import { pendingObservedExecution, type PendingObservedExecution } from "./observed-pause.js";
-import { attachEvidence, captureEvidence, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
+import { attachEvidence, captureEvidence, observedEvidenceEngine, recordEvidenceGap, type TelemetryScrubber } from "../evidence/collector.js";
 import { annotateScreenshot } from "../evidence/annotator.js";
 import { normalizeGeometry } from "../evidence/geometry.js";
 import { redactText } from "../evidence/redaction.js";
@@ -396,7 +397,7 @@ async function checkpointWorkflow(workspace: RunWorkspace, input: QaWorkflowInpu
     return { record: latest.record, completedOperations: Array.isArray(latest.value.completedOperations) ? latest.value.completedOperations as WorkflowOperationName[] : [], operationOutputs: isRecord(latest.value.operationOutputs) ? latest.value.operationOutputs as Record<string, readonly RegisteredArtifactRef[]> : {}, state: checkpointState(latest.value.state) };
   }
   const created = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
-    artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
+    artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: runtimeVersion, checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode,
     inputChecksum: checksum, revision: 1, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState(), stateChecksum: workflowStateChecksum(emptyWorkflowState()), ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [], provenance: "runtime" });
   return { record: created, completedOperations: [], operationOutputs: {}, state: emptyWorkflowState() };
@@ -408,7 +409,7 @@ async function advanceCheckpoint(workspace: RunWorkspace, input: QaWorkflowInput
   const operationOutputs: Record<string, readonly RegisteredArtifactRef[]> = { ...previous.operationOutputs, [operation]: records.map((artifact) => ({ artifactId: artifact.id, sha256: artifact.sha256 })) };
   const snapshot = await snapshotWorkflowState(state);
   const registered = await workspace.registerArtifactValue({ type: "workflow-checkpoint", value: {
-    artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: "0.1.0", checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode, inputChecksum: workflowInputChecksum(input), revision: Number((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === previous.record.id)?.value.revision) + 1,
+    artifactType: "workflow-checkpoint", schemaVersion: "1.0.0", producerVersion: runtimeVersion, checkpointId: `CHK-${workspace.runId}`, runId: workspace.runId, mode: input.mode, inputChecksum: workflowInputChecksum(input), revision: Number((await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.id === previous.record.id)?.value.revision) + 1,
     supersedesArtifactId: previous.record.id, completedOperations: [...previous.completedOperations, operation], operationOutputs, state: snapshot, stateChecksum: workflowStateChecksum(snapshot),
     ...(input.bundle === undefined ? {} : { bundle: { sourceRunId: input.bundle.sourceRunId, artifacts: input.bundle.artifacts.map((artifact) => ({ artifactId: artifact.artifactId, sha256: artifact.sha256 })) } }),
   }, relationships: [previous.record.id, ...records.map((artifact) => artifact.id)], provenance: "runtime" });
@@ -651,7 +652,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
               provenance: "runtime",
               descriptor: (binaries) => {
                 const binary = binaries[0]!;
-                const value = { artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.2.0", evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: "playwright", build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+                const value = { artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: observedEvidenceEngine(session), build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
                 const validation = validateArtifact("evidence", value);
                 if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
                 return value;
@@ -764,7 +765,7 @@ async function registerRuntimeRetestResult(workspace: RunWorkspace, reference: R
   const regressionOutcome = deriveRegressionOutcome(regression.map((attempt) => asString(attempt.value.status, "regression execution status")));
   const reproductionScenarios = reproduction.map((attempt, index) => ({ scenarioId: attempt === undefined ? "" : scenarioIdForRegisteredAttempt(artifacts, attempt), sourceAttemptArtifactId: source.scenarios[index]!.sourceAttemptArtifactId, sourceTestCaseArtifactId: source.scenarios[index]!.sourceTestCaseArtifactId, attemptId: asString(attempt?.value.attemptId, "reproduction attempt ID"), status: asString(attempt?.value.status, "reproduction execution status") }));
   const verdict = deriveRetestVerdict({ originalBugId: source.bugId, reproductionStatuses: reproductionScenarios.map((scenario) => scenario.status), scenarioIds: reproductionScenarios.map((scenario) => scenario.scenarioId), regressionOutcome });
-  return workspace.registerArtifactValue({ type: "retest-result", value: { artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: workspace.linkedRunId, sourceBugArtifactId: reference.artifactId, sourceBugArtifactSha256: reference.sha256, bugId: source.bugId, reproductionAttemptIds: [...reproductionAttemptIds], reproductionScenarios, regressionAttemptIds: [...regressionAttemptIds], verdict: verdict.verdict, regressionOutcome }, relationships: [...reproduction, ...regression].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined), provenance: "runtime" });
+  return workspace.registerArtifactValue({ type: "retest-result", value: { artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: workspace.runId, sourceRunId: workspace.linkedRunId, sourceBugArtifactId: reference.artifactId, sourceBugArtifactSha256: reference.sha256, bugId: source.bugId, reproductionAttemptIds: [...reproductionAttemptIds], reproductionScenarios, regressionAttemptIds: [...regressionAttemptIds], verdict: verdict.verdict, regressionOutcome }, relationships: [...reproduction, ...regression].map((attempt) => attempt?.record.id).filter((id): id is string => id !== undefined), provenance: "runtime" });
 }
 
 async function assertApprovedCanonicalRevisions(workspace: RunWorkspace, ids: readonly string[] | undefined): Promise<void> {
@@ -801,7 +802,7 @@ async function registerCharter(workspace: RunWorkspace, charter: ExplorationChar
   const environment = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "environment-profile");
   if (!environment) throw new QaSkillsError("Exploration charter requires the registered environment", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "exploration-charter", value: {
-    artifactType: "exploration-charter", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, ...valid,
+    artifactType: "exploration-charter", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: workspace.runId, ...valid,
   }, relationships: [environment.record.id], provenance: "runtime" });
 }
 
@@ -814,7 +815,7 @@ async function registerSelection(workspace: RunWorkspace, selection: RegressionS
   const relationships = decisions.flatMap((decision) => casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }));
   if (relationships.length !== decisions.length) throw new QaSkillsError("Regression selection requires every decision to bind one registered canonical test case revision", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "regression-selection", value: {
-    artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: "0.1.0", selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
+    artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: runtimeVersion, selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
     changeScopeArtifactId: changeScope.id, changeScopeSha256: changeScope.sha256, decisionChecksum: sha256Text(JSON.stringify(selection)), ...selection,
   }, relationships: [changeScope.id, ...relationships.map((artifact) => artifact.record.id)], provenance: "runtime" });
 }
@@ -905,7 +906,7 @@ async function registerRetestResult(workspace: RunWorkspace, input: NonNullable<
   const reproduction = await exactRetestReproduction(workspace, input);
   const verdict = deriveRetestVerdict({ originalBugId: reproduction.source.bugId, reproductionStatuses: reproduction.statuses, ...(input.regressionOutcome === undefined ? {} : { regressionOutcome: input.regressionOutcome }) });
   return workspace.registerArtifactValue({ type: "retest-result", value: {
-    artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: workspace.runId, sourceRunId: reproduction.sourceRunId,
+    artifactType: "retest-result", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: workspace.runId, sourceRunId: reproduction.sourceRunId,
     sourceBugArtifactId: input.sourceBugArtifactId, sourceBugArtifactSha256: reproduction.source.record.sha256, bugId: verdict.bugId, reproductionAttemptIds: [...input.reproductionAttemptIds], reproductionScenarios: input.reproductionAttemptIds.map((attemptId, index) => ({ scenarioId: sourceScenarioId({ testCaseId: reproduction.source.testCaseId, revisionId: reproduction.source.revisionId, instanceId: reproduction.source.instanceId }), attemptId, status: reproduction.statuses[index] })), regressionAttemptIds: [], verdict: verdict.verdict,
     regressionOutcome: verdict.regressionOutcome ?? "NOT_RUN",
   }, relationships: (await workspace.readRegisteredArtifacts()).filter((artifact) => artifact.record.type === "test-result" && input.reproductionAttemptIds.includes(String(artifact.value.attemptId))).map((artifact) => artifact.record.id), provenance: "runtime" });

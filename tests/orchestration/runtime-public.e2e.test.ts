@@ -425,7 +425,10 @@ describe("public runtime QA Tester", () => {
     const workspace = await RunWorkspace.open(root, result.runId);
     const artifacts = await workspace.readRegisteredArtifacts();
 
-    expect(artifacts.some((item) => item.record.type === "evidence" && item.value.kind === "trace")).toBe(true);
+    const trace = artifacts.find((item) => item.record.type === "evidence" && item.value.kind === "trace");
+    expect(trace).toBeTruthy();
+    // Measured off the live `Browser` handle behind the session, not a hardcoded "playwright" literal.
+    expect((trace?.value.provenance as { browser?: string } | undefined)?.browser).toBe("chromium");
     expect(artifacts.some((item) => item.record.type === "evidence-gap" && item.value.affectedClaim === "trace capture")).toBe(false);
     await workspace.close();
   });

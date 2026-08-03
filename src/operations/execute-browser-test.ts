@@ -14,6 +14,7 @@ import { QaSkillsError } from "../core/errors.js";
 import type { ExecutionProvenance } from "../core/provenance.js";
 import type { RegisteredWorkspaceArtifact } from "../core/run-workspace.js";
 import { isRecord } from "../core/values.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { resolvePlanApproval } from "../planning/approval.js";
 import { sha256Fingerprint } from "../planning/testcase-revision.js";
 import { navigationPolicyFromProfile, type LaneSafetyContext } from "../safety/navigation.js";
@@ -182,7 +183,7 @@ export async function executeTestInstance(input: ExecuteTestInput): Promise<Test
       await input.workspace.registerArtifactValue({
         type: "test-result",
         value: {
-          artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: "0.1.0",
+          artifactType: "test-result", schemaVersion: "3.0.0", producerVersion: runtimeVersion,
           attemptId: attempt.attemptId, runId: attempt.runId, testCaseId: attempt.testCaseId, testCaseRevisionId: attempt.testCaseRevisionId,
           testCaseInstanceId: attempt.testCaseInstanceId, status: attempt.status,
           // The MEASURED engine, carried straight from the attempt that observed it. Coverage matching

@@ -1,4 +1,5 @@
 import { RunWorkspace } from "../core/run-workspace.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { cleanupResources, type CleanupResourcesResult } from "../test-data/cleanup.js";
 import type { TestResource } from "../test-data/resources.js";
 
@@ -22,7 +23,7 @@ export async function executeCleanupRun(input: Readonly<{
       const resources = data.value.resources as TestResource[];
       const outcome = await cleanupResources({ sourceRunId: input.sourceRunId, resources, execute: input.execute });
       const value = {
-        artifactType: "cleanup-run", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: cleanup.runId,
+        artifactType: "cleanup-run", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: cleanup.runId,
         sourceRunId: input.sourceRunId, sourceTestDataManifestArtifactId: data.record.id, sourceTestDataManifestSha256: data.record.sha256,
         sourceTestDataManifest: JSON.parse(JSON.stringify(data.value)) as Record<string, unknown>, resources: outcome.resources,
       };

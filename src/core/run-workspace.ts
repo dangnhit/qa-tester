@@ -4,6 +4,7 @@ import { join, relative, resolve } from "node:path";
 import { parseAuthoringDocument } from "../contracts/authoring.js";
 import { artifactTypes, type ArtifactType, type RunStatus } from "../contracts/types.js";
 import { formatValidationErrors, validateArtifact } from "../contracts/validator.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { deriveTestPlanApproval, type ApprovalDecision, type ApprovalEnvironment } from "../planning/approval.js";
 import { assertRequirementAuthorities } from "../planning/authority.js";
 import {
@@ -136,7 +137,7 @@ export class RunWorkspace {
     const metadata: WorkspaceMetadata = {
       artifactType: "run-metadata",
       schemaVersion: "1.0.0",
-      producerVersion: "0.1.0",
+      producerVersion: runtimeVersion,
       runId,
       status: "CREATED",
       createdAt: utcNow(),
@@ -157,7 +158,7 @@ export class RunWorkspace {
     await workspace.writeManifest({
       artifactType: "artifact-manifest",
       schemaVersion: "1.0.0",
-      producerVersion: "0.1.0",
+      producerVersion: runtimeVersion,
       runId,
       artifacts: [],
     });

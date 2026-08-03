@@ -23,6 +23,7 @@ export function regressionCaseFromCanonical(value: Record<string, unknown>): Reg
 import { sha256Text } from "../core/checksum.js";
 import type { ArtifactRecord } from "../core/artifact-record.js";
 import type { ArtifactType } from "../contracts/types.js";
+import { runtimeVersion } from "../installer/manifest.js";
 
 type ChangeScopeWorkspace = {
   readonly runId: string;
@@ -65,5 +66,5 @@ export async function registerChangeScope(input: Readonly<{ workspace: ChangeSco
   if (!input.changes.every(isChangeScope)) throw new QaSkillsError(`Change scope change must declare a string id and ${changeMappingFields.join(", ")} as arrays of strings`, "INVALID_ARTIFACT");
   const changes = [...input.changes].sort((left, right) => left.id.localeCompare(right.id)).map((change) => ({ ...change, requirementIds: [...change.requirementIds].sort(), codeSurfaces: [...change.codeSurfaces].sort(), declaredDependencies: [...change.declaredDependencies].sort(), gitPaths: [...change.gitPaths].sort(), userScope: [...change.userScope].sort() }));
   const inputChecksum = sha256Text(JSON.stringify({ changes, provenance: input.provenance }));
-  return input.workspace.registerArtifactValue({ type: "change-scope", value: { artifactType: "change-scope", schemaVersion: "1.0.0", producerVersion: "0.1.0", changeScopeId: `CHANGE-${input.workspace.runId}`, runId: input.workspace.runId, changes, inputChecksum, provenance: input.provenance }, relationships: [], provenance: "runtime" });
+  return input.workspace.registerArtifactValue({ type: "change-scope", value: { artifactType: "change-scope", schemaVersion: "1.0.0", producerVersion: runtimeVersion, changeScopeId: `CHANGE-${input.workspace.runId}`, runId: input.workspace.runId, changes, inputChecksum, provenance: input.provenance }, relationships: [], provenance: "runtime" });
 }

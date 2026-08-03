@@ -4,6 +4,7 @@ import { renderCanonicalJson } from "../reporting/render-json.js";
 import { renderMarkdown } from "../reporting/render-markdown.js";
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import type { ArtifactRecord, RunWorkspace } from "../core/run-workspace.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { isRecord } from "../core/values.js";
 
 type Values = Readonly<Record<string, unknown>>;
@@ -20,7 +21,7 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
   })));
   const currentBugs = gateResult.ruleInputs.bugs;
   const currentOpenBugs = currentBugs.filter((bug) => bug.open);
-  const gateValue = { artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, ...gateResult };
+  const gateValue = { artifactType: "release-gate", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: input.workspace.runId, ...gateResult };
   const gate = await input.workspace.registerArtifactValue({ type: "release-gate", value: gateValue, relationships: artifacts.map((artifact) => artifact.record.id), provenance: "runtime" });
   const evidence = artifacts.filter((artifact) => artifact.record.type === "evidence");
   const build = evidence.map((artifact) => isRecord(artifact.value.provenance) ? str(artifact.value.provenance.build) : undefined).find((value) => value !== undefined) ?? "unknown";
@@ -54,7 +55,7 @@ export async function generateQaReport(input: Readonly<{ workspace: RunWorkspace
     const attemptId = evidenceAttemptId(artifact.value);
     return array(artifact.value.telemetryFindings).filter(isRecord).map((finding) => ({ ...finding, evidenceArtifactId: artifact.record.id, ...(attemptId === undefined ? {} : { attemptId }) }));
   });
-  const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${attemptCount} registered attempts evaluated; ${currentOpenBugs.length} open product bug${currentOpenBugs.length === 1 ? "" : "s"}.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, protectedEnvironment: gateResult.protectedEnvironment, releaseGate: gateResult };
+  const model: QaReportModel = { artifactType: "qa-execution-report", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: input.workspace.runId, generatedAt: new Date().toISOString(), build: { identifier: build }, summary: `${attemptCount} registered attempts evaluated; ${currentOpenBugs.length} open product bug${currentOpenBugs.length === 1 ? "" : "s"}.`, coverageMethods: ["registered coverage obligations"], incidents, bugs, telemetryFindings, evidenceGaps, cleanupLeaks, criticalFindings, remainingRisks, excludedNotRun, protectedEnvironment: gateResult.protectedEnvironment, releaseGate: gateResult };
   const value = toQaExecutionReport(model);
   const report = await input.workspace.registerArtifactValue({ type: "qa-execution-report", value, relationships: [gate.id, ...artifacts.map((artifact) => artifact.record.id)], provenance: "runtime" });
   return { gate, report, json: renderCanonicalJson(model), markdown: renderMarkdown(model, input.locale ?? "en") };

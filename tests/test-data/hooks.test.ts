@@ -31,9 +31,9 @@ describe("TestDataHookRegistry", () => {
 
   // Windows semantics, asserted from POSIX, and specifically shaped to be REVERT-PROOF against the
   // pre-branch body (`git show a00e23b:src/test-data/hooks.ts`: native `relative`, literal `"../"`,
-  // no seam). A candidate built from `../escape.mjs` does NOT discriminate: native `resolve` renders
-  // it `../escape.mjs`, which the literal check already rejects, so that assertion only re-pins
-  // `isPathWithin`'s `..${sep}` marker — which `tests/core/fs.test.ts` pins directly.
+  // no seam). A candidate built from `../escape.mjs` does NOT discriminate: native `relative` inside
+  // `contained` renders it `../escape.mjs`, which the literal check already rejects, so that assertion
+  // only re-pins `isPathWithin`'s `..${sep}` marker — which `tests/core/fs.test.ts` pins directly.
   //
   // The discriminating fixture is a real file named literally `..\escape.mjs` INSIDE `<root>/hooks`.
   // Backslash is a legal POSIX filename character, so natively that is one ordinary segment and the

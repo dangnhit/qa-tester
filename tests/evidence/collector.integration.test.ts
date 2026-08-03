@@ -52,6 +52,9 @@ describe("live evidence collector", () => {
         const attempt = (await workspace.readRegisteredArtifacts()).find((artifact) => artifact.record.type === "test-result" && artifact.value.attemptId === attemptId);
         expect(descriptor?.record.relationships).toContain(attempt?.record.id);
         expect(descriptor?.value).toMatchObject({ subject: { kind: "attempt", attemptId, testCaseId: `TC-${attemptId}`, testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } });
+        // The engine is MEASURED off the live `Browser` handle behind `context.browser()`, never a
+        // hardcoded "playwright" literal — this session really is a launched `chromium` browser.
+        expect((descriptor?.value.provenance as { browser?: string } | undefined)?.browser).toBe("chromium");
         const [beforePixels, capturedPixels] = await Promise.all([
           sharp(before).ensureAlpha().raw().toBuffer(),
           sharp(await readFile(result.rawPath)).ensureAlpha().raw().toBuffer(),
@@ -169,6 +172,8 @@ describe("live evidence collector", () => {
       expect(descriptor?.value.schemaVersion).toBe("3.0.0");
       const provenance = descriptor?.value.provenance as Record<string, unknown>;
       expect(provenance.captureType).toBe("console");
+      // Measured off the live `Browser` handle, same as the screenshot path — not a hardcoded literal.
+      expect(provenance.browser).toBe("chromium");
       for (const field of ["dimensions", "dpr", "scroll", "clip", "viewport"]) expect(provenance).not.toHaveProperty(field);
     } finally { activeBrowserSessions.delete(attemptId); await context.close(); await browser.close(); await workspace.close(); }
   });

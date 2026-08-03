@@ -1,6 +1,7 @@
 import type { RunWorkspace } from "../core/run-workspace.js";
 import type { QaConfig } from "../config/load-config.js";
 import { withResolvedSecrets } from "../config/secret-resolver.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { TestDataHookRegistry } from "../test-data/hooks.js";
 
 export type TestDataManifest = Readonly<{ artifactType: "test-data-manifest"; schemaVersion: "1.0.0"; producerVersion: string; runId: string; resources: readonly { id: string; ownerRunId: string; cleanupAction: string }[] }>;
@@ -15,7 +16,7 @@ export async function prepareTestData(input: Readonly<{ workspace: RunWorkspace;
     const operationValue = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
     for (const hookId of input.hookIds) resources.push(...await input.hooks.executeTrusted(hookId, input.workspace.runId, operationValue));
     if (new Set(resources.map((resource) => resource.id)).size !== resources.length) throw new Error("Test-data preparation rejects duplicate resource IDs across hooks");
-    const manifest = scrub<TestDataManifest>({ artifactType: "test-data-manifest", schemaVersion: "1.0.0", producerVersion: "0.1.0", runId: input.workspace.runId, resources });
+    const manifest = scrub<TestDataManifest>({ artifactType: "test-data-manifest", schemaVersion: "1.0.0", producerVersion: runtimeVersion, runId: input.workspace.runId, resources });
     await input.workspace.registerArtifactValue({ type: "test-data-manifest", value: manifest, relationships: [], provenance: "runtime" });
     return manifest;
   });

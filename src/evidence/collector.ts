@@ -5,6 +5,7 @@ import type { ActiveBrowserSession, TelemetryFinding } from "../browser/types.js
 import type { RunWorkspace } from "../core/run-workspace.js";
 import { indexByAttemptId } from "../core/artifact-index.js";
 import { createEntityId } from "../core/ids.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { evidenceFilename, type EvidenceProvenance } from "./manifest.js";
 import { redactNetworkRecord, redactText, validateRedactionPlan, type CssBox, type EvidenceGap, type RedactionPlan } from "./redaction.js";
 
@@ -18,6 +19,26 @@ type PageRuntime = { document: { createElement(tag: string): { id: string; setAt
 
 function activeSession(attemptId: string, callerAttemptId: string): ActiveBrowserSession | undefined {
   return attemptId === callerAttemptId ? getActiveBrowserSession(attemptId) : undefined;
+}
+
+/**
+ * Mirrors `observedEngineOf` in `src/operations/execute-browser-test.ts`: the engine an evidence
+ * artifact names is read off the live `Browser` handle, never a hardcoded literal, so evidence stays
+ * honest about which engine actually ran rather than assuming Playwright forever. `ActiveBrowserSession`
+ * carries no `Browser` handle of its own, so it is walked from `context.browser()` instead of threaded in.
+ *
+ * `context.browser()` can return `null` for a context created outside the normal `browser.newContext()`
+ * flow, and the result is read structurally rather than trusted through its `Browser` type for the same
+ * reason `observedEngineOf` does: a double or a future non-Playwright driver can still reach here. An
+ * engine that cannot be determined is refused, not defaulted to "playwright".
+ */
+export function observedEvidenceEngine(session: ActiveBrowserSession): string {
+  const browser = session.context.browser();
+  const reported: unknown = (browser as { browserType?: () => { name?: () => unknown } | undefined } | null)?.browserType?.()?.name?.();
+  if (typeof reported !== "string" || reported.length === 0) {
+    throw new Error("Evidence capture requires a browser that reports the engine it runs");
+  }
+  return reported;
 }
 
 type AttemptBinding = Readonly<{ artifactId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }>;
@@ -38,8 +59,8 @@ async function attemptBinding(workspace: RunWorkspace, attemptId: string): Promi
 async function registerGap(workspace: RunWorkspace, attemptId: string, reason: string, affectedClaim: string): Promise<GapResult> {
   const binding = await attemptBinding(workspace, attemptId);
   const gap = binding === undefined
-    ? { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: "0.1.0", evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
-    : { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: "0.1.0", evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
+    ? { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
+    : { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
   const record = await workspace.registerArtifactValue({ type: "evidence-gap", value: gap, relationships: binding === undefined ? [] : [binding.artifactId], provenance: "runtime" });
   return { kind: "evidence-gap", descriptorArtifactId: record.id, gap };
 }
@@ -90,7 +111,7 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   if (!input.binary.mediaType) throw new Error("Evidence media type is required");
   if (input.provenance.captureType === "screenshot" && !input.provenance.dimensions) throw new Error("Screenshot evidence dimensions are required");
   return {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.2.0", evidenceId: input.evidenceId, runId: input.workspace.runId,
+    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId: input.evidenceId, runId: input.workspace.runId,
     subject: { kind: "attempt", attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId },
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings
@@ -118,7 +139,7 @@ export async function captureEvidence(input: { workspace: RunWorkspace; attemptI
       const binding = await attemptBinding(input.workspace, input.attemptId);
       if (!binding) return registerGap(input.workspace, input.attemptId, "The evidence attempt is not a registered canonical test result", "screenshot capture");
       const evidenceId = createEntityId();
-      const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: "playwright", build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+      const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: "screenshot", dpr: metadata.width / metrics.viewport.width, scroll: metrics.scroll, clip: { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height }, url: redactText(metrics.url, [...session.secrets]), viewport: metrics.viewport, browser: observedEvidenceEngine(session), build: input.build ?? "unknown", capturedAt: new Date().toISOString(), dimensions: { width: metadata.width, height: metadata.height }, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
       const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: evidenceFilename(evidenceId, "sanitized-raw"), contents: bytes, mediaType: "image/png", captureType: "screenshot", dimensions: { width: metadata.width, height: metadata.height } }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance }), relationships: [binding.artifactId], provenance: "runtime" });
       const binary = bundle.binaries[0];
       if (!binary) throw new Error("Evidence bundle did not register a screenshot");
@@ -161,7 +182,7 @@ export async function attachEvidence(input: { workspace: RunWorkspace; attemptId
   // Telemetry is captured from the session's recorded channels, not from a rendered page: this capture
   // measures no dimensions, device pixel ratio, scroll position, or clip. Those fields are therefore
   // absent rather than defaulted — the evidence contract forbids them on a non-screenshot capture.
-  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, url: "about:blank", browser: "playwright", build: "unknown", capturedAt: now, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
+  const provenance: EvidenceProvenance = { evidenceId, runId: input.workspace.runId, attemptId: input.attemptId, captureType: input.telemetry === "log" ? "log" : input.telemetry, url: "about:blank", browser: observedEvidenceEngine(session), build: "unknown", capturedAt: now, ...(input.testcaseId === undefined ? {} : { testcaseId: input.testcaseId }), ...(input.bugId === undefined ? {} : { bugId: input.bugId }) };
   const bundle = await input.workspace.registerEvidenceBundle({ binaries: [{ filename: `${evidenceId}-${input.telemetry}.json`, contents: bytes, mediaType: "application/json", captureType: input.telemetry === "log" ? "log" : input.telemetry }], descriptor: (binaries) => descriptor({ evidenceId, workspace: input.workspace, attemptId: input.attemptId, binding, binary: binaries[0] as { id: string; relativePath: string; sha256: string; mediaType: string }, provenance, telemetryFindings: scrubbedFindings }), relationships: [binding.artifactId], provenance: "runtime" });
   const binary = bundle.binaries[0];
   if (!binary) throw new Error("Evidence bundle did not register telemetry");

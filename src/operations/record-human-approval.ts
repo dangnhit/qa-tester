@@ -1,6 +1,7 @@
 import { createEntityId } from "../core/ids.js";
 import { QaSkillsError } from "../core/errors.js";
 import { RunWorkspace, type ArtifactRecord } from "../core/run-workspace.js";
+import { runtimeVersion } from "../installer/manifest.js";
 import { isRecord } from "../core/values.js";
 
 export async function recordHumanApproval(input: { root: string; runId: string; planArtifactId: string; approvedBy: string }): Promise<ArtifactRecord> {
@@ -22,7 +23,7 @@ export async function recordHumanApproval(input: { root: string; runId: string; 
       value: {
         artifactType: "approval-decision",
         schemaVersion: "1.0.0",
-        producerVersion: "0.1.0",
+        producerVersion: runtimeVersion,
         approvalId: createEntityId(),
         runId: workspace.runId,
         planArtifactId: plan.record.id,
