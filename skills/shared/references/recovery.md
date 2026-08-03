@@ -427,17 +427,26 @@ already verified when it opened the run (`run-workspace.ts:448-450` throws `ARTI
 diagnostic) — re-deriving it a second time to cross-check would repeat the exact defect the
 `VALID_ARTIFACTS` incident records, one call site later.
 
-Exit codes (`src/cli/exit-codes.ts`; the command's own action is `src/cli/program.ts:277-295`, the
-catch-all mapping is `program.ts:298-341`):
+Exit codes (`src/cli/exit-codes.ts`; the command's own action and the catch-all mapping are both in
+`src/cli/program.ts`):
 
 - **`0` `SUCCESS`** — the projection and sidecar were written. This includes a `NOT_READY` gate:
   exporting succeeded, and the verdict is on `recommendation` in the printed JSON and in the sidecar,
   never on the exit code. `qa-skill workflow run` is the command that carries a `NOT_READY` gate as its
-  own exit `1` (`exit-codes.ts:39`); `export` deliberately does not repeat that meaning on a second
+  own exit `1` (`exit-codes.ts`); `export` deliberately does not repeat that meaning on a second
   command — one exit code with two meanings would be worse than two commands with one each.
 - **`3` `INVALID_INPUT`** — a refusal. Every `QaSkillsError` this command can throw carries a code other
   than `LIVE_LOCK`/`SPEC_TREE_DIRTY` or the `SAFETY_DENIED` set, so all of them fall to the catch-all's
-  `else` branch (`program.ts:325`). Four distinct causes land here:
+  `else` branch (`program.ts`). The causes that land here:
+  - a `--root` that does not exist, or a `--run-id` that does not exist under an otherwise-real root.
+    `RunWorkspace.open` translates the `ENOENT` its `realpath` would otherwise leak into an
+    `INVALID_ARTIFACT` refusal (`core/run-workspace.ts`), and it names the argument that was actually
+    wrong: `Project root does not exist` for the first, `Run <id> was not found` for the second. **This is
+    not specific to `export`** — the same wrap serves every command that opens a run, so `validate`,
+    `approval record`, `attestation record`, `execute playwright`, the three `artifact ingest`
+    subcommands, and `workflow run --resume-run-id` all answer `3` for the same input. Only `ENOENT` is
+    translated: a permission error, an I/O error, or a symlink-escape refusal is a real fault and reaches
+    the operator as itself.
   - an unsupported `--format` — anything but exactly `junit` or `sarif` (`export-projection.ts:496`).
   - a run with **no release gate** — only a finalized `full` or `regression` run registers one; `plan`,
     `execute`, `exploratory`, and `retest` runs never do (`projection-model.ts:204`).
@@ -506,29 +515,24 @@ catch-all mapping is `program.ts:298-341`):
   deleting is the more dangerous answer. If a removal itself fails (a read-only parent directory, say)
   the file simply stays: a cleanup error is absorbed rather than allowed to replace the refusal the
   operator actually needs to read.
-- **`5` `ABORTED_OR_INTERNAL`** — a `--run-id` that does not exist. `RunWorkspace.open` calls `realpath`
-  on the run's resolved path unguarded (`run-workspace.ts:137-139`), and `assertRealpathWithin` reaches a
-  bare `realpath` on a path that does not exist (`core/fs.ts:128-130`), which raises a raw Node `ENOENT`
-  — not a `QaSkillsError` — so the catch-all's fallback maps it to `ABORTED_OR_INTERNAL`
-  (`program.ts:340`), not `INVALID_INPUT`. **This is not a quirk of `export`**: `validate`, `approval
-  record`, and `attestation record` all behave identically, and `execute-observed-playwright.ts:343-346`
-  already states the ruling for the whole family — a `--root`/`--run-id` pair that does not resolve
-  surfaces as the raw filesystem error `RunWorkspace.open`'s `realpath` throws. A filed follow-up tracks
-  giving `RunWorkspace.open` its own typed refusal for a missing run; special-casing `export` alone to
-  answer `3` here would put one command out of step with every sibling that opens a run.
+- **`5` `ABORTED_OR_INTERNAL`** — a raw Node error from the OUTPUT PATH, and nothing else this command
+  reaches on purpose. It is the reason the list of `3` causes above is a list of *decisions* rather than of
+  everything that can go wrong at an output path. A `--out` whose parent directory does not exist answers
+  `ENOENT`, one inside a directory you cannot write answers `EACCES`, an existing *directory* at that path
+  answers `EISDIR`, and a file-size limit or a full disk answers `EFBIG`/`ENOSPC` — all raw Node errors,
+  none of them a `QaSkillsError`, so the catch-all's fallback maps every one to `ABORTED_OR_INTERNAL`
+  (`program.ts`). They are passed through rather than wrapped because each already names its own cause
+  precisely, and the first error is the true one: a read-only parent yields `EACCES` on the creating open
+  and `ENOENT` on the fallback (measured), so the creating open's error is the one reported.
 
-  **The same applies to an unusable `--out`**, and it is the reason the list of `3` causes above is a
-  list of *decisions* rather than of everything that can go wrong at an output path. A `--out` whose
-  parent directory does not exist answers `ENOENT`, one inside a directory you cannot write answers
-  `EACCES`, an existing *directory* at that path answers `EISDIR`, and a file-size limit or a full disk
-  answers `EFBIG`/`ENOSPC` — all raw Node errors, all exit `5`. They are passed through rather than
-  wrapped because each already names its own cause precisely, and the first error is the true one: a
-  read-only parent yields `EACCES` on the creating open and `ENOENT` on the fallback (measured), so the
-  creating open's error is the one reported.
+  **A missing `--root` or `--run-id` does NOT land here.** It used to: `RunWorkspace.open` reached a bare
+  `realpath` on a path that does not exist and the raw `ENOENT` fell to this fallback, so a mistyped run id
+  read as an internal failure. It is a typed `3` refusal now — see the first cause under `3` above. A
+  script branching on `5` to detect an unknown run will never fire.
 - **`2` `BLOCKED`** — reachable the same way every other run-scoped command reaches it, not through
   anything specific to exporting. `RunWorkspace.open` acquires a process lock for any run that is not yet
   terminal (`run-workspace.ts:144`), and a genuinely live second process already holding that lock raises
-  `LIVE_LOCK` (`core/run-lock.ts:46`), which the catch-all maps to `BLOCKED` (`program.ts:321`). A
+  `LIVE_LOCK` (`core/run-lock.ts:46`), which the catch-all maps to `BLOCKED` (`program.ts`). A
   finalized run never takes this path — `open` never acquires a lock for one — so this is only reachable
   by exporting a run that is still mid-execution while another process has it open; wait for that process
   to finish or stop it, per [Live lock](#live-lock-live_lock) above.

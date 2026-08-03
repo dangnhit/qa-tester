@@ -50,6 +50,16 @@ Each was taken by the user during brainstorming; the reasoning is recorded so it
    anywhere in this workspace" when they mean "is this run's selection covered". Rejected: fixing each call
    site locally — two places that must stay in step is precisely how these two drifted apart, and
    `observed-coverage.ts` exists to be the one reader of this fact.
+
+   **⚠️ THIS DECISION WAS WRONG FOR 3.2 AND WAS REVERSED DURING THE WHOLE-BRANCH REVIEW.** It rests on a
+   premise that does not hold: a batch cannot be "anywhere in this workspace" but not this run's, because
+   `runId` is schema-required on `test-result-batch` and both `RunWorkspace`'s registration guard and
+   `inspectWorkspaceState` refuse a mismatch. Unscoped already meant "this run's batches". Scoping the
+   FAILURE question therefore removed a real signal rather than a false one, and reopened what Phase 8b
+   closed — a `regression` run whose own observed suite reported `PRODUCT_DEFECT` on an unselected case
+   finalized `COMPLETED` and exited 0 with nothing an operator reads saying a test failed. **3.3 keeps the
+   scope; 3.2 is unscoped.** The two questions are not one question: excusing an empty drive list is a claim
+   about what a run REQUESTED, reporting a failure is a claim about what its suite OBSERVED.
 4. **Widen the Windows CI selection, and treat what it finds as a separate branch.** Rejected: absorbing the
    findings here (the last time this project widened that selection it surfaced 74 failing tests and 4 real
    user-facing defects, so the phase's size would become unknowable), and leaving it alone (a security guard
@@ -92,6 +102,15 @@ This group must land first: every later group's fixtures are written against the
 be. Forbidding only `:` (`^[^:]+$`) is the minimum that closes the collision class. A stricter pattern risks
 refusing identities real users already have. Report which you chose and why.
 
+**Scope of the claim, so it is not quoted more widely than it holds** (added after the whole-branch review; the
+bumps shipped as specified). These six bumps make the colon collision unrepresentable in **exactly the fields
+the table above names, and no others**. It is NOT a uniform property of the artifact set:
+`evidence-gap`'s own `testCaseId`/`testCaseRevisionId`/`testCaseInstanceId`
+triple, `evidence.subject`'s triple, `regression-selection.$defs.decision` and `test-plan`'s `browserExecution`
+all still carry identity components with no `pattern`. So "closed at the data shape" is true of the joins that
+exist, not of the shape as a whole — and the reader-side structural indexing stays the defense, not a
+redundancy. A v1.0 decision that wants the uniform property has to bump those four as well.
+
 ### Group 2 — identity
 
 - **1.2** — `run-workflow.ts`'s `retest` branch still builds a `Set` of `:`-joined `sourceIds`, the last naive
@@ -122,6 +141,8 @@ input". A CI script branching on exit code to tell those apart gets the wrong br
   it. 3.3 is the sharper of the two: an unrelated leftover batch anywhere in the workspace currently lets an
   execution operation return zero results without throwing, so a run can finalize having driven and observed
   nothing relevant to its own selection. 3.2 only over-reports failure and provably cannot mask one.
+  **As shipped: 3.3 only.** See the reversal recorded under Decision 3 — there is no such thing as an
+  unrelated leftover batch, and scoping 3.2 masked a failure rather than stopping an over-report.
 - **3.4** — delete `deriveReleaseGateFromWorkspaceArtifacts`'s dead second parameter. Both real callers pass one
   argument, so the `VALID_ARTIFACTS` rule can never fail on any live path. Phase 8a already recorded the ruling:
   *delete the parameter, never start passing it* — because if a future change made only one caller pass a

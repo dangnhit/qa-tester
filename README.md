@@ -100,8 +100,8 @@ run's persisted release gate into a JUnit XML or a SARIF 2.1.0 file, writes a pr
 `projectionSha256`, `recommendation`, `reduced`, `unreadableRunnerReports`, and — for `sarif` only —
 `observedResultsWithoutLocation`) to stdout. It exits `0` on
 success — **including when `recommendation` is `NOT_READY`** — because exporting itself succeeded; the
-verdict travels in the projection and the sidecar, never in this exit code. Refusals exit `3`; a
-`--run-id` that does not exist exits `5`. The full breakdown, with file:line citations, is in
+verdict travels in the projection and the sidecar, never in this exit code. Refusals exit `3`, and that
+includes a `--root` or `--run-id` that does not exist. The full breakdown is in
 [`recovery.md`](skills/shared/references/recovery.md#qa-skill-export).
 
 A minimal pipeline that runs the gate and always uploads its projections:
