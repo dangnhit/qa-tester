@@ -20,7 +20,7 @@ From a checkout:
 npm ci
 npm run build
 npx playwright install chromium
-node dist/src/cli/index.js runtime verify --range ">=0.1.0 <1.0.0"
+node dist/src/cli/index.js runtime verify --range ">=1.0.0 <2.0.0"
 ```
 
 For a consuming project, install this package from a pinned local path or approved registry version, then use `node_modules/.bin/qa-skill`. Do not use a remote `npx` fallback during QA execution.

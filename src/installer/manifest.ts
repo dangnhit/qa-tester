@@ -4,8 +4,8 @@ import { join, relative, resolve, sep } from "node:path";
 import { sha256Text } from "../core/checksum.js";
 
 export const manifestFilename = ".qa-skill-manifest.json";
-export const runtimeVersion = "0.3.0";
-export const runtimeCompatibility = ">=0.1.0 <1.0.0";
+export const runtimeVersion = "1.0.0";
+export const runtimeCompatibility = ">=1.0.0 <2.0.0";
 
 export type ManifestFile = Readonly<{ path: string; sha256: string }>;
 /**
@@ -46,10 +46,13 @@ export function validateRelativeFilePath(value: string): string {
   return value;
 }
 
-/** The MVP deliberately supports its published pre-1.0 runtime line only. */
+/** This build supports only the 1.x runtime line it publishes. The `range !== runtimeCompatibility`
+ *  guard below predates 1.0: `--range` therefore only ever accepts the one current literal. That is
+ *  pre-existing behavior, not something the 1.0 contract freeze tightens further — loosening it now,
+ *  right before locking down semver, would be the wrong moment. */
 export function isRuntimeCompatible(version: string, range = runtimeCompatibility): boolean {
   if (range !== runtimeCompatibility) return false;
-  return /^0\.[1-9]\d*\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version);
+  return /^1\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version);
 }
 
 async function listFiles(root: string, directory = root): Promise<string[]> {

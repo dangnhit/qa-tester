@@ -8,6 +8,7 @@ import { ExitCode } from "../../src/cli/exit-codes.js";
 import { runCli } from "../../src/cli/program.js";
 import { loadQaConfig } from "../../src/config/load-config.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
+import { runtimeVersion } from "../../src/installer/manifest.js";
 
 const roots: string[] = [];
 
@@ -26,7 +27,7 @@ describe("CLI core", () => {
     const directory = await root();
     expect(await runCli(["--version"], { cwd: directory })).toEqual({
       exitCode: ExitCode.SUCCESS,
-      stdout: "0.3.0\n",
+      stdout: `${runtimeVersion}\n`,
       stderr: "",
     });
   });

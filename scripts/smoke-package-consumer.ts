@@ -66,7 +66,7 @@ try {
     const cliSource = await readFile(cliEntry, "utf8");
     if (!/^#!\/usr\/bin\/env node/.test(cliSource)) throw new Error(`installed CLI entry point is missing its shebang: ${cliEntry}`);
 
-    const verified = JSON.parse(run(bin, ["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], consumer)) as { version?: string; compatible?: boolean };
+    const verified = JSON.parse(run(bin, ["runtime", "verify", "--range", ">=1.0.0 <2.0.0"], consumer)) as { version?: string; compatible?: boolean };
     if (verified.version !== installed.version || verified.compatible !== true) {
       throw new Error(`runtime verify on the installed binary reported ${JSON.stringify(verified)}, expected version "${installed.version}" and compatible: true`);
     }

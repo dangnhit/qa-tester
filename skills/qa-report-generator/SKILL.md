@@ -13,7 +13,7 @@ Example — full-workflow run producing this skill's QA report:
 
 ```sh
 QA_SKILL="${PWD}/node_modules/.bin/qa-skill"; [ -x "$QA_SKILL" ] || QA_SKILL="$(command -v qa-skill)" || exit 1
-"$QA_SKILL" runtime verify --range ">=0.1.0 <1.0.0"
+"$QA_SKILL" runtime verify --range ">=1.0.0 <2.0.0"
 SOURCE_RUN_ID="$("$QA_SKILL" workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).runId')"
 "$QA_SKILL" workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id "$SOURCE_RUN_ID"
 "$QA_SKILL" workflow run --input full-workflow.json
@@ -24,7 +24,7 @@ PowerShell:
 ```powershell
 $QaSkill = Join-Path $PWD "node_modules/.bin/qa-skill.cmd"
 if (-not (Test-Path $QaSkill)) { $QaSkill = (Get-Command qa-skill -ErrorAction Stop).Source }
-& $QaSkill runtime verify --range ">=0.1.0 <1.0.0"
+& $QaSkill runtime verify --range ">=1.0.0 <2.0.0"
 $Bootstrap = (& $QaSkill workflow bootstrap --root . --environment-file environment.json --requirement-file drafts/requirements.json --plan-file drafts/plan.json --test-case-file drafts/case.json --coverage-file drafts/coverage.json | ConvertFrom-Json)
 & $QaSkill workflow scaffold --root . --mode full --output full-workflow.json --source-root . --source-run-id $Bootstrap.runId
 & $QaSkill workflow run --input full-workflow.json

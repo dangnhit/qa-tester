@@ -204,7 +204,7 @@ describe("workflow scaffold", () => {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: unknown[] };
     await writeFile(manifestPath, JSON.stringify({ ...manifest, artifacts: [...manifest.artifacts, { id: "unexpected", type: "test-result", sha256: "a".repeat(64), relativePath: "artifacts/unexpected.json" }] }));
     await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "unsafe.json"), sourceRoot: root, sourceRunId: workspace.runId })).rejects.toThrow(/non-planning/i);
-    const verified = await runCli(["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], { cwd: root });
+    const verified = await runCli(["runtime", "verify", "--range", ">=1.0.0 <2.0.0"], { cwd: root });
     expect(verified.exitCode).toBe(0); expect(JSON.parse(verified.stdout)).toMatchObject({ compatible: true });
   });
 });

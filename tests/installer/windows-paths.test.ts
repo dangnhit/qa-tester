@@ -27,8 +27,8 @@ describe("agent install roots", () => {
     await expect(runRuntimeVersion("C:\\work\\node_modules\\.bin\\qa-skill.cmd", {
       platform: "win32",
       comSpec: "cmd.exe",
-      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "0.1.0\n"; },
-    })).resolves.toBe("0.1.0\n");
+      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "1.0.0\n"; },
+    })).resolves.toBe("1.0.0\n");
     expect(calls).toEqual([{
       command: "cmd.exe",
       args: ["/d", "/s", "/c", "\"C:\\work\\node_modules\\.bin\\qa-skill.cmd\" --version"],
@@ -44,8 +44,8 @@ describe("agent install roots", () => {
     await expect(runRuntimeVersion("C:\\work\\node_modules\\.bin\\qa-skill.bat", {
       platform: "win32",
       comSpec: "cmd.exe",
-      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "0.1.0\n"; },
-    })).resolves.toBe("0.1.0\n");
+      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "1.0.0\n"; },
+    })).resolves.toBe("1.0.0\n");
     expect(calls).toEqual([{
       command: "cmd.exe",
       args: ["/d", "/s", "/c", "\"C:\\work\\node_modules\\.bin\\qa-skill.bat\" --version"],
@@ -57,8 +57,8 @@ describe("agent install roots", () => {
     const calls: Array<{ command: string; args: readonly string[]; options: RuntimeSpawnOptions }> = [];
     await expect(runRuntimeVersion("/work/node_modules/.bin/qa-skill", {
       platform: "linux",
-      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "0.1.0\n"; },
-    })).resolves.toBe("0.1.0\n");
+      execute: async (command, args, options) => { calls.push({ command, args, options }); await Promise.resolve(); return "1.0.0\n"; },
+    })).resolves.toBe("1.0.0\n");
     expect(calls).toEqual([{ command: "/work/node_modules/.bin/qa-skill", args: ["--version"], options: {} }]);
   });
 
@@ -136,8 +136,8 @@ describe("resolveCompatibleRuntime PATHEXT probing", () => {
     const exePath = path.join(binDirectory, "qa-skill.exe");
     await writeFile(exePath, "not a real binary");
 
-    const resolved = await resolveCompatibleRuntime(root, "", undefined, { platform: "win32", execute: async () => { await Promise.resolve(); return "0.1.0\n"; } });
-    expect(resolved).toEqual({ command: exePath, source: "project", version: "0.1.0" });
+    const resolved = await resolveCompatibleRuntime(root, "", undefined, { platform: "win32", execute: async () => { await Promise.resolve(); return "1.0.0\n"; } });
+    expect(resolved).toEqual({ command: exePath, source: "project", version: "1.0.0" });
   });
 
   it("falls back to a PATH qa-skill.bat shim on win32 when the project has none of the candidate names", async () => {
@@ -153,8 +153,8 @@ describe("resolveCompatibleRuntime PATHEXT probing", () => {
     // splits it — a literal `;` would silently produce one unsplit segment on POSIX.
     const pathValue = [emptyPathDir, batDir].join(path.delimiter);
 
-    const resolved = await resolveCompatibleRuntime(root, pathValue, undefined, { platform: "win32", execute: async () => { await Promise.resolve(); return "0.2.0\n"; } });
-    expect(resolved).toEqual({ command: batPath, source: "path", version: "0.2.0" });
+    const resolved = await resolveCompatibleRuntime(root, pathValue, undefined, { platform: "win32", execute: async () => { await Promise.resolve(); return "1.2.0\n"; } });
+    expect(resolved).toEqual({ command: batPath, source: "path", version: "1.2.0" });
   });
 
   it("aborts on an incompatible project qa-skill.exe rather than trying qa-skill.bat in the same directory or PATH", async () => {
@@ -164,10 +164,12 @@ describe("resolveCompatibleRuntime PATHEXT probing", () => {
     await mkdir(binDirectory, { recursive: true });
     const exePath = path.join(binDirectory, "qa-skill.exe");
     // A LATER candidate in the same directory, and on PATH too. The stub reports every command as
-    // version 9.0.0 — incompatible with the `>=0.1.0 <1.0.0` range regardless of which candidate runs
+    // version 9.0.0 — incompatible with the `>=1.0.0 <2.0.0` range regardless of which candidate runs
     // it — so satisfying the range is not what this proves. What proves the abort is `calls` staying at
     // exactly one entry: the later candidates are never even attempted, which only an abort (rather than
-    // a continued probe that also happens to fail) explains.
+    // a continued probe that also happens to fail) explains. Note "9.0.0" is rejected by the same regex
+    // clause as any 0.x version now, so this case no longer distinguishes "an unfamiliar future version"
+    // from "our own superseded 0.x line" — see the same note in lifecycle.test.ts.
     await writeFile(exePath, "not a real binary");
     await writeFile(path.join(binDirectory, "qa-skill.bat"), "not a real binary");
     const pathDir = path.join(root, "on-path");
@@ -203,10 +205,10 @@ describe("resolveCompatibleRuntime PATHEXT probing", () => {
     const resolved = await resolveCompatibleRuntime(root, pathDir, undefined, {
       platform: "win32",
       comSpec: "cmd.exe",
-      execute: async (command, args) => { calls.push({ command, args }); await Promise.resolve(); return "0.1.0\n"; },
+      execute: async (command, args) => { calls.push({ command, args }); await Promise.resolve(); return "1.0.0\n"; },
     });
 
-    expect(resolved).toEqual({ command: batPath, source: "project", version: "0.1.0" });
+    expect(resolved).toEqual({ command: batPath, source: "project", version: "1.0.0" });
     // The interpreter, not the .bat path, is the "command" `execute` receives — the direct-spawn branch
     // would instead have passed `batPath` itself with a bare `["--version"]`, which is exactly what a
     // real Windows host refuses for a `.bat` without a shell.
