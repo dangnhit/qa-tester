@@ -71,23 +71,39 @@ export async function captureRuntimeBinding(runtime: RuntimeCommand): Promise<Ru
   return { ...runtime, resolvedPath, sha256: sha256Bytes(await readFile(resolvedPath)) };
 }
 
+/** npm writes a Windows shim as `qa-skill.cmd`, but a hand-installed or packaged runtime is not
+ *  guaranteed to be: `.exe` and `.bat` are both real, directly-invokable Windows executables. Every
+ *  extension is tried, in this fixed order, at each location — `path.join`/`path.delimiter` below stay
+ *  the real `node:path` for whatever host is running (this function takes no `pathApi`, unlike
+ *  `resolveAgentRoot`), so `execution.platform` only selects WHICH of these names get probed, never how
+ *  the paths themselves are built. */
+const windowsBinaryExtensions = [".cmd", ".exe", ".bat"] as const;
+
 /** Prefer the project's binary; callers execute only this returned local/PATH command. */
 export async function resolveCompatibleRuntime(projectRoot: string, pathValue = process.env.PATH ?? "", range = runtimeCompatibility, execution: RuntimeExecutionOptions = {}): Promise<RuntimeCommand> {
-  const binary = (execution.platform ?? process.platform) === "win32" ? "qa-skill.cmd" : "qa-skill";
-  const projectBinary = path.join(projectRoot, "node_modules", ".bin", binary);
-  try {
-    await access(projectBinary);
-    return await inspectRuntime(projectBinary, "project", range, execution);
-  } catch (error: unknown) {
-    if (error instanceof Error && /incompatible|Unable to execute/i.test(error.message)) throw error;
+  const win32 = (execution.platform ?? process.platform) === "win32";
+  const binaries = win32 ? windowsBinaryExtensions.map((extension) => `qa-skill${extension}`) : ["qa-skill"];
+  for (const binary of binaries) {
+    const projectBinary = path.join(projectRoot, "node_modules", ".bin", binary);
+    try {
+      await access(projectBinary);
+      return await inspectRuntime(projectBinary, "project", range, execution);
+    } catch (error: unknown) {
+      // An existing-but-incompatible (or unexecutable) project binary aborts here rather than trying
+      // the next extension in this same directory or falling through to PATH: the project declared a
+      // runtime and it is the wrong one, which is a configuration error, not something to route around.
+      if (error instanceof Error && /incompatible|Unable to execute/i.test(error.message)) throw error;
+    }
   }
   for (const segment of pathValue.split(path.delimiter).filter(Boolean)) {
-    try {
-      const candidate = path.join(segment, binary);
-      await access(candidate);
-      return inspectRuntime(candidate, "path", range, execution);
-    } catch {
-      // Probe the next PATH entry.
+    for (const binary of binaries) {
+      try {
+        const candidate = path.join(segment, binary);
+        await access(candidate);
+        return inspectRuntime(candidate, "path", range, execution);
+      } catch {
+        // Probe the next candidate.
+      }
     }
   }
   throw new Error("qa-skill is not installed. Install a compatible local package or add qa-skill to PATH; remote npx execution is disabled.");
@@ -101,17 +117,20 @@ async function inspectRuntime(command: string, source: RuntimeCommand["source"],
   return { command, source, version };
 }
 
-/** Execute only the fixed `--version` argument; .cmd files use cmd.exe on Windows.
+/** Execute only the fixed `--version` argument; `.cmd` AND `.bat` shims both need cmd.exe on Windows.
  *
  *  `windowsVerbatimArguments` is required, not optional polish. Without it libuv re-quotes the
  *  already-quoted `/c` payload into `"\"C:\…\qa-skill.cmd\" --version"`; `cmd /s` then strips the
  *  outer pair and tries to run a program literally named `\"C:\…\qa-skill.cmd\"`, which fails. This
  *  is the same `/d /s /c` + verbatim combination Node's own `{ shell: true }` builds on Windows.
- *  Spawning the `.cmd` directly is not an alternative: Node refuses to spawn `.cmd`/`.bat` without a
- *  shell since the CVE-2024-27980 hardening. */
+ *  Spawning either extension directly is not an alternative: Node refuses to spawn `.cmd`/`.bat`
+ *  without a shell since the CVE-2024-27980 hardening — both need this branch, not just `.cmd`; a
+ *  `.bat` routed through the plain-argv branch below would fail that hardening check on real Windows
+ *  even though `resolveCompatibleRuntime` can now find it. */
 export async function runRuntimeVersion(command: string, execution: RuntimeExecutionOptions = {}): Promise<string> {
   const platform = execution.platform ?? process.platform;
-  if (platform === "win32" && command.toLowerCase().endsWith(".cmd")) {
+  const lower = command.toLowerCase();
+  if (platform === "win32" && (lower.endsWith(".cmd") || lower.endsWith(".bat"))) {
     const quoted = `"${command.replaceAll('"', '""')}" --version`;
     const args = ["/d", "/s", "/c", quoted] as const;
     const interpreter = execution.comSpec ?? windowsCommandInterpreter();
