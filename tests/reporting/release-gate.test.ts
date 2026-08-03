@@ -66,10 +66,14 @@ describe("evaluateReleaseGate", () => {
     expect(result.recommendation).toBe("READY_WITH_RISKS");
   });
 
-  /** The boundary this task turns on: "declares a surface the runtime cannot execute" is VALID and
-   *  must be counted; "declares something that is not a surface at all" is MALFORMED and keeps falling
-   *  through the gate's pre-existing, deliberately-deferred fail-OPEN drop. Do not conflate them. */
-  it("drops an obligation whose executionSurface is not a surface at all, as it drops any malformed record", () => {
+  /** The boundary this task turns on, and it survives the fail-CLOSED flip intact: "declares a surface
+   *  the runtime cannot execute" is VALID and must be counted as an UNMET OBLIGATION, by name, in the
+   *  coverage buckets; "declares something that is not a surface at all" is MALFORMED and cannot be
+   *  named there at all, because nothing in the record says which obligation it would be. It blocks
+   *  through VALID_ARTIFACTS instead. Do not conflate them: the two rows above and this one differ in
+   *  WHICH rule refuses, and that difference is the whole of what "explicitly unmet rather than absent"
+   *  buys. */
+  it("blocks on an obligation whose executionSurface is not a surface at all, without naming it as unmet", () => {
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       {
         record: { id: "OBL-BAD", sha256: "a".repeat(64), type: "coverage-obligation" },
@@ -83,8 +87,9 @@ describe("evaluateReleaseGate", () => {
 
     expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
     expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([]);
-    // Same fail-OPEN policy as every other malformed obligation; Phase 3/D9 owns flipping it.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual(["coverage-obligation OBL-BAD is not readable by the release gate"]);
+    expect(result.verdicts.find((verdict) => verdict.rule === "VALID_ARTIFACTS")).toMatchObject({ passed: false });
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
   // RENAMED (was "does not let a browser attempt credit an obligation on a different surface"): this is
@@ -168,11 +173,11 @@ describe("evaluateReleaseGate", () => {
       expect(result.recommendation).toBe("READY");
     });
 
-    it("drops an attempt that records no observed engine rather than falling back to the declared one", () => {
+    it("refuses an attempt that records no observed engine rather than falling back to the declared one", () => {
       // The `test-result` schema requires `observedEngine`, so a registered artifact always carries it;
-      // this reader is nonetheless the fail-OPEN one and takes unvalidated records. A missing engine
-      // must DROP the attempt (leaving the obligation unmet) and never silently re-read the test case's
-      // label, which here would agree with the obligation and manufacture a credit.
+      // this reader takes unvalidated records anyway. A missing engine must cost the attempt its credit
+      // (leaving the obligation unmet) and never silently re-read the test case's label, which here
+      // would agree with the obligation and manufacture one.
       const result = deriveReleaseGateFromWorkspaceArtifacts(workspace("chromium", {}));
 
       expect(result.ruleInputs.coverage.requiredMissing).toEqual(["COV-SAVE"]);

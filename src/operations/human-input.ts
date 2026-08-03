@@ -119,7 +119,10 @@ export async function pendingHumanInput(
   }
   // Asked of the SAME reader the gate itself uses, so "the gate would report this required obligation
   // missing" and "the pause thinks it is open" cannot drift apart.
-  const resolved = resolveGateObligations(gateSourceArtifacts(artifacts));
+  // `.resolved` only: the sibling half of that pair names records the gate could not read, and an
+  // obligation nothing can read is not one a Human Attestation could close, so pausing on one would name
+  // a command that cannot run. The gate refuses those through `VALID_ARTIFACTS` instead.
+  const resolved = resolveGateObligations(gateSourceArtifacts(artifacts)).resolved;
   // Counted from the RAW registered pool — the same pool, and the same `value.obligationId` field,
   // that `recordHumanAttestation` (src/operations/record-human-attestation.ts) itself counts against —
   // rather than from `resolved` above. Today the two pools agree by construction anyway: every field

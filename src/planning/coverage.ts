@@ -38,7 +38,8 @@ export function asExecutionSurface(value: unknown): ExecutionSurface | undefined
  * that somehow carried the field would silently become lane 2, and a batch entry that lost it would
  * silently fall back to lane 1's derived `browser`, which is precisely the mis-credit being closed.
  * With the lane fixed from outside, an entry with no readable surface has no lane to fall back to —
- * the fail-OPEN reader drops it, the fail-CLOSED one throws.
+ * the release-gate reader (src/reporting/release-gate.ts) reports it as an unreadable record and blocks,
+ * `evaluateWorkspaceCoverage` throws.
  *
  * Deliberately NOT the artifact's `provenance`, which looks similar and is not: a `test-result` may
  * legitimately carry `runtime-observed` provenance while still being a lane-1 per-attempt claim.
@@ -129,8 +130,8 @@ export type CoverageAttempt = {
    * - `observed-entry` READS `test-result-batch`'s per-entry `executionSurface`. A Runtime-Observed
    *   Execution is how the runtime reaches every surface it does not execute (CONTEXT.md:444), so the
    *   entry is the only thing that can say which one it was. There is no fallback: an entry whose
-   *   surface is missing or unrecognised is dropped by the fail-OPEN reader and rejected by the
-   *   fail-CLOSED one, never quietly promoted to `browser`.
+   *   surface is missing or unrecognised is reported as unreadable by the release-gate reader and
+   *   rejected outright by `evaluateWorkspaceCoverage`, never quietly promoted to `browser`.
    *
    * Until schema 3.0.0 the second case did not exist — both derivation sites wrote a `"browser"`
    * literal — which was safe only while no producer emitted a batch. The entry now carries the value,

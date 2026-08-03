@@ -11,13 +11,24 @@ import {
 // ---------------------------------------------------------------------------
 // Task 7 (Phase 1) characterization of the release gate.
 //
-// This suite pins the CURRENT behavior of `evaluateReleaseGate`,
-// `deriveReleaseGateFromWorkspaceArtifacts`, and `deriveReleaseGateFromArtifacts`
-// exactly as they behave today, INCLUDING the known fail-OPEN bugs where a
-// malformed artifact (or a severity-less triaged bug) silently vanishes instead
-// of blocking release. Phase 2 refactors must keep these outputs identical;
-// Phase 3/D9 will deliberately flip the fail-OPEN pins to fail-CLOSED. Each
-// fail-open pin carries the required flip marker so Phase 3 can find it.
+// This suite pins the behavior of `evaluateReleaseGate`,
+// `deriveReleaseGateFromWorkspaceArtifacts`, and `deriveReleaseGateFromArtifacts`.
+//
+// The fail-OPEN drops it originally pinned are GONE (Phase 9 item 3.1/D9): a
+// record the gate cannot read is no longer dropped in silence, it is reported as
+// a gate diagnostic, and any diagnostic fails `VALID_ARTIFACTS`, which is a hard
+// rule. Every pin below that used to assert READY (or READY_WITH_RISKS) over a
+// malformed record now asserts NOT_READY, and the "Phase 3/D9 will change this"
+// markers those pins carried are deleted — the change they promised is the one
+// these lines now pin.
+//
+// Nothing here is reachable through registration: every field the gate can fail
+// to read is schema-constrained (`coverage-obligation`, `test-result`,
+// `test-result-batch`, `test-case.coverage`, `bug-report`, including the
+// `allOf` that makes `severity` required for a TRIAGED bug), and
+// `testResultRule`/`testResultBatchRule` additionally bind every claim to
+// exactly one registered test case. These are hand-built records that no schema
+// ever sees, which is what makes them the only way to reach these paths at all.
 // ---------------------------------------------------------------------------
 
 /** A baseline gate input where all six deterministic rules pass, yielding READY. */
@@ -82,11 +93,20 @@ describe("evaluateReleaseGate — recommendation tiers", () => {
   });
 });
 
-describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OPEN)", () => {
-  it("drops a malformed required-critical coverage obligation whose viewport height is missing", () => {
-    // required: true + risk: critical, but viewport.height is absent, so the
-    // obligation is dropped at release-gate.ts:84 (return []). It therefore
-    // cannot appear in requiredMissing or requiredHighRisk.
+/** The gate's own word for a registered record it could not read, as `unreadableGateArtifact`
+ *  (src/reporting/release-gate.ts) spells it. Written out once here rather than imported, so a change to
+ *  the wording has to be made deliberately in both places. */
+function unreadable(type: string, id: string): string {
+  return `${type} ${id} is not readable by the release gate`;
+}
+
+describe("deriveReleaseGateFromWorkspaceArtifacts — unreadable records (fail-CLOSED)", () => {
+  it("blocks on a malformed required-critical coverage obligation whose viewport height is missing", () => {
+    // required: true + risk: critical, but viewport.height is absent, so `browserDimensions` refuses it
+    // and no obligation can be resolved from this record. It therefore still cannot appear in
+    // requiredMissing or requiredHighRisk — naming it there would need an obligation id this record does
+    // not reliably carry — but it is now REPORTED rather than dropped, and the report fails
+    // VALID_ARTIFACTS.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("coverage-obligation", {
         obligationId: "COV-CRIT", requirementId: "REQ-1", role: "member", behavior: "pay",
@@ -96,13 +116,14 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
     ]);
     expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
     expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("coverage-obligation", "OBL-1")]);
+    expect(result.verdicts.find((verdict) => verdict.rule === "VALID_ARTIFACTS")).toMatchObject({ passed: false });
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("drops a malformed required-critical coverage obligation whose outcome field is missing", () => {
-    // viewport is well-formed, but a required string field (outcome) is absent,
-    // so the obligation is dropped at the field-parse guard (release-gate.ts:86).
+  it("blocks on a malformed required-critical coverage obligation whose outcome field is missing", () => {
+    // viewport is well-formed, but a required string field (outcome) is absent, so the record fails the
+    // field-parse guard in `resolveGateObligations`.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("coverage-obligation", {
         obligationId: "COV-CRIT2", requirementId: "REQ-1", role: "member", behavior: "pay",
@@ -112,14 +133,13 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
     ]);
     expect(result.ruleInputs.coverage.requiredMissing).toEqual([]);
     expect(result.ruleInputs.coverage.requiredHighRisk).toEqual([]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("coverage-obligation", "OBL-2")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("drops a runtime test-result that fails the field-parse (missing status)", () => {
-    // The attempt matches a registered test case (so it clears the dimensions
-    // guard at release-gate.ts:93) but is missing a required string field
-    // (status), so it is dropped at the field-parse guard (release-gate.ts:95).
+  it("blocks on a runtime test-result that fails the field-parse (missing status)", () => {
+    // The attempt matches a registered test case, so it clears the dimensions guard in `asAttempt`, but a
+    // required string field (status) is absent and the claim cannot be flattened into an attempt.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("test-case", {
         testCaseId: "TC-1", revisionId: "REV-1", instanceId: "INST-1",
@@ -129,76 +149,105 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — silent-drop paths (fail-OP
         attemptId: "ATT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", observedEngine: "chromium",
       }, "RES-1", "runtime-execution"),
     ]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("test-result", "RES-1")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("drops a runtime test-result whose test case cannot be found (missing dimensions)", () => {
-    // No registered test case matches, so the attempt is dropped at the
-    // dimensions guard (release-gate.ts:93).
+  it("blocks on a runtime test-result whose test case cannot be found (missing dimensions)", () => {
+    // No registered test case matches, so the claim fails the dimensions guard in `asAttempt`.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("test-result", {
         attemptId: "ATT-2", status: "PASSED", testCaseId: "TC-GHOST", testCaseRevisionId: "REV-GHOST", testCaseInstanceId: "INST-GHOST", observedEngine: "chromium",
       }, "RES-2", "runtime-execution"),
     ]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("test-result", "RES-2")]);
+    expect(result.recommendation).toBe("NOT_READY");
+  });
+
+  /** The batch's own shape, not an entry's contents. `array()`/`.filter(isRecord)` used to swallow both of
+   *  these, and the BATCH is what gets named because an entry that is not an object has no id to name. */
+  it.each([
+    ["entries that are not an array at all", { executionId: "EXEC-1", entries: "ENTRY-1" }],
+    ["an entry that is not an object", { executionId: "EXEC-1", entries: ["ENTRY-1"] }],
+  ] as const)("blocks on a runtime-observed batch declaring %s", (_label, value) => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([artifact("test-result-batch", value, "BATCH-SHAPE", "runtime-observed")]);
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("test-result-batch", "BATCH-SHAPE")]);
+    expect(result.recommendation).toBe("NOT_READY");
+  });
+
+  /** An EMPTY entry list is not malformed — it credits nothing and says nothing this reader cannot read.
+   *  Without this row the two above would pass on a reader that refused every batch with no attempts. */
+  it("does not block on a runtime-observed batch whose entry list is empty", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([artifact("test-result-batch", { executionId: "EXEC-1", entries: [] }, "BATCH-EMPTY", "runtime-observed")]);
+    expect(result.ruleInputs.validationDiagnostics).toEqual([]);
     expect(result.recommendation).toBe("READY");
   });
 
-  it("drops an open Critical bug report whose open field is not a boolean", () => {
-    // The bug is an open TRIAGED Critical blocker, but open is a string, so the
-    // whole record is dropped from bugs at release-gate.ts:112.
+  it("blocks on an open Critical bug report whose open field is not a boolean", () => {
+    // The bug is an open TRIAGED Critical blocker, but `open` is a string, so the record cannot become a
+    // GateBug at all. It stays out of `bugs` — this reader still refuses to guess what it says — and the
+    // gate now says it could not read it.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("bug-report", { bugId: "BUG-1", triageStatus: "TRIAGED", severity: "Critical", open: "true" }, "BUG-ART-1"),
     ]);
     expect(result.ruleInputs.bugs).toEqual([]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("bug-report", "BUG-ART-1")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("drops an open Critical bug report whose triageStatus is not a known value", () => {
-    // triageStatus is neither NEEDS_TRIAGE nor TRIAGED, so the record is dropped
-    // from bugs at release-gate.ts:112.
+  it("blocks on an open Critical bug report whose triageStatus is not a known value", () => {
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("bug-report", { bugId: "BUG-2", triageStatus: "CLOSED", severity: "Critical", open: true }, "BUG-ART-2"),
     ]);
     expect(result.ruleInputs.bugs).toEqual([]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("bug-report", "BUG-ART-2")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("skips a bug report that has no bugId", () => {
-    // Without a bugId the record is skipped before the latest-revision map at
-    // release-gate.ts:104, so an open Critical blocker never reaches bugs.
+  it("blocks on a bug report that has no bugId", () => {
+    // Without a bugId the record cannot even enter the latest-revision map, so an open Critical blocker
+    // never reaches `bugs`; the skip is now reported.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("bug-report", { triageStatus: "TRIAGED", severity: "Critical", open: true }, "BUG-ART-3"),
     ]);
     expect(result.ruleInputs.bugs).toEqual([]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("bug-report", "BUG-ART-3")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 });
 
-describe("deriveReleaseGateFromWorkspaceArtifacts — severity-optional path (fail-OPEN)", () => {
-  it("treats an open TRIAGED bug with no severity as a mere risk, not a blocker", () => {
-    // severity is absent, so it is omitted at release-gate.ts:113-114 and the
-    // bug becomes a non-critical risk rather than an open blocker.
+describe("deriveReleaseGateFromWorkspaceArtifacts — a TRIAGED bug's severity (fail-CLOSED)", () => {
+  it("blocks on an open TRIAGED bug with no severity rather than treating it as a mere risk", () => {
+    // `bug-report.schema.json`'s allOf makes `severity` REQUIRED for a TRIAGED bug, so this record cannot
+    // be registered. When one reaches this reader anyway, "TRIAGED with no severity" is a severity this
+    // reader cannot map — not a Blocker, not a Minor — and the safe reading of that is "unreadable",
+    // never "harmless". The bug itself is still reported exactly as read.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("bug-report", { bugId: "BUG-SEV", triageStatus: "TRIAGED", open: true }, "BUG-ART-4"),
     ]);
     expect(result.ruleInputs.bugs).toEqual([{ bugId: "BUG-SEV", triageStatus: "TRIAGED", open: true }]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    expect(result.recommendation).toBe("READY_WITH_RISKS");
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("bug-report", "BUG-ART-4")]);
+    expect(result.recommendation).toBe("NOT_READY");
   });
 
-  it("treats an open TRIAGED bug with an unrecognized severity value as a mere risk", () => {
-    // An out-of-enum severity ("Catastrophic") is stripped at release-gate.ts:113-114,
-    // so again the bug is a non-critical risk rather than a blocker.
+  it("blocks on an open TRIAGED bug with an unrecognized severity value", () => {
+    // An out-of-enum severity ("Catastrophic") is still stripped from the reported bug — inventing a
+    // meaning for it is exactly what must not happen — but the gate no longer pretends it read it.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("bug-report", { bugId: "BUG-SEV2", triageStatus: "TRIAGED", severity: "Catastrophic", open: true }, "BUG-ART-5"),
     ]);
     expect(result.ruleInputs.bugs).toEqual([{ bugId: "BUG-SEV2", triageStatus: "TRIAGED", open: true }]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
+    expect(result.ruleInputs.validationDiagnostics).toEqual([unreadable("bug-report", "BUG-ART-5")]);
+    expect(result.recommendation).toBe("NOT_READY");
+  });
+
+  /** The other side of the same rule: a severity this reader DOES recognise still makes the bug a mere
+   *  risk. Without this row the two above would pass on a reader that simply refused every TRIAGED bug. */
+  it("still treats an open TRIAGED Major bug as a risk, with nothing unreadable about it", () => {
+    const result = deriveReleaseGateFromWorkspaceArtifacts([
+      artifact("bug-report", { bugId: "BUG-SEV3", triageStatus: "TRIAGED", severity: "Major", open: true }, "BUG-ART-6"),
+    ]);
+    expect(result.ruleInputs.validationDiagnostics).toEqual([]);
     expect(result.recommendation).toBe("READY_WITH_RISKS");
   });
 });
@@ -388,8 +437,9 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — test-result-batch coverage
 /**
  * Task 36 — a batch entry's Execution Surface and viewport come from the ENTRY.
  *
- * This is the fail-OPEN reader, and unlike `evaluateWorkspaceCoverage`'s tests it is fed hand-built
- * records that no schema ever sees. That is exactly what is needed here: the pre-3.0.0 batch shape —
+ * This is the reader that REPORTS rather than throws, and unlike `evaluateWorkspaceCoverage`'s tests it
+ * is fed hand-built records that no schema ever sees. That is exactly what is needed here: the
+ * pre-3.0.0 batch shape —
  * an entry with an `observedEngine` and NO surface and NO viewport of its own — is unregisterable now,
  * but it is still the shape that proves what the reader used to do with it. Every entry below is the
  * literal record a lane-2 producer would have written, and the obligation matches the bound test
@@ -462,10 +512,12 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — a batch entry's own Execut
     expect(requiredMissing("browser", { ...browserEntry, viewport: { width: 390, height: 844 } })).toEqual(["COV-SURFACE"]);
   });
 
-  /** Fail-OPEN, unchanged in kind: a record this reader cannot resolve is DROPPED, which can only ever
-   *  withhold credit. The first row is the pre-3.0.0 shape verbatim — the exact bytes that used to be
-   *  stamped `browser` — and the point is that a reader with no surface to read now credits nothing
-   *  rather than inventing one. */
+  /** Unchanged in kind: an entry this reader cannot resolve credits NOTHING, which is all these rows
+   *  assert. Since the fail-CLOSED flip it also makes the batch an unreadable record, so each of these
+   *  gates is additionally NOT_READY — pinned by its own rows in the fail-CLOSED suite above rather than
+   *  restated here, because what THIS task is about is the missing credit. The first row is the
+   *  pre-3.0.0 shape verbatim — the exact bytes that used to be stamped `browser` — and the point is
+   *  that a reader with no surface to read invents nothing. */
   it.each([
     ["no Execution Surface at all (the pre-3.0.0 shape)", { ...entryIdentity, observedEngine: "chromium" }],
     ["a surface outside the enum", { ...browserEntry, executionSurface: "e2e" }],
@@ -503,8 +555,8 @@ describe("deriveReleaseGateFromWorkspaceArtifacts — a batch entry's own Execut
   });
 });
 
-describe("deriveReleaseGateFromArtifacts — ignored incident/evidence-gap/cleanup inputs (fail-OPEN)", () => {
-  it("accepts but never reads incidents, evidenceGaps, or cleanupLeaks", () => {
+describe("deriveReleaseGateFromArtifacts — incident/evidence-gap/cleanup inputs (fail-CLOSED)", () => {
+  it("folds incidents, evidenceGaps, and cleanupLeaks into shared blockers, exactly as the workspace variant does", () => {
     const result = deriveReleaseGateFromArtifacts({
       artifactRecords: [{ id: "ART-1", sha256: "a".repeat(64), type: "test-case" }],
       coverage: passing.coverage,
@@ -515,19 +567,39 @@ describe("deriveReleaseGateFromArtifacts — ignored incident/evidence-gap/clean
       sharedBlockers: [],
       artifactsValid: true,
     });
-    // None of the three non-empty inputs reach evaluateReleaseGate; sharedBlockers
-    // stays empty and the source artifacts are bound verbatim.
-    expect(result.ruleInputs.sharedBlockers).toEqual([]);
+    // The three inputs this function has always ACCEPTED are now the three inputs it READS. They are
+    // phrased by the one shared reader both derivations use, so the sibling gate cannot disagree with the
+    // workspace one about what an environment incident means.
+    expect(result.ruleInputs.sharedBlockers).toEqual([
+      "Cleanup leak LEAK-1",
+      "Environment incident INC-1",
+      "Evidence gap GAP-1 affects video capture",
+    ]);
     expect(result.sourceArtifacts).toEqual([{ id: "ART-1", sha256: "a".repeat(64), type: "test-case" }]);
-    // CHARACTERIZATION: pins current fail-OPEN behavior; Phase 3/D9 will change this to NOT_READY.
-    // The workspace variant (below) folds these same facts into sharedBlockers and blocks;
-    // this sibling drops them, so an environment incident / evidence gap / cleanup leak passes.
+    expect(result.recommendation).toBe("NOT_READY");
+  });
+
+  /** A non-environment incident is still not a shared blocker — the workspace variant filters on
+   *  `kind === "ENVIRONMENT_INCIDENT"` and this one must filter identically, or the two derivations
+   *  disagree in the other direction. */
+  it("does not fold a non-environment incident into a shared blocker", () => {
+    const result = deriveReleaseGateFromArtifacts({
+      artifactRecords: [],
+      coverage: passing.coverage,
+      bugs: [],
+      incidents: [{ incidentId: "INC-2", kind: "TEST_INCIDENT" }],
+      evidenceGaps: [],
+      cleanupLeaks: [],
+      sharedBlockers: [],
+      artifactsValid: true,
+    });
+    expect(result.ruleInputs.sharedBlockers).toEqual([]);
     expect(result.recommendation).toBe("READY");
   });
 
-  it("contrast: the workspace variant folds an equivalent evidence gap into a shared blocker (NOT_READY)", () => {
-    // Demonstrates the divergence the CHARACTERIZATION comment above describes:
-    // the same evidence-gap fact is a hard shared blocker in the workspace path.
+  it("agrees with the workspace variant on an equivalent evidence gap (NOT_READY)", () => {
+    // The convergence the row above describes: the same evidence-gap fact is a hard shared blocker on
+    // both paths, phrased the same way.
     const result = deriveReleaseGateFromWorkspaceArtifacts([
       artifact("evidence-gap", { evidenceGapId: "GAP-1", affectedClaim: "video capture" }, "GAP-ART-1"),
     ]);

@@ -355,8 +355,8 @@ describe("evaluateWorkspaceCoverage — accessibility obligations", () => {
    * `agent-draft` is the value `registerArtifactValue` defaults to when nothing supplies a provenance,
    * i.e. exactly what an attestation payload that did not come from that operation carries.
    *
-   * Both readers are asserted here off the ONE registered workspace, because the fail-CLOSED and
-   * fail-OPEN readers must reach the same verdict on it and only a shared fixture proves that.
+   * Both readers are asserted here off the ONE registered workspace, because the reader that THROWS and
+   * the reader that REPORTS must reach the same verdict on it and only a shared fixture proves that.
    */
   it("does not credit an attestation whose provenance is not human-attestation:<identity>", async () => {
     const fixture = await setup({ ...screenReader, omitResult: true });
@@ -485,8 +485,8 @@ describe("evaluateWorkspaceCoverage — a batch entry's own Execution Surface an
   };
   const browserEntry = { ...surfacelessEntry, executionSurface: "browser", observedEngine: dimensions.browser, viewport: dimensions.viewport };
 
-  /** The verdict of both readers over one workspace: what the fail-CLOSED reader resolved, and what
-   *  the fail-OPEN release-gate reader made of the very same registered artifacts. */
+  /** The verdict of both readers over one workspace: what `evaluateWorkspaceCoverage` resolved, and what
+   *  the release-gate reader made of the very same registered artifacts. */
   async function bothReaders(fixture: { root: string; runId: string }) {
     const workspace = await RunWorkspace.open(fixture.root, fixture.runId);
     const gate = deriveReleaseGateFromWorkspaceArtifacts(await workspace.readRegisteredArtifacts());
