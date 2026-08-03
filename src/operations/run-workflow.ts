@@ -8,7 +8,7 @@ import { indexByAttemptId, indexByKey, indexByTestCaseIdentity, type ArtifactInd
 import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
-import { observedCaseIdentities, observedCoveredCaseIds, observedFailureIdentities } from "../core/observed-coverage.js";
+import { caseIdentity, observedCoveredCaseIds, observedSelectedCaseIdentities, observedSelectedFailureIdentities } from "../core/observed-coverage.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
@@ -276,7 +276,13 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   // shares this postcondition and CANNOT legitimately return an empty output: `sourceBugFromReference`
   // refuses a bug with zero source attempt ids, and the branch then refuses any result set that does not
   // reproduce every one of those scenarios. Its own refusal is the specific one, and it stays reachable.
-  const observedNothing = observedCaseIdentities(artifacts).length === 0;
+  //
+  // Scoped to THIS RUN'S SELECTION (item 3.3). The predicate used to ask `observedCaseIdentities` — "does
+  // any observed case exist anywhere in this workspace" — which is not what the paragraph above says and
+  // not what this check needs: one leftover entry for a case the selection EXCLUDED then stood in for the
+  // whole selection, and an execution operation could return zero results without throwing while the
+  // selection was covered by nothing at all.
+  const observedNothing = observedSelectedCaseIdentities(artifacts, runSelectionIdentities(artifacts)).length === 0;
   if ((output.length === 0 && observedNothing) || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
   // Invariance: `artifacts` is read above and this postcondition registers nothing, so both indices serve
   // every iteration of the loop below. Evidence carries its attempt inside the `subject` union while an
@@ -820,6 +826,54 @@ function selectedCaseArtifactIds(selection: RegressionSelection, artifacts: read
   return selection.selected.flatMap((decision) => casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }).map((artifact) => artifact.record.id));
 }
 
+/**
+ * The same question as `selectedCaseArtifactIds` above, in the OTHER key space: which canonical case
+ * IDENTITIES this run selected, rather than which registered artifact ids carry them. Both are needed
+ * and neither substitutes for the other — `observedSelectedCaseIdentities`
+ * (src/core/observed-coverage.ts) intersects against structural triples, because that is the only key a
+ * `test-result-batch` entry carries, while a checkpoint reference needs the artifact id.
+ *
+ * RE-DERIVED from the workspace rather than threaded from `WorkflowExecutionState`, and this is the
+ * deliberate choice items 3.2 and 3.3 turn on. Threading is the more explicit route and was rejected on
+ * a measurement, not a preference: the two readers that need this are `assertResultPostcondition` —
+ * whose signature is fixed by the `ClosedOperationAdapter` contract — and `finalizeWorkflowOutcome`,
+ * which is reached from BOTH run loops in this file and only one of them (`runQaTesterWithAdapters`)
+ * tracks a selection in memory at all. `runWorkflowWithRegistry` has no `WorkflowExecutionState`, so
+ * threading would have forced a second, weaker answer to one question at exactly the seam where the two
+ * call sites already drifted apart. The design decision this phase took was "ONE shared selection-scoped
+ * reader", and a workspace-derived scope is the only source both loops can name.
+ *
+ * The scope, in the two states a run can be in:
+ *   - a FILTERED run has registered a `regression-selection`, and its `selected` decisions ARE the
+ *     identity triples — the same field `selectedCaseArtifactIds` reads, kept in the identity key space
+ *     instead of resolved through the test-case index.
+ *   - an UNFILTERED run (`execute`, `full`) has none, and its selection is the whole imported canonical
+ *     bundle: `ensureCanonicalBundle` populates `state.executionCaseIds` from exactly the registered
+ *     `test-case` artifacts, so that is what this returns.
+ *
+ * Two deviations from `state.executionCaseIds`, both measured and both in the safe direction. A `retest`
+ * run excludes its own reproduction source from what it DRIVES (`excludeRetestSourceCases`); this scope
+ * keeps it, so an observed failure on the source case still counts and `reproduce-bug` — which cannot
+ * legitimately return an empty output anyway — is unaffected. And the residual subtraction in
+ * `execute-browser-test` narrows what is driven without touching `state.executionCaseIds`, so it does
+ * not move this scope either.
+ */
+function runSelectionIdentities(artifacts: readonly RegisteredWorkspaceArtifact[]): readonly TestCaseIdentity[] {
+  const selection = artifacts.find((artifact) => artifact.record.type === "regression-selection");
+  // Both shapes spell the triple `testCaseId` / `revisionId` / `instanceId` — a selection DECISION and a
+  // `test-case` payload agree on those three names, which is what lets one expression read either.
+  const declared: readonly Readonly<Record<string, unknown>>[] = selection === undefined
+    ? artifacts.filter((artifact) => artifact.record.type === "test-case").map((artifact) => artifact.value)
+    : array(selection.value.selected).filter(isRecord);
+  // `caseIdentity` rather than the raw triple: it refuses any component that is not a string, which is
+  // what stops an unparsed decision and an unparsed test-case payload from matching each other on three
+  // `undefined`s under the nested index (see its own docstring).
+  return declared.flatMap((decision) => {
+    const identity = caseIdentity(decision.testCaseId, decision.revisionId, decision.instanceId);
+    return identity === undefined ? [] : [identity];
+  });
+}
+
 /** Copies immutable testcase revision snapshots from a terminal source run into a fresh regression workspace. */
 async function importRegressionCases(workspace: RunWorkspace, sourceRunId: string): Promise<void> {
   const source = await RunWorkspace.open(workspace.root, sourceRunId);
@@ -909,8 +963,18 @@ export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: Pub
   // Only the terminal STATUS changes. A batch entry carries `entryId` and never `attemptId`, so no bug
   // disposition can be bound to it — see `assertFailureDispositionPostcondition` — and this line makes no
   // claim that one exists.
+  //
+  // The lane-2 clause is scoped to THIS RUN'S SELECTION (item 3.2): a FAILED entry for a case this run
+  // never selected — a leftover from an earlier, unrelated observed execution against the same workspace
+  // — used to make an otherwise clean run report failure.
+  //
+  // The lane-1 clause is deliberately NOT scoped the same way, and narrowing it would MASK a failure
+  // rather than stop over-reporting one. A `test-result` in this workspace is an attempt THIS run drove,
+  // and not every one of them is in the selection: `excludeRetestSourceCases` removes a retest's own
+  // reproduction source from the selected set precisely so it is not driven twice, so intersecting lane 1
+  // against the selection would drop a failed reproduction out of the run's terminal status.
   const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED")
-    || observedFailureIdentities(artifacts).length > 0;
+    || observedSelectedFailureIdentities(artifacts, runSelectionIdentities(artifacts)).length > 0;
   const terminal = evaluatePublicTerminalProfile(mode, artifacts.map((artifact) => artifact.record.type));
   const structural = await workspace.finalize(mode, hasExecutionFailures || !terminal.valid ? "COMPLETED_WITH_FAILURES" : undefined);
   const validation = { valid: structural.valid && terminal.valid, diagnostics: [...structural.diagnostics, ...terminal.diagnostics] };

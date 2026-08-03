@@ -116,14 +116,19 @@ export function caseIdentity(testCaseId: unknown, revisionId: unknown, instanceI
  *     legitimately run some tagged specs and skip others, and only the ones that ran are covered.
  *
  * A LIST rather than a set, because a structural identity has no value equality a `Set` could dedup on
- * and `indexByTestCaseIdentity` buckets repeats anyway. Both callers outside this module ask only whether
- * it is EMPTY — `pendingObservedExecution` (src/operations/observed-pause.ts) and
- * `assertResultPostcondition` (src/operations/run-workflow.ts) — and emptiness is unchanged by duplicates.
+ * and `indexByTestCaseIdentity` buckets repeats anyway. Every caller asks only whether it is EMPTY, or
+ * filters it — `pendingObservedExecution` (src/operations/observed-pause.ts), `observedCoveredCaseIds`
+ * below, and `observedSelectedCaseIdentities` below — and emptiness is unchanged by duplicates.
  *
- * `statuses` is a parameter, not a second traversal, so that `observedFailureIdentities` asks its narrower
- * question through the SAME batch-level credit gate — type, `valid`, provenance — that this one applies.
- * A separate loop would be a third reader free to disagree about whether a batch counts, which is the
- * drift this whole module exists to prevent.
+ * UNSCOPED, and only `pendingObservedExecution` should be asking it that way: it asks whether the
+ * operator has run the observed suite for this run AT ALL, which is a question about the workspace and
+ * not about any selection. A caller that means "is THIS run's selection covered" wants
+ * `observedSelectedCaseIdentities` below — the two were confused once and the fix is Phase 9 item 3.3.
+ *
+ * `statuses` is a parameter, not a second traversal, so that `observedSelectedFailureIdentities` asks its
+ * narrower question through the SAME batch-level credit gate — type, `valid`, provenance — that this one
+ * applies. A separate loop would be a third reader free to disagree about whether a batch counts, which
+ * is the drift this whole module exists to prevent.
  */
 export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[], statuses: readonly unknown[] = observedExecutedStatuses): readonly TestCaseIdentity[] {
   const identities: TestCaseIdentity[] = [];
@@ -139,19 +144,58 @@ export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[
 }
 
 /**
- * Every canonical identity lane 2 observed FAILING. A run holding one of these must not report success.
+ * Every identity a Runtime-Observed Execution executed THAT THIS RUN'S SELECTION NAMES.
  *
- * This exists because "did anything fail" had three readers that all filtered `artifact.record.type ===
- * "test-result"`, and Phase 8b made a lane-2-only `regression` run reachable: with the whole selection
- * observed, lane 1 drives nothing, so a FAILED entry produced a run that finalized `COMPLETED` with
- * `validation.valid` true — where the same case driven in lane 1 would have failed and exited 1.
+ * The question `observedCaseIdentities` above answers is "does any observed case exist anywhere in this
+ * workspace". Two callers were asking it while meaning this one, and both were wrong in a way an
+ * unrelated batch makes visible (Phase 9 items 3.2 and 3.3):
+ *
+ *   - `assertResultPostcondition` (src/operations/run-workflow.ts) allows an EMPTY execution output when
+ *     something was observed. Its own comment says "a filtered run whose WHOLE SELECTION was covered",
+ *     but the unscoped predicate let a single leftover entry for an unselected case stand in for the
+ *     selection, so an execution operation could return zero results without throwing and the run could
+ *     finalize having driven and observed nothing it selected. That is the sharper of the two.
+ *   - `finalizeWorkflowOutcome` (same file) reports `COMPLETED_WITH_FAILURES` on an observed failure. A
+ *     FAILED entry for a case this run never selected made an otherwise clean run report failure — a
+ *     false positive that over-reports and provably cannot mask, but a false one.
+ *
+ * A FILTER over `observedCaseIdentities`, not a second traversal, exactly as the failure question below
+ * is a `statuses` argument to it rather than its own loop: the batch-level credit gate (type, `valid`,
+ * provenance) and the per-entry status gate are asked ONCE, in one place, and this function only narrows
+ * the answer. A separate loop here would be the third reader free to disagree about whether a batch
+ * counts, which is the drift this module exists to prevent.
+ *
+ * `selection` is `TestCaseIdentity`, the STRUCTURAL triple — deliberately not the artifact ids
+ * `observedCoveredCaseIds` returns, which live in a different key space entirely. Matched through the
+ * shared nested index for the reason `caseIdentity` gives: a delimited join of the three components was
+ * free to collide, and a collision here would put an UNSELECTED case in scope.
+ */
+export function observedSelectedCaseIdentities(
+  artifacts: readonly CoverageArtifactView[],
+  selection: readonly TestCaseIdentity[],
+  statuses: readonly unknown[] = observedExecutedStatuses,
+): readonly TestCaseIdentity[] {
+  const selected = indexByTestCaseIdentity(selection, (identity) => identity);
+  return observedCaseIdentities(artifacts, statuses).filter((identity) => selected.get(identity).length > 0);
+}
+
+/**
+ * Every identity lane 2 observed FAILING that this run's selection names. A run holding one of these
+ * must not report success.
+ *
+ * The unscoped `observedFailureIdentities` this replaces existed because "did anything fail" had three
+ * readers that all filtered `artifact.record.type === "test-result"`, and Phase 8b made a lane-2-only
+ * `regression` run reachable: with the whole selection observed, lane 1 drives nothing, so a FAILED entry
+ * produced a run that finalized `COMPLETED` with `validation.valid` true — where the same case driven in
+ * lane 1 would have failed and exited 1. It is gone rather than kept beside this one: an unscoped
+ * failure question has no correct caller left, and leaving it exported invites the next one to ask it.
  *
  * `FAILED` credits the IDENTITY (the case was executed) but never the OBLIGATION — `evaluateCoverage`
  * (src/planning/coverage.ts) refuses any attempt that is not `PASSED` — so the release gate already
  * reported the unmet obligation. What was missing was the run's own terminal status saying so.
  */
-export function observedFailureIdentities(artifacts: readonly CoverageArtifactView[]): readonly TestCaseIdentity[] {
-  return observedCaseIdentities(artifacts, observedFailedStatuses);
+export function observedSelectedFailureIdentities(artifacts: readonly CoverageArtifactView[], selection: readonly TestCaseIdentity[]): readonly TestCaseIdentity[] {
+  return observedSelectedCaseIdentities(artifacts, selection, observedFailedStatuses);
 }
 
 /** The registered `test-case` artifacts whose exact identity a batch entry observed. Matched component by

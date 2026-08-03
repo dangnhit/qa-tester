@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { caseIdentity, observedCaseIdentities, observedCoveredCaseIds } from "../../src/core/observed-coverage.js";
+import {
+  caseIdentity,
+  observedCaseIdentities,
+  observedCoveredCaseIds,
+  observedSelectedCaseIdentities,
+  observedSelectedFailureIdentities,
+} from "../../src/core/observed-coverage.js";
 
 /** `PASSED` is the default status because an entry with NO status covers nothing since Phase 8b Task 3:
  *  these fixtures are about the identity and provenance filters, and would otherwise all test the status
@@ -100,6 +106,75 @@ describe("observedCaseIdentities", () => {
     expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "agent-draft")])).toEqual([]);
     expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime")])).toEqual([]);
     expect(observedCaseIdentities([batch("BATCH-1", [{ ...identity }], true, "runtime-execution")])).toEqual([identity]);
+  });
+});
+
+/**
+ * The selection-scoped question (Phase 9 items 3.2 and 3.3). Every fixture here holds an UNRELATED batch
+ * — one crediting an identity the selection does not name — because that is the only fixture that
+ * discriminates it from the workspace-wide question: a test that merely has a batch is answered the same
+ * way by both.
+ */
+describe("observedSelectedCaseIdentities", () => {
+  const selected = { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } as const;
+  const unrelated = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
+
+  it("credits nothing from a batch that names only identities outside the selection", () => {
+    const artifacts = [batch("BATCH-LEFTOVER", [{ testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId }])];
+    // The workspace-wide reader answers "yes, something was observed" on this exact input; the scoped one
+    // must not, or an execution operation can return nothing while the selection was covered by nothing.
+    expect(observedCaseIdentities(artifacts)).toEqual([unrelated]);
+    expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([]);
+  });
+
+  it("credits the selected identity from a batch that names it alongside an unrelated one", () => {
+    const artifacts = [batch("BATCH-MIXED", [
+      { testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId },
+      { testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId },
+    ])];
+    expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([selected]);
+  });
+
+  it("keeps every batch-level credit gate the workspace-wide reader applies", () => {
+    const entry = { testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId };
+    expect(observedSelectedCaseIdentities([batch("BATCH-1", [entry], false)], [selected])).toEqual([]);
+    expect(observedSelectedCaseIdentities([batch("BATCH-1", [entry], true, "agent-draft")], [selected])).toEqual([]);
+    expect(observedSelectedCaseIdentities([batch("BATCH-1", [{ ...entry, status: "NOT_RUN" }])], [selected])).toEqual([]);
+  });
+
+  /** Same trap as `observedCoveredCaseIds`, one layer up: the scope is matched component by component
+   *  through the shared nested index, so a selection entry whose components merely rejoin to the same
+   *  delimited string does not put an observed identity in scope. */
+  it("does not put an identity in scope whose components merely rejoin to a selected one", () => {
+    const artifacts = [batch("BATCH-1", [{ testCaseId: "TC-COL", testCaseRevisionId: "X:REV", testCaseInstanceId: "INST" }])];
+    expect(observedSelectedCaseIdentities(artifacts, [{ testCaseId: "TC-COL:X", testCaseRevisionId: "REV", testCaseInstanceId: "INST" }])).toEqual([]);
+    expect(observedSelectedCaseIdentities(artifacts, [{ testCaseId: "TC-COL", testCaseRevisionId: "X:REV", testCaseInstanceId: "INST" }]))
+      .toEqual([{ testCaseId: "TC-COL", testCaseRevisionId: "X:REV", testCaseInstanceId: "INST" }]);
+  });
+
+  it("credits nothing when the selection is empty, because an empty selection names no case", () => {
+    expect(observedSelectedCaseIdentities([batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId }])], [])).toEqual([]);
+  });
+});
+
+describe("observedSelectedFailureIdentities", () => {
+  const selected = { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } as const;
+  const unrelated = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
+
+  it("reports no failure for a FAILED entry outside the selection, which this run never asked for", () => {
+    const artifacts = [batch("BATCH-LEFTOVER", [{ testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId, status: "FAILED" }])];
+    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([]);
+  });
+
+  it("reports the failure for a FAILED entry the selection names", () => {
+    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "FAILED" }])];
+    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([selected]);
+  });
+
+  it("reports no failure for a PASSED entry the selection names, which is the narrower question", () => {
+    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "PASSED" }])];
+    expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([selected]);
+    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([]);
   });
 });
 
