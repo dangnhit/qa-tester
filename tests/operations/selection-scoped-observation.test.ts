@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ExitCode, workflowExitCode } from "../../src/cli/exit-codes.js";
 import { sha256Text } from "../../src/core/checksum.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { finalizeWorkflowOutcome, workflowOperationAdaptersForTests } from "../../src/operations/run-workflow.js";
@@ -12,18 +13,31 @@ import { regressionCaseFromCanonical, registerChangeScope } from "../../src/regr
 import { selectRegressionCases } from "../../src/regression/selector.js";
 
 /**
- * Phase 9 items 3.2 and 3.3 — the two readers that asked "does any observed case exist ANYWHERE in this
- * workspace" when they meant "is THIS run's selection covered".
+ * The two questions a filtered run asks of an observed batch, and the one place they must NOT be answered
+ * the same way.
  *
  * The discriminating fixture, and the only one that discriminates: a registered `test-result-batch` that
  * credits `TC-SEL-OUTSIDE`, an identity the regression selection EXCLUDED. That batch is entirely valid —
  * `testResultBatchRule` binds every entry to exactly one registered test case, and this one is bound —
- * so nothing upstream refuses it. A fixture holding a batch that credits the SELECTED case proves
- * nothing here: the workspace-wide reader and the selection-scoped one answer it identically.
+ * so nothing upstream refuses it. A fixture holding a batch that credits only the SELECTED case proves
+ * nothing here: a workspace-wide reader and a selection-scoped one answer it identically.
+ *
+ * Nothing about that entry is exotic. Nothing filters the observed suite by the selection, so ONE batch
+ * this run produced routinely carries entries for selected and unselected cases alike — which is why the
+ * fixtures below register a single batch holding both, rather than two.
+ *
+ *   - COVERAGE is scoped to the selection (item 3.3). `assertResultPostcondition` allows an EMPTY
+ *     execution output only when the selection itself was covered; an entry for a case the selection
+ *     excluded covers nothing this run asked for.
+ *   - FAILURE is NOT scoped, and scoping it reopened what Phase 8b closed. A FAILED entry names a defect
+ *     this run's own suite reported, whether or not the run selected the case, and in a `regression` run
+ *     the terminal status is the only thing that says so — see the second describe below.
  *
  * Driven through the real adapter map and the real `finalizeWorkflowOutcome` rather than through a
  * browser run: both readers take a `RunWorkspace` and read its registered artifacts, so a hand-built
- * workspace exercises exactly the code the run loop reaches, without launching Chromium.
+ * workspace exercises exactly the code the run loop reaches, without launching Chromium. The exit code is
+ * asserted through the real `workflowExitCode` for the same reason — it is the mapper `program.ts` calls,
+ * so the row can claim an EXIT rather than only an outcome name.
  */
 
 const roots: string[] = [];
@@ -166,14 +180,45 @@ describe("assertResultPostcondition — an empty output is legal only when THIS 
   });
 });
 
-describe("finalizeWorkflowOutcome — an observed failure counts only inside THIS run's selection (item 3.2)", () => {
-  it("does not report failure for a FAILED entry the selection excluded", async () => {
+describe("finalizeWorkflowOutcome — an observed failure counts wherever this run's own suite reported it", () => {
+  /**
+   * THE REGRESSION FOR THE SCOPED FAILURE READER. This construction finalized `COMPLETED` with
+   * `validation.valid` true and exited **0** while the run's own `runtime-observed` batch reported
+   * `FAILED` on `TC-SEL-OUTSIDE`, because the failure question was intersected against the selection.
+   *
+   * Nothing else in a `regression` run says a test failed, which is what made it silent rather than
+   * merely wrong: the run imports no coverage obligations of its own, so `REQUIRED_COVERAGE_COMPLETE`
+   * cannot catch it; `generate-bug-report` is lane-1-only, so there is no `bug-report`; the residual is
+   * empty, so lane 1 drives nothing and registers no `test-result`. The terminal status is the whole
+   * signal.
+   *
+   * `validation.valid` is asserted FIRST and deliberately, and the PASSED control below is the other half.
+   * `finalizeWorkflowOutcome` returns COMPLETED_WITH_FAILURES for `hasExecutionFailures || !validation.valid`,
+   * so without `valid: true` this row would pass with the lane-2 clause deleted outright; and without a
+   * control one status apart it would not show that the outcome turns on the EXCLUDED entry's status
+   * rather than on anything else this fixture registers.
+   */
+  it("reports failure and exits non-zero for a FAILED entry the selection excluded", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-selection-failure-outside-")); roots.push(root);
     const workspace = await scopedWorkspace(root, [{ identity: selectedCase, status: "PASSED" }, { identity: excludedCase, status: "FAILED" }]);
     try {
       const result = await finalizeWorkflowOutcome(workspace, "regression");
       expect(result.validation.valid).toBe(true);
+      expect(result.outcome).toBe("COMPLETED_WITH_FAILURES");
+      expect(workflowExitCode(result)).toBe(ExitCode.UNMET_OBLIGATIONS);
+    } finally { await workspace.close(); }
+  });
+
+  /** The control for the row above: the identical filtered fixture with the excluded entry PASSED, so the
+   *  batch, the selection and every other artifact are the same and only the status moved. */
+  it("reports no failure and exits zero when that same excluded entry PASSED", async () => {
+    const root = await mkdtemp(join(tmpdir(), "qa-selection-pass-outside-")); roots.push(root);
+    const workspace = await scopedWorkspace(root, [{ identity: selectedCase, status: "PASSED" }, { identity: excludedCase, status: "PASSED" }]);
+    try {
+      const result = await finalizeWorkflowOutcome(workspace, "regression");
+      expect(result.validation.valid).toBe(true);
       expect(result.outcome).toBe("COMPLETED");
+      expect(workflowExitCode(result)).toBe(ExitCode.SUCCESS);
     } finally { await workspace.close(); }
   });
 
@@ -185,17 +230,9 @@ describe("finalizeWorkflowOutcome — an observed failure counts only inside THI
     } finally { await workspace.close(); }
   });
 
-  /**
-   * The unfiltered counterpart: the same FAILED entry that is out of scope for the filtered run above is
-   * in scope for a run with no selection artifact, and must still be reported.
-   *
-   * `validation.valid` is asserted FIRST and deliberately. `finalizeWorkflowOutcome` returns
-   * COMPLETED_WITH_FAILURES for `hasExecutionFailures || !validation.valid`, so without that assertion an
-   * `execute`-mode fixture missing any `publicTerminalRequirements` artifact would satisfy this row with
-   * the lane-2 clause deleted outright. Pinning `valid: true` is what makes the outcome turn on
-   * `hasExecutionFailures` alone; the PASSED row below is the other half — same mode, same fixture, one
-   * status apart — so the pair discriminates rather than merely asserting.
-   */
+  /** The unfiltered counterpart, kept because the answer must not depend on whether a
+   *  `regression-selection` exists at all: a run with no selection artifact reads the same batch and must
+   *  reach the same outcome as the filtered row above. */
   it("reports failure for the same FAILED entry in an unfiltered run", async () => {
     const root = await mkdtemp(join(tmpdir(), "qa-selection-failure-unfiltered-")); roots.push(root);
     const workspace = await scopedWorkspace(root, [{ identity: excludedCase, status: "FAILED" }], { filtered: false });

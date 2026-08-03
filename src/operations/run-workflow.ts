@@ -9,7 +9,7 @@ import { evidenceAttemptId } from "../core/artifact-record.js";
 import { RunWorkspace, type ArtifactRecord, type RegisteredWorkspaceArtifact, type WorkspaceValidation } from "../core/run-workspace.js";
 import { isRecord, canonicalJson } from "../core/values.js";
 import { runtimeVersion } from "../installer/manifest.js";
-import { caseIdentity, observedCoveredCaseIds, observedSelectedCaseIdentities, observedSelectedFailureIdentities } from "../core/observed-coverage.js";
+import { caseIdentity, observedCoveredCaseIds, observedFailureIdentities, observedSelectedCaseIdentities } from "../core/observed-coverage.js";
 import { operationsForMode, type PublicWorkflowMode, type WorkflowOperationName } from "../core/modes.js";
 import type { Browser } from "@playwright/test";
 import type { SecretResolver } from "../browser/types.js";
@@ -279,10 +279,15 @@ async function assertResultPostcondition(workspace: RunWorkspace, output: readon
   // reproduce every one of those scenarios. Its own refusal is the specific one, and it stays reachable.
   //
   // Scoped to THIS RUN'S SELECTION (item 3.3). The predicate used to ask `observedCaseIdentities` — "does
-  // any observed case exist anywhere in this workspace" — which is not what the paragraph above says and
-  // not what this check needs: one leftover entry for a case the selection EXCLUDED then stood in for the
-  // whole selection, and an execution operation could return zero results without throwing while the
-  // selection was covered by nothing at all.
+  // any observed case exist in this workspace at all" — which is not what the paragraph above says and not
+  // what this check needs: one entry for a case the selection EXCLUDED then stood in for the whole
+  // selection, and an execution operation could return zero results without throwing while the selection
+  // was covered by nothing at all. Such an entry is ordinary, not a stray from somewhere else — nothing
+  // filters the observed suite by the selection, so one batch this run produced carries both.
+  //
+  // The FAILURE question in `finalizeWorkflowOutcome` below is deliberately NOT scoped this way. Excusing
+  // an empty drive list is a claim about what this run asked for; reporting a failure is a claim about what
+  // its suite observed.
   const observedNothing = observedSelectedCaseIdentities(artifacts, runSelectionIdentities(artifacts)).length === 0;
   if ((output.length === 0 && observedNothing) || output.some((item) => item.type !== "test-result")) throw new QaSkillsError("Execution operation must return registered test-result references", "ARTIFACT_BINDING");
   // Invariance: `artifacts` is read above and this postcondition registers nothing, so both indices serve
@@ -845,15 +850,16 @@ function selectedCaseArtifactIds(selection: RegressionSelection, artifacts: read
  * (src/core/observed-coverage.ts) intersects against structural triples, because that is the only key a
  * `test-result-batch` entry carries, while a checkpoint reference needs the artifact id.
  *
- * RE-DERIVED from the workspace rather than threaded from `WorkflowExecutionState`, and this is the
- * deliberate choice items 3.2 and 3.3 turn on. Threading is the more explicit route and was rejected on
- * a measurement, not a preference: the two readers that need this are `assertResultPostcondition` —
- * whose signature is fixed by the `ClosedOperationAdapter` contract — and `finalizeWorkflowOutcome`,
- * which is reached from BOTH run loops in this file and only one of them (`runQaTesterWithAdapters`)
- * tracks a selection in memory at all. `runWorkflowWithRegistry` has no `WorkflowExecutionState`, so
- * threading would have forced a second, weaker answer to one question at exactly the seam where the two
- * call sites already drifted apart. The design decision this phase took was "ONE shared selection-scoped
- * reader", and a workspace-derived scope is the only source both loops can name.
+ * RE-DERIVED from the workspace rather than threaded from `WorkflowExecutionState`, and the choice is not
+ * a preference. Its one reader is `assertResultPostcondition`, whose signature is fixed by the
+ * `ClosedOperationAdapter` contract — `(workspace, output)`, with no state parameter to thread a selection
+ * through. Widening that contract for one postcondition would put a selection into the signature of the
+ * other postconditions that have no use for one.
+ *
+ * ONE reader by ruling, not by accident. `finalizeWorkflowOutcome` briefly used this too, to intersect the
+ * OBSERVED FAILURE question against the selection, and that reopened a defect Phase 8b had closed; see the
+ * comment there. If a second caller ever wants this scope, the question to answer first is whether it is
+ * asking what this run REQUESTED (this is the right scope) or what this run's suite OBSERVED (it is not).
  *
  * The scope, in the two states a run can be in:
  *   - a FILTERED run has registered a `regression-selection`, and its `selected` decisions ARE the
@@ -865,10 +871,10 @@ function selectedCaseArtifactIds(selection: RegressionSelection, artifacts: read
  *
  * Two deviations from `state.executionCaseIds`, both measured and both in the safe direction. A `retest`
  * run excludes its own reproduction source from what it DRIVES (`excludeRetestSourceCases`); this scope
- * keeps it, so an observed failure on the source case still counts and `reproduce-bug` — which cannot
- * legitimately return an empty output anyway — is unaffected. And the residual subtraction in
- * `execute-browser-test` narrows what is driven without touching `state.executionCaseIds`, so it does
- * not move this scope either.
+ * keeps it, so an observed entry for the source case cannot excuse an empty output — and `reproduce-bug`,
+ * which cannot legitimately return an empty output anyway, is unaffected either way. And the residual
+ * subtraction in `execute-browser-test` narrows what is driven without touching `state.executionCaseIds`,
+ * so it does not move this scope either.
  */
 function runSelectionIdentities(artifacts: readonly RegisteredWorkspaceArtifact[]): readonly TestCaseIdentity[] {
   const selection = artifacts.find((artifact) => artifact.record.type === "regression-selection");
@@ -976,17 +982,23 @@ export async function finalizeWorkflowOutcome(workspace: RunWorkspace, mode: Pub
   // disposition can be bound to it — see `assertFailureDispositionPostcondition` — and this line makes no
   // claim that one exists.
   //
-  // The lane-2 clause is scoped to THIS RUN'S SELECTION (item 3.2): a FAILED entry for a case this run
-  // never selected — a leftover from an earlier, unrelated observed execution against the same workspace
-  // — used to make an otherwise clean run report failure.
+  // NEITHER clause is scoped to the run's selection, and the lane-2 one carries the sharper lesson: it was
+  // intersected against the selection for one commit, and that reopened the defect above. Every
+  // `test-result-batch` here is this run's OWN — `runId` is schema-required, `assertArtifactBinding`
+  // (src/core/run-workspace.ts) refuses a mismatched registration and `inspectWorkspaceState`
+  // (src/core/inspect-workspace-state.ts) invalidates one anyway — so there was no foreign batch for the
+  // scope to exclude, only entries of this run's own suite, which nothing filters by the selection. What it
+  // actually dropped was a FAILED entry on an unselected case, in a run where nothing else reports one: no
+  // imported coverage obligation, no lane-1 `test-result`, and `generate-bug-report` is lane-1-only. See
+  // tests/operations/selection-scoped-observation.test.ts, which builds that run and asserts the exit.
   //
-  // The lane-1 clause is deliberately NOT scoped the same way, and narrowing it would MASK a failure
-  // rather than stop over-reporting one. A `test-result` in this workspace is an attempt THIS run drove,
-  // and not every one of them is in the selection: `excludeRetestSourceCases` removes a retest's own
-  // reproduction source from the selected set precisely so it is not driven twice, so intersecting lane 1
-  // against the selection would drop a failed reproduction out of the run's terminal status.
+  // Narrowing the lane-1 clause would MASK a failure for an independent reason. A `test-result` in this
+  // workspace is an attempt THIS run drove, and not every one of them is in the selection:
+  // `excludeRetestSourceCases` removes a retest's own reproduction source from the selected set precisely
+  // so it is not driven twice, so intersecting lane 1 against the selection would drop a failed
+  // reproduction out of the run's terminal status.
   const hasExecutionFailures = artifacts.some((artifact) => artifact.record.type === "test-result" && artifact.value.status !== "PASSED")
-    || observedSelectedFailureIdentities(artifacts, runSelectionIdentities(artifacts)).length > 0;
+    || observedFailureIdentities(artifacts).length > 0;
   const terminal = evaluatePublicTerminalProfile(mode, artifacts.map((artifact) => artifact.record.type));
   const structural = await workspace.finalize(mode, hasExecutionFailures || !terminal.valid ? "COMPLETED_WITH_FAILURES" : undefined);
   const validation = { valid: structural.valid && terminal.valid, diagnostics: [...structural.diagnostics, ...terminal.diagnostics] };

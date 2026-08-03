@@ -4,8 +4,8 @@ import {
   caseIdentity,
   observedCaseIdentities,
   observedCoveredCaseIds,
+  observedFailureIdentities,
   observedSelectedCaseIdentities,
-  observedSelectedFailureIdentities,
 } from "../../src/core/observed-coverage.js";
 
 /** `PASSED` is the default status because an entry with NO status covers nothing since Phase 8b Task 3:
@@ -110,26 +110,29 @@ describe("observedCaseIdentities", () => {
 });
 
 /**
- * The selection-scoped question (Phase 9 items 3.2 and 3.3). Every fixture here holds an UNRELATED batch
- * — one crediting an identity the selection does not name — because that is the only fixture that
- * discriminates it from the workspace-wide question: a test that merely has a batch is answered the same
- * way by both.
+ * The selection-scoped COVERAGE question (Phase 9 item 3.3). Every fixture here holds an UNSELECTED entry
+ * — one naming an identity the selection does not — because that is the only fixture that discriminates
+ * this from the run-wide question: a test that merely has a batch is answered the same way by both.
+ *
+ * An unselected entry is an ordinary shape, not a stray artifact: nothing filters the observed suite by
+ * the selection, so a single batch normally carries selected and unselected entries together, which is
+ * what `BATCH-MIXED` below is.
  */
 describe("observedSelectedCaseIdentities", () => {
   const selected = { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } as const;
-  const unrelated = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
+  const unselected = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
 
   it("credits nothing from a batch that names only identities outside the selection", () => {
-    const artifacts = [batch("BATCH-LEFTOVER", [{ testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId }])];
-    // The workspace-wide reader answers "yes, something was observed" on this exact input; the scoped one
-    // must not, or an execution operation can return nothing while the selection was covered by nothing.
-    expect(observedCaseIdentities(artifacts)).toEqual([unrelated]);
+    const artifacts = [batch("BATCH-UNSELECTED", [{ testCaseId: unselected.testCaseId, testCaseRevisionId: unselected.testCaseRevisionId, testCaseInstanceId: unselected.testCaseInstanceId }])];
+    // The run-wide reader answers "yes, something was observed" on this exact input; the scoped one must
+    // not, or an execution operation can return nothing while the selection was covered by nothing.
+    expect(observedCaseIdentities(artifacts)).toEqual([unselected]);
     expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([]);
   });
 
-  it("credits the selected identity from a batch that names it alongside an unrelated one", () => {
+  it("credits the selected identity from a batch that names it alongside an unselected one", () => {
     const artifacts = [batch("BATCH-MIXED", [
-      { testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId },
+      { testCaseId: unselected.testCaseId, testCaseRevisionId: unselected.testCaseRevisionId, testCaseInstanceId: unselected.testCaseInstanceId },
       { testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId },
     ])];
     expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([selected]);
@@ -157,24 +160,45 @@ describe("observedSelectedCaseIdentities", () => {
   });
 });
 
-describe("observedSelectedFailureIdentities", () => {
+/**
+ * The FAILURE question, which is NOT scoped to the selection — the asymmetry with the describe above is
+ * the property these rows exist to pin. Scoping it made a `regression` run finalize COMPLETED and exit 0
+ * while its own observed suite reported a PRODUCT_DEFECT on an unselected case, with nothing else
+ * reporting it; the run-level consequence is pinned in
+ * tests/operations/selection-scoped-observation.test.ts.
+ */
+describe("observedFailureIdentities", () => {
   const selected = { testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" } as const;
-  const unrelated = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
+  const unselected = { testCaseId: "TC-OUTSIDE", testCaseRevisionId: "REV-OUTSIDE", testCaseInstanceId: "INSTANCE-OUTSIDE" } as const;
 
-  it("reports no failure for a FAILED entry outside the selection, which this run never asked for", () => {
-    const artifacts = [batch("BATCH-LEFTOVER", [{ testCaseId: unrelated.testCaseId, testCaseRevisionId: unrelated.testCaseRevisionId, testCaseInstanceId: unrelated.testCaseInstanceId, status: "FAILED" }])];
-    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([]);
-  });
-
-  it("reports the failure for a FAILED entry the selection names", () => {
-    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "FAILED" }])];
-    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([selected]);
-  });
-
-  it("reports no failure for a PASSED entry the selection names, which is the narrower question", () => {
-    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "PASSED" }])];
+  it("reports a FAILED entry the selection never named, because this run's own suite observed it", () => {
+    const artifacts = [batch("BATCH-MIXED", [
+      { testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "PASSED" },
+      { testCaseId: unselected.testCaseId, testCaseRevisionId: unselected.testCaseRevisionId, testCaseInstanceId: unselected.testCaseInstanceId, status: "FAILED" },
+    ])];
+    // The same input, asked the two ways: the selection covers `TC-1` and only `TC-1`, and the failure on
+    // `TC-OUTSIDE` is still reported. One batch carrying both is the ordinary shape.
     expect(observedSelectedCaseIdentities(artifacts, [selected])).toEqual([selected]);
-    expect(observedSelectedFailureIdentities(artifacts, [selected])).toEqual([]);
+    expect(observedFailureIdentities(artifacts)).toEqual([unselected]);
+  });
+
+  it("reports the failure for a FAILED entry the selection does name", () => {
+    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "FAILED" }])];
+    expect(observedFailureIdentities(artifacts)).toEqual([selected]);
+  });
+
+  it("reports no failure for a PASSED entry, which is the narrower question this asks", () => {
+    const artifacts = [batch("BATCH-1", [{ testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "PASSED" }])];
+    expect(observedCaseIdentities(artifacts)).toEqual([selected]);
+    expect(observedFailureIdentities(artifacts)).toEqual([]);
+  });
+
+  /** The batch-level credit gate is shared with `observedCaseIdentities` rather than restated, and these
+   *  rows are what would catch a future second traversal that forgot one of the three filters. */
+  it("keeps every batch-level credit gate, so an uncreditable batch reports no failure either", () => {
+    const entry = { testCaseId: selected.testCaseId, testCaseRevisionId: selected.testCaseRevisionId, testCaseInstanceId: selected.testCaseInstanceId, status: "FAILED" };
+    expect(observedFailureIdentities([batch("BATCH-1", [entry], false)])).toEqual([]);
+    expect(observedFailureIdentities([batch("BATCH-1", [entry], true, "agent-draft")])).toEqual([]);
   });
 });
 
