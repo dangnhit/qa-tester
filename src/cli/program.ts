@@ -312,8 +312,15 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       // The SAME shape of announcement for the other degradation, and a separate one because it has a
       // separate cause: a payload that read perfectly can still join no location. Left unsaid, a SARIF
       // file that places none of the failures it reports exits 0 and looks exactly like a healthy one.
+      //
+      // Every clause is scoped to the COUNTED results, because the count is partial-capable: a run can
+      // place some observed failures and not others (`sarif.ts` counts per result, not per run). An
+      // unscoped "the run recorded no spec location" would be false in exactly that case, with located
+      // results sitting in the same file. And the diagnostic is one likely cause among several rather
+      // than the only one — `export-projection.ts` lists them — because this command cannot tell which
+      // applied, by the same design that makes the reasons indistinguishable in the document.
       if (result.observedResultsWithoutLocation !== undefined && result.observedResultsWithoutLocation > 0) {
-        stderr += `Note: ${result.observedResultsWithoutLocation} observed failure(s) in this projection name no source file, so a code-scanning reader is shown the failure with nowhere to look. The run recorded no spec location it could vouch for — check that --root names the same checkout the runner reported as its config.rootDir.\n`;
+        stderr += `Note: ${result.observedResultsWithoutLocation} observed failure(s) in this projection name no source file, so a code-scanning reader is shown those failures with nowhere to look; any others in the same file are placed normally. For these the run recorded no spec location it could vouch for, and this command cannot say which reason applied. The likeliest is a --root naming a different checkout from the config.rootDir the runner reported; two reports disagreeing about where one identity ran, and a spec path no URI can spell, do the same thing.\n`;
       }
     });
   try {

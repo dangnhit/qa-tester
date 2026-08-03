@@ -16,24 +16,42 @@ const environment = { artifactType: "environment-profile", schemaVersion: "1.0.0
 const testCase = { artifactType: "test-case", schemaVersion: "3.0.0", producerVersion: "0.1.0", testCaseId: "TC-CHECKOUT", revisionId: "REV-1", instanceId: "INSTANCE-1", title: "Checkout saves an order", steps: [{ id: "open", action: "navigate", sideEffect: "none" }], coverage: { requirementId: "REQ-CHECKOUT", role: "buyer", behavior: "checkout", browser: "chromium", viewport: { width: 1280, height: 720 }, accessibilityMethod: null, risk: "high", outcome: "Order confirmation is shown" } } as const;
 
 /**
+ * A sanitized runner report naming a spec per identity, shaped as `sanitizeRunnerReport` writes one.
+ *
+ * `rootDir` is what `spec.file` is relative to, and passing it is what decides whether the export can
+ * place the result at all: an absolute path the run root CONTAINS joins a location, and omitting it
+ * entirely joins none — which is the difference between the placed and unplaced rows below.
+ */
+const sanitizedReport = (rootDir: string | undefined, specs: readonly Readonly<{ testCaseId: string; file: string }>[]): string => JSON.stringify({
+  sanitization: { policy: "p", removed: [], note: "" },
+  ...(rootDir === undefined ? {} : { config: { version: "1.61.0", rootDir } }),
+  suites: [{ title: "s", specs: specs.map((spec) => ({ title: `[qa:${spec.testCaseId}/REV-1/INSTANCE-1@api] pays with a card`, ok: false, id: `spec-${spec.testCaseId}`, file: spec.file, line: 42, column: 3, tests: [] })) }],
+});
+
+/**
  * A finalized run whose gate is NOT_READY. The operational Evidence Gap is what makes it so: it becomes
  * a shared blocker, and `NO_SHARED_BLOCKERS` is a hard failure. The `runner-report` evidence bundle is
  * registered because the export operation reads the file behind it — `report` is parameterised only so
- * the unreadable-payload case can register something unparseable through the real registration path.
+ * the unreadable-payload case can register something unparseable through the real registration path, and
+ * takes the run root because a sanitized report's `config.rootDir` is absolute and the root is a fresh
+ * `mkdtemp` directory that does not exist when a case is declared.
  *
- * `observedFailure` additionally registers the test case and the `test-result-batch` whose FAILED entry
- * cites that bundle, which is the only shape that produces a SARIF `observed-failure` result at all.
- * The default report names no `config.rootDir`, so nothing can rebase a spec path and that result is
- * emitted with no location — which is the state the stderr note exists to announce.
+ * `observedFailures` names one test case per FAILED `test-result-batch` entry, and registers each case:
+ * that batch is the only shape that produces a SARIF `observed-failure` result at all, and an entry must
+ * resolve to a registered case. Which of those results the export can PLACE is decided entirely by the
+ * report — so passing two identities and a report naming only one is how a PARTIAL count is reached.
  *
  * Redeclared here rather than imported from `tests/operations/export-projection.test.ts`: fixtures are
  * not shared across test files on this branch.
  */
-async function notReadyRun(report = '{ "sanitization": { "policy": "p", "removed": [], "note": "" }, "suites": [] }', observedFailure = false): Promise<{ root: string; runId: string }> {
+async function notReadyRun(
+  report: string | ((root: string) => string) = sanitizedReport(undefined, []),
+  observedFailures: readonly string[] = [],
+): Promise<{ root: string; runId: string }> {
   const root = await mkdtemp(join(tmpdir(), "qa-export-cli-")); roots.push(root);
   const workspace = await RunWorkspace.create({ root, mode: "execute", environmentProfile: environment });
   const bundle = await workspace.registerEvidenceBundle({
-    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(report, "utf8"), mediaType: "application/json", captureType: "runner-report" }],
+    binaries: [{ filename: "sanitized-runner-report.json", contents: Buffer.from(typeof report === "string" ? report : report(root), "utf8"), mediaType: "application/json", captureType: "runner-report" }],
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
@@ -47,15 +65,16 @@ async function notReadyRun(report = '{ "sanitization": { "policy": "p", "removed
       provenance: { captureType: "runner-report", runner: "playwright", runnerVersion: "1.61.0", exitCode: 1, capturedAt: "2026-07-29T00:01:00.000Z" },
     }),
   });
-  if (observedFailure) {
-    const registeredCase = await workspace.registerArtifactValue({ type: "test-case", value: testCase, relationships: [] });
+  if (observedFailures.length > 0) {
+    const registeredCases = await Promise.all(observedFailures.map((testCaseId) =>
+      workspace.registerArtifactValue({ type: "test-case", value: { ...testCase, testCaseId }, relationships: [] })));
     await workspace.registerArtifactValue({
-      type: "test-result-batch", provenance: "runtime-observed", relationships: [registeredCase.id, bundle.descriptor.id],
+      type: "test-result-batch", provenance: "runtime-observed", relationships: [...registeredCases.map((registered) => registered.id), bundle.descriptor.id],
       value: {
         artifactType: "test-result-batch", schemaVersion: "4.0.0", producerVersion: "0.1.0",
         executionId: "EXEC-1", runId: workspace.runId, commitSha: "a".repeat(40), specTreeSha256: "b".repeat(64),
         startedAt: "2026-07-29T00:00:00.000Z", finishedAt: "2026-07-29T00:01:00.000Z",
-        entries: [{ entryId: "E-1", testCaseId: testCase.testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", steps: [{ stepId: "S1", status: "FAILED", durationMs: 500 }], evidenceArtifactIds: [bundle.descriptor.id] }],
+        entries: observedFailures.map((testCaseId, index) => ({ entryId: `E-${index + 1}`, testCaseId, testCaseRevisionId: testCase.revisionId, testCaseInstanceId: testCase.instanceId, status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", steps: [{ stepId: "S1", status: "FAILED", durationMs: 500 }], evidenceArtifactIds: [bundle.descriptor.id] })),
       },
     });
   }
@@ -153,7 +172,7 @@ describe("qa-skill export", () => {
    * every failure attached to the repository with no file to open.
    */
   it("still exits 0 when no observed failure could be placed in a file, but says so on stderr", async () => {
-    const { root, runId } = await notReadyRun(undefined, true);
+    const { root, runId } = await notReadyRun(undefined, ["TC-CHECKOUT"]);
     const outPath = join(root, "unplaced.sarif");
 
     const result = await runCli(["export", "--root", root, "--run-id", runId, "--format", "sarif", "--out", outPath], { cwd: root });
@@ -162,6 +181,42 @@ describe("qa-skill export", () => {
     expect(result.stderr).toMatch(/name no source file/i);
     expect(result.stderr).not.toMatch(/could not be read as a sanitized runner report/i);
     expect((JSON.parse(result.stdout) as { observedResultsWithoutLocation: number }).observedResultsWithoutLocation).toBe(1);
+  });
+
+  /**
+   * THE PARTIAL SHAPE, which is what keeps the note's wording honest. The count is per RESULT, not per
+   * run, so a run can place some observed failures and not others — and the note first shipped saying
+   * "The run recorded no spec location it could vouch for" and pointing at `--root` as though it were the
+   * only cause. In this run that sentence is simply false: `e2e/checkout.spec.ts` is placed and sits in
+   * the same document, and `--root` is perfectly correct — TC-SEARCH is unplaced because the report never
+   * names a spec for it, which is what an execution that ran a case its report does not describe looks
+   * like.
+   *
+   * Both wording assertions live HERE rather than on the 1-of-1 row above, so reverting the scoping
+   * reddens this case alone and the mutation says exactly which shape it broke.
+   */
+  it("scopes the note to the failures it could not place, when the projection placed the others", async () => {
+    const { root, runId } = await notReadyRun(
+      (created) => sanitizedReport(join(created, "e2e"), [{ testCaseId: "TC-CHECKOUT", file: "checkout.spec.ts" }]),
+      ["TC-CHECKOUT", "TC-SEARCH"],
+    );
+    const outPath = join(root, "partial.sarif");
+
+    const result = await runCli(["export", "--root", root, "--run-id", runId, "--format", "sarif", "--out", outPath], { cwd: root });
+
+    expect(result.exitCode).toBe(ExitCode.SUCCESS);
+    expect((JSON.parse(result.stdout) as { observedResultsWithoutLocation: number }).observedResultsWithoutLocation).toBe(1);
+    // The shape really is partial: one of the two observed failures carries a location. Without this the
+    // case could pass as an accidental 1-of-1 and prove nothing about scoping.
+    const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
+    const observed = sarif.runs[0].results.filter((entry) => entry.ruleId === "observed-failure");
+    expect(observed).toHaveLength(2);
+    expect(observed.flatMap((entry) => entry.locations ?? []).map((location) => location.physicalLocation.artifactLocation.uri)).toEqual(["e2e/checkout.spec.ts"]);
+    // Scoped to the counted results — "those failures", "For these" — and NOT a claim about the run.
+    expect(result.stderr).toMatch(/for these the run recorded no spec location/i);
+    // Hedged: one likely cause among several, never `--root` as the only one to check.
+    expect(result.stderr).toMatch(/cannot say which reason applied/i);
+    expect(result.stderr).toMatch(/likeliest/i);
   });
 
   /** The note is CONDITIONAL, and this is the run that proves it: same command, no observed failure at
