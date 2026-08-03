@@ -445,16 +445,20 @@ describe("RunWorkspace", () => {
     expect((error as Error).message).not.toMatch(/ENOENT/);
   });
 
-  // The translation above must not widen into swallowing every realpath failure: a root path that climbs
-  // THROUGH a plain file (not a directory) fails with ENOTDIR, a different errno the wrap must leave
-  // alone -- a permission or I/O error is a real fault, not a bad run id, and must still surface as one.
+  // The translation above must not widen into swallowing every realpath failure -- a permission or I/O
+  // error is a real fault, not a bad run id, and must still surface as one. The original provocation for
+  // this (a root path climbing THROUGH a plain file) is platform-specific: POSIX's realpath answers
+  // ENOTDIR for that shape, but Windows answers ENOENT for the identical path (measured in CI run
+  // 30799759549), which the wrap above then legitimately narrows to QaSkillsError/INVALID_ARTIFACT --
+  // collapsing exactly the case this test exists to rule out. An embedded NUL byte sidesteps the
+  // divergence: Node validates every fs path argument for one in plain JS, before the string ever reaches
+  // a platform-specific syscall, so both platforms reject it identically with a TypeError/
+  // ERR_INVALID_ARG_VALUE rather than ENOENT -- no `runIf` guard needed, the property holds everywhere.
   it("does not swallow a non-ENOENT realpath failure as an unknown run id", async () => {
     const directory = await root();
-    const filePath = join(directory, "not-a-directory");
-    await writeFile(filePath, "file");
-    const error: unknown = await RunWorkspace.open(join(filePath, "nested"), "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
+    const error: unknown = await RunWorkspace.open(`${directory}\0nested`, "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
     expect(error).not.toBeInstanceOf(QaSkillsError);
-    expect((error as Error).message).toMatch(/ENOTDIR/);
+    expect((error as Error).message).toMatch(/null bytes/);
   });
 
   it("registers the environment profile in the manifest and detects profile tampering", async () => {

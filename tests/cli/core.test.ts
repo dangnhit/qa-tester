@@ -177,16 +177,19 @@ describe("CLI core", () => {
     expect(run.stderr).not.toMatch(/no-such-run/);
   });
 
-  // The constraint that matters most: only ENOENT is translated. A root path that climbs through a plain
-  // file (not a directory) fails with ENOTDIR, a different errno the translation must leave alone -- a
-  // permission or I/O error is a real fault and must still surface as the internal error it is, not be
-  // folded into "bad run id".
+  // The constraint that matters most: only ENOENT is translated -- a permission or I/O error is a real
+  // fault and must still surface as the internal error it is, not be folded into "bad run id". The
+  // original provocation here (a root path climbing through a plain file) is platform-specific: POSIX's
+  // realpath answers ENOTDIR for that shape, but Windows answers ENOENT for the identical path (measured
+  // in CI run 30799759549), which the translation then legitimately narrows to INVALID_INPUT -- exactly
+  // the folding this test exists to rule out. An embedded NUL byte sidesteps the divergence: Node
+  // validates every fs path argument for one in plain JS, before the string ever reaches a
+  // platform-specific syscall, so both platforms reject it identically with ERR_INVALID_ARG_VALUE rather
+  // than ENOENT -- no `runIf` guard needed, the property holds everywhere.
   it("does not swallow a non-ENOENT realpath failure into invalid input", async () => {
     const directory = await root();
-    const filePath = join(directory, "not-a-directory");
-    await writeFile(filePath, "file");
-    const run = await runCli(["validate", "--root", join(filePath, "nested"), "--run-id", "no-such-run"], { cwd: directory });
+    const run = await runCli(["validate", "--root", `${directory}\0nested`, "--run-id", "no-such-run"], { cwd: directory });
     expect(run.exitCode).toBe(ExitCode.ABORTED_OR_INTERNAL);
-    expect(run.stderr).toMatch(/ENOTDIR/);
+    expect(run.stderr).toMatch(/null bytes/);
   });
 });

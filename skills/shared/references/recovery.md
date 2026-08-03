@@ -472,8 +472,11 @@ Exit codes (`src/cli/exit-codes.ts`; the command's own action and the catch-all 
     that a *deliberately* hard-linked `--out` is refused too; a descriptor cannot say where its other
     names are, so the attack and the convenience are the same object. Export to a path this command can
     create for itself. **The question is asked on every platform; the answer is only as good as the
-    filesystem.** `nlink` is measured on APFS only. NTFS is unmeasured, and exFAT, FAT32 and many network
-    mounts have no hard links to count and report `1` unconditionally — where those are mounted, the
+    filesystem.** `nlink` is now measured on both APFS and NTFS: CI run 30799759549 ran
+    `export-projection.test.ts` on Windows, where its three hard-link cases carry no platform guard and
+    genuinely executed (alongside 7 skips for the symlink and FIFO cases below, which remain POSIX-only)
+    — NTFS answers the hard-link question the same way APFS does. exFAT, FAT32 and many network mounts
+    have no hard links to count and report `1` unconditionally — where those are mounted, the
     results-root check above is the whole of the containment story.
   - an `--out` (or its sidecar) that **is itself a symbolic link** (`export-projection.ts:276`). The
     export writes only through a path it opened itself (`O_NOFOLLOW`), because following a link would
