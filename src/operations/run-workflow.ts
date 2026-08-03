@@ -728,8 +728,8 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
   return results;
 }
 
-type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string; parameters: Readonly<Record<string, unknown>> }>;
-type RetestSource = Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
+export type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string; parameters: Readonly<Record<string, unknown>> }>;
+export type RetestSource = Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
 
 function scenarioIdForRegisteredAttempt(artifacts: readonly RegisteredWorkspaceArtifact[], attempt: RegisteredWorkspaceArtifact): string {
   const testCase = artifacts.find((artifact) => artifact.record.type === "test-case" && attempt.record.relationships.includes(artifact.record.id));
