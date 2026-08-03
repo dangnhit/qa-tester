@@ -53,8 +53,20 @@ jobs:
       # first time they ran here. No --with-deps: that flag installs Linux system libraries and is
       # a no-op cost on windows-latest.
       - run: npx playwright install chromium
+      # ONE FILE from tests/operations, not the directory. This job exists to MEASURE what a
+      # POSIX-shaped guard does on NTFS, and export-projection.test.ts is the only file anywhere in
+      # tests/ that asserts on `nlink` — so it is the whole reason tests/operations is named here at
+      # all. The rest of the directory buys nothing this job needs and costs it three suites that
+      # each `chromium.launch()` (awaiting-human-input, observed-execution-pause,
+      # observed-execution-residual), one of which drives a Playwright runner subprocess. A red from
+      # a launch failure or a hang is not an answer about `nlink`, and an unexplained red is worse
+      # than no measurement. The Ubuntu job runs the full suite, so nothing dropped here is unrun.
+      #
+      # The step is bounded because a hang, unlike a failure, reports nothing at all. The bound is a
+      # safety net well above the honest runtime, not a performance budget.
       - name: Unit, path, init, and installer lifecycle tests
-        run: npm test -- tests/core tests/contracts tests/cli tests/installer tests/operations
+        timeout-minutes: 20
+        run: npm test -- tests/core tests/contracts tests/cli tests/installer tests/operations/export-projection.test.ts
       - run: npm run build
 
   browser-demo:
