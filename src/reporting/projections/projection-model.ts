@@ -96,9 +96,9 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
 /** Every gate rule whose `reason` is composed in code from IDENTIFIERS ONLY, and therefore survives a
  *  reduced projection unchanged. `NO_SHARED_BLOCKERS` is deliberately absent: it is the only reason
  *  unsafe BY DESIGN — its composition interpolates `sharedBlockers` directly, one of whose five sources
- *  (the `.map(...)` lines at release-gate.ts:279-283) is `Evidence gap <id> affects <affectedClaim>`,
- *  and `affectedClaim` is a free-form string in evidence-gap.schema.json:15 — authored text, not an
- *  identifier.
+ *  (the `.map(...)` lines in `sharedBlockerFacts`, src/reporting/release-gate.ts) is `Evidence gap <id>
+ *  affects <affectedClaim>`, and `affectedClaim` is a free-form string in evidence-gap.schema.json —
+ *  authored text, not an identifier.
  *
  *  The six rules below are identifier-only, but not all for the same reason, and the difference matters:
  *  - `NO_OPEN_BLOCKER_OR_CRITICAL`, `NO_UNTRIAGED_PRODUCT_BUG`, `NO_OPEN_PRODUCT_DEFECT_FOR_READY`
@@ -114,18 +114,23 @@ function provenanceOf(record: Readonly<{ provenance?: string }>): string {
  *  - `VALID_ARTIFACTS` composes no identifier at all: its reason is one of two static strings.
  *
  *  A related but separate risk lives outside this list: `findings` (below) carries `evidenceGapId`
- *  directly as `finding.id` and inside `finding.message`. `evidenceGapId` also has no schema pattern
- *  (evidence-gap.schema.json:9), but unlike `obligationId` it IS protected in code today — the sole
- *  producer, `src/evidence/collector.ts:41-42`, always stamps it via `createEntityId()`, so no live path
- *  registers an evidence-gap artifact with authored text as its own id. This module enforces nothing
- *  here either; that guarantee lives entirely in the one producer, not in this reducer.
+ *  directly as `finding.id` and inside `finding.message`. `evidence-gap.schema.json` now forbids a
+ *  literal colon in `evidenceGapId` but is otherwise still just `{"type": "string", "minLength": 1}` —
+ *  nothing about control characters — so it is in the same position as `obligationId` at the schema. It
+ *  differs in CODE, and that is where its protection actually lives: the sole producer that registers
+ *  one, `registerGap` in `src/evidence/collector.ts`, always stamps it via `createEntityId()`, so no
+ *  live path registers an evidence-gap artifact with authored text as its own id. (`redaction.ts` builds
+ *  a gap VALUE with a placeholder id, but `registerGap` mints a fresh one before anything is
+ *  registered.) This module enforces nothing here either; that guarantee lives entirely in the one
+ *  producer, not in this reducer.
  *
  *  **`obligationId` reaches `findings` too, and it is the one with no protection at either end** — the
  *  same `ingest-coverage-obligation.ts:19-24` verbatim registration named above, arriving here through
  *  `coverage.requiredMissing` and `coverage.optionalGaps` as a `finding.id` and inside a
- *  `finding.message`, on top of the `REQUIRED_COVERAGE_COMPLETE` reason. So of the two unpatterned ids
- *  a reader might worry about, `evidenceGapId` is the one a producer guards and `obligationId` is the
- *  one nothing reduces or shapes on any path. That is not only a prose risk: `junit.ts`'s `escapeXml`
+ *  `finding.message`, on top of the `REQUIRED_COVERAGE_COMPLETE` reason. So of the two ids a reader might
+ *  worry about — both of which now forbid a colon and neither of which carries any character-class
+ *  constraint beyond it — `evidenceGapId` is the one a producer guards and `obligationId` is the one
+ *  nothing reduces or shapes on any path. That is not only a prose risk: `junit.ts`'s `escapeXml`
  *  handles XML-illegal control characters because THIS field is where one arrives.
  *
  *  The drift test in tests/reporting/projections/projection-model.test.ts pins this list against the
