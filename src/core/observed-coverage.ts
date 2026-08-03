@@ -186,10 +186,9 @@ export function observedCaseIdentities(artifacts: readonly CoverageArtifactView[
 export function observedSelectedCaseIdentities(
   artifacts: readonly CoverageArtifactView[],
   selection: readonly TestCaseIdentity[],
-  statuses: readonly unknown[] = observedExecutedStatuses,
 ): readonly TestCaseIdentity[] {
   const selected = indexByTestCaseIdentity(selection, (identity) => identity);
-  return observedCaseIdentities(artifacts, statuses).filter((identity) => selected.get(identity).length > 0);
+  return observedCaseIdentities(artifacts).filter((identity) => selected.get(identity).length > 0);
 }
 
 /**

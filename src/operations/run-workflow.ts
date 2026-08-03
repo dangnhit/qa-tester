@@ -869,9 +869,10 @@ function selectedCaseArtifactIds(selection: RegressionSelection, artifacts: read
  *     bundle: `ensureCanonicalBundle` populates `state.executionCaseIds` from exactly the registered
  *     `test-case` artifacts, so that is what this returns.
  *
- * Two deviations from `state.executionCaseIds`, both measured and both in the safe direction. A `retest`
- * run excludes its own reproduction source from what it DRIVES (`excludeRetestSourceCases`); this scope
- * keeps it, so an observed entry for the source case cannot excuse an empty output — and `reproduce-bug`,
+ * Two deviations from `state.executionCaseIds`, both measured. A `retest` run excludes its own
+ * reproduction source from what it DRIVES (`excludeRetestSourceCases`); this scope keeps it, so an
+ * observed entry naming only the source case DOES excuse an empty output — permissive, not conservative:
+ * a case this run selects but deliberately never drives can stand in for the driven set. `reproduce-bug`,
  * which cannot legitimately return an empty output anyway, is unaffected either way. And the residual
  * subtraction in `execute-browser-test` narrows what is driven without touching `state.executionCaseIds`,
  * so it does not move this scope either.
