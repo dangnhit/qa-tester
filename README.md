@@ -97,7 +97,8 @@ Exit codes:
 `qa-skill export --root <path> --run-id <id> --format junit|sarif --out <path>` projects a **finalized**
 run's persisted release gate into a JUnit XML or a SARIF 2.1.0 file, writes a provenance sidecar to
 `<out>.provenance.json`, and prints a JSON result (`format`, `outPath`, `sidecarPath`,
-`projectionSha256`, `recommendation`, `reduced`, `unreadableRunnerReports`) to stdout. It exits `0` on
+`projectionSha256`, `recommendation`, `reduced`, `unreadableRunnerReports`, and — for `sarif` only —
+`observedResultsWithoutLocation`) to stdout. It exits `0` on
 success — **including when `recommendation` is `NOT_READY`** — because exporting itself succeeded; the
 verdict travels in the projection and the sidecar, never in this exit code. Refusals exit `3`; a
 `--run-id` that does not exist exits `5`. The full breakdown, with file:line citations, is in
@@ -174,7 +175,19 @@ sanitized runner report — `payload is not valid JSON`, or `payload is not a JS
 id and relative path. The export still exits `0`; only the spec locations that specific report would
 have contributed are missing from lane-2 rows it covers, not the results, the gate verdict, or the
 run's recorded coverage credit. The same detail is also written to stderr, not only the JSON result, so
-it surfaces in a CI log even when nobody parses stdout (`program.ts:290-294`).
+it surfaces in a CI log even when nobody parses stdout (`program.ts`).
+
+**A non-zero `observedResultsWithoutLocation` means the SARIF placed none, or not all, of the failures
+it reports.** It counts the `observed-failure` results emitted with no `locations` — a code-scanning
+reader is shown the failure with no file to open. It is a SEPARATE signal from
+`unreadableRunnerReports`, because the payload behind an unplaced result may have read perfectly and the
+join still failed: a `config.rootDir` the `--root` checkout does not contain (exporting a run on a
+different machine from the one that produced it, or across a symlinked `/tmp` prefix), two reports
+disagreeing about where one identity ran, or a path no URI can spell. The reasons are deliberately not
+distinguished in the output — all of them mean "this run cannot say where" (`sarif.ts`). The export
+still exits `0`, the gate verdict is projected in full, and a non-zero count is also written to stderr.
+The field is **absent for `junit`** rather than `0`: `renderJUnit` carries no location field at all, so
+a `0` there would read as "every failure was placed" when the truth is that JUnit never places any.
 
 **The sidecar, and what it does and does not prove.** `<out>.provenance.json` is written only after its
 projection is written successfully, and binds a hash of the projection's own bytes (`projectionSha256`)

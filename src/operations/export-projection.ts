@@ -29,6 +29,21 @@ export type ExportProjectionResult = Readonly<{
   recommendation: string;
   reduced: boolean;
   unreadableRunnerReports: readonly UnreadableRunnerReport[];
+  /**
+   * How many observed failures this projection reports without naming a source file — SARIF ONLY, and
+   * ABSENT for JUnit rather than `0`.
+   *
+   * The absence is the honest answer, not a gap: `renderJUnit` reads `location` nowhere at all, so a `0`
+   * there would read as "every failure was placed" when the truth is that a JUnit projection never places
+   * any of them. Present and `0` means the question was asked and every observed failure was placed.
+   *
+   * Non-zero is a degradation of the same class as `unreadableRunnerReports` and is deliberately a
+   * SEPARATE signal from it: the payload behind an unplaced result may have read perfectly, and the join
+   * still failed — a `config.rootDir` the run root does not contain, a spec whose identity tag two
+   * reports disagree about, or a path no URI can spell. `sarif.ts` says why the reasons are not
+   * distinguished from one another.
+   */
+  observedResultsWithoutLocation?: number;
 }>;
 
 const isFormat = (value: string): value is ProjectionFormat => value === "junit" || value === "sarif";
@@ -515,7 +530,11 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
       // compared the way they were produced; where the two spellings genuinely differ,
       // `spec-locations.ts` emits no location rather than a wrong one.
       const model = buildProjectionModel({ runId: workspace.runId, producerVersion: runtimeVersion, generatedAt: new Date().toISOString(), runRoot: resolve(options.root), artifacts, runnerReports: reports });
-      const rendered = Buffer.from(options.format === "junit" ? renderJUnit(model) : renderSarif(model), "utf8");
+      // Only the SARIF renderer answers the "could every observed failure be placed?" question, because
+      // only its output has a field to place one IN. JUnit's branch declines to answer rather than
+      // answering `0`; see `observedResultsWithoutLocation` on the result type.
+      const projected = options.format === "junit" ? { document: renderJUnit(model) } : renderSarif(model);
+      const rendered = Buffer.from(projected.document, "utf8");
       // BOTH descriptors proven before EITHER is truncated. Proving each one just before its own write
       // would leave a projection on disk that nothing vouches for the moment the sidecar is refused.
       await assertOutputsHaveOneName([projection, sidecar]);
@@ -529,6 +548,7 @@ export async function exportProjection(options: Readonly<{ root: string; runId: 
         projectionSha256: projectionChecksum(rendered),
         recommendation: model.gate.recommendation, reduced: model.reduced,
         unreadableRunnerReports: unreadable,
+        ...("observedResultsWithoutLocation" in projected ? { observedResultsWithoutLocation: projected.observedResultsWithoutLocation } : {}),
       };
     } finally {
       await releaseOutputs([projection, sidecar], completed);

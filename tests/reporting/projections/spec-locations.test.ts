@@ -421,7 +421,7 @@ describe("specLocationsByEntryIdentity", () => {
     };
     const model = buildProjectionModel({ ...base, artifacts: [gateArtifact, batchWithTaggedEntry], runnerReports: [report] });
 
-    const sarif = JSON.parse(renderSarif(model)) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
+    const sarif = JSON.parse(renderSarif(model).document) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string } } }[] }[] }] };
     const uri = sarif.runs[0].results.find((result) => result.ruleId === "observed-failure")?.locations?.[0]?.physicalLocation.artifactLocation.uri ?? "";
     const resolved = new URL(uri, "https://example.invalid/checkout/");
 

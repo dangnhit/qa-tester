@@ -175,6 +175,11 @@ describe("exportProjection", () => {
     // can prove which gate the file projects but not what that gate was computed from.
     expect(Array.isArray(sidecar.sourceArtifacts) && (sidecar.sourceArtifacts as unknown[]).length > 0).toBe(true);
     expect(bytes.toString("utf8")).toContain("<testsuites");
+    // ABSENT rather than `0` for JUnit, because `renderJUnit` reads `location` nowhere at all: a `0`
+    // here would read as "every observed failure was placed" when the truth is that this projection
+    // never places any of them. The question does not apply, so the field does not answer it.
+    expect(result.observedResultsWithoutLocation).toBeUndefined();
+    expect(Object.keys(result)).not.toContain("observedResultsWithoutLocation");
   });
 
   it("exports SARIF from the same run, and reports the gate's own recommendation without re-deriving it", async () => {
@@ -183,7 +188,10 @@ describe("exportProjection", () => {
 
     const result = await exportProjection({ root, runId, format: "sarif", outPath });
 
-    expect(result).toMatchObject({ format: "sarif", outPath, sidecarPath: `${outPath}.provenance.json`, recommendation: "NOT_READY", reduced: false, unreadableRunnerReports: [] });
+    // `observedResultsWithoutLocation: 0` is the other end of the count below: this run's one observed
+    // failure DOES join a location, so a count hardcoded to the number of observed results reddens here
+    // while the case below still passes.
+    expect(result).toMatchObject({ format: "sarif", outPath, sidecarPath: `${outPath}.provenance.json`, recommendation: "NOT_READY", reduced: false, unreadableRunnerReports: [], observedResultsWithoutLocation: 0 });
     const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string }[] }] };
     expect(sarif.runs[0].results.map((entry) => entry.ruleId)).toContain("evidence-gap");
   });
@@ -203,6 +211,33 @@ describe("exportProjection", () => {
     const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: { physicalLocation: { artifactLocation: { uri: string }; region?: { startLine: number } } }[] }[] }] };
     const observed = sarif.runs[0].results.find((entry) => entry.ruleId === "observed-failure");
     expect(observed?.locations).toEqual([{ physicalLocation: { artifactLocation: { uri: "e2e/checkout.spec.ts" }, region: { startLine: 42 } } }]);
+  });
+
+  /**
+   * A SARIF file that is valid, exits 0, and can place NONE of the failures it reports. Nothing flagged
+   * that before this count: `unreadableRunnerReports` stays empty because the payload reads perfectly,
+   * and the projection carries the gate verdict either way, so an operator whose code-scanning UI shows
+   * every failure attached to the repository rather than to a file had no signal at all.
+   *
+   * `rootDir` is absolute and well-formed and simply names a directory the run root does not contain —
+   * the "two spellings genuinely differ" case `exportProjection` names where it chooses `resolve(root)`,
+   * reached in practice by exporting a run on a different machine from the one that produced it, or
+   * across a symlinked `/tmp` prefix. `runRootRelativePath` refuses to rebase it and emits no location
+   * rather than a wrong one, which is correct and is exactly why the count has to exist.
+   */
+  it("counts the observed failures it could not place, when the join places none of them", async () => {
+    const { root, runId } = await finalizedRun([observation({ report: () => reportTagging("/produced/on/another/machine/e2e", "TC-CHECKOUT", "checkout.spec.ts", 42) })]);
+    const outPath = join(root, "unplaced.sarif");
+
+    const result = await exportProjection({ root, runId, format: "sarif", outPath });
+
+    expect(result.observedResultsWithoutLocation).toBe(1);
+    // The payload READ fine. This is the join failing, not the read, and the two are separate signals.
+    expect(result.unreadableRunnerReports).toEqual([]);
+    const sarif = JSON.parse(await readFile(outPath, "utf8")) as { runs: [{ results: { ruleId: string; locations?: unknown }[] }] };
+    const observed = sarif.runs[0].results.filter((entry) => entry.ruleId === "observed-failure");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.locations).toBeUndefined();
   });
 
   // The reason is a FIXED string in both rows, and the assertions pin that: V8's SyntaxError text would

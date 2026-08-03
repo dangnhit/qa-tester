@@ -129,19 +129,33 @@ function observedResult(row: AttemptRow): SarifResult {
 }
 
 /**
+ * A rendered SARIF document, and how many of the observed failures in it name no source location.
+ *
+ * The count is reported ALONGSIDE the bytes rather than re-derived by the caller, and that is the whole
+ * point of returning it here: `observedResult` above has two independent reasons to omit a location and
+ * declares them indistinguishable in the output, so a caller asking the model the same question would be
+ * a second derivation of a decision this file already made — and could only ever agree, or disagree and
+ * be wrong. Counted over the OBSERVED results alone: a gate verdict and a finding are not file positions
+ * that failed to resolve, they are facts about the run that have no file, so folding them in would make
+ * the number non-zero for every export and mean nothing.
+ */
+export type SarifProjection = Readonly<{ document: string; observedResultsWithoutLocation: number }>;
+
+/**
  * Renders a `ProjectionModel` as a SARIF 2.1.0 document. Pure function, no filesystem — the caller
  * decides where the string lands. Unlike `renderJUnit`, this renderer DOES carry `findings`: SARIF feeds
  * GitHub code scanning, which is exactly where an open bug, an unmet coverage obligation, an evidence
  * gap, and a failing gate rule belong, so all four surface here as `result`s.
  */
-export function renderSarif(model: ProjectionModel): string {
+export function renderSarif(model: ProjectionModel): SarifProjection {
+  const observed = model.attempts.filter((row) => row.lane === "observed-entry" && row.status === "FAILED").map(observedResult);
   const results: SarifResult[] = [
     // A gate rule that PASSED has nothing to report — this is a projection of what is wrong, not a
     // restatement of the whole gate; JUnit already carries the full pass/fail record for every rule.
     ...model.gate.verdicts.filter((verdict) => !verdict.passed)
       .map((verdict) => ({ ruleId: verdict.rule, level: "error" as const, message: { text: verdict.reason } })),
     ...model.findings.map((finding) => ({ ruleId: finding.ruleId, level: finding.level, message: { text: finding.message } })),
-    ...model.attempts.filter((row) => row.lane === "observed-entry" && row.status === "FAILED").map(observedResult),
+    ...observed,
   ];
   // `rules` de-duplicates by ruleId so the same finding kind or gate rule isn't declared twice when it
   // fires more than once in one run.
@@ -180,5 +194,10 @@ export function renderSarif(model: ProjectionModel): string {
       results,
     }],
   };
-  return `${JSON.stringify(sarif, null, 2)}\n`;
+  return {
+    document: `${JSON.stringify(sarif, null, 2)}\n`,
+    // Read off the results this render actually emitted, not recomputed from `model.attempts`: the
+    // `artifactUri` half of the omission is not visible on the model at all.
+    observedResultsWithoutLocation: observed.filter((result) => result.locations === undefined).length,
+  };
 }

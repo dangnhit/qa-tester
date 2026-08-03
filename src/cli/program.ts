@@ -309,6 +309,12 @@ export async function runCli(argv: string[], options: CliOptions): Promise<CliRe
       if (result.unreadableRunnerReports.length > 0) {
         stderr += `Note: ${result.unreadableRunnerReports.length} registered payload(s) could not be read as a sanitized runner report, so any spec locations they carried are absent from this projection: ${result.unreadableRunnerReports.map((entry) => `${entry.artifactId} (${entry.relativePath}): ${entry.reason}`).join("; ")}\n`;
       }
+      // The SAME shape of announcement for the other degradation, and a separate one because it has a
+      // separate cause: a payload that read perfectly can still join no location. Left unsaid, a SARIF
+      // file that places none of the failures it reports exits 0 and looks exactly like a healthy one.
+      if (result.observedResultsWithoutLocation !== undefined && result.observedResultsWithoutLocation > 0) {
+        stderr += `Note: ${result.observedResultsWithoutLocation} observed failure(s) in this projection name no source file, so a code-scanning reader is shown the failure with nowhere to look. The run recorded no spec location it could vouch for — check that --root names the same checkout the runner reported as its config.rootDir.\n`;
+      }
     });
   try {
     await program.parseAsync(argv, { from: "user" });

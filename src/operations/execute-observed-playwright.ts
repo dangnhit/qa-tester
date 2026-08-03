@@ -157,7 +157,9 @@ async function assertAnchorSurvivedTheRun(root: string, specDir: string, before:
   // the tracked content matches HEAD — and the digest deliberately measures something else: the raw bytes
   // that actually stood on disk. The first case is precisely the hostile-`globalTeardown` actor this
   // function exists to stop. `tests/observed/execute-observed-playwright.test.ts` pins each half against
-  // the state only that half can see, so deleting either line reddens a test rather than passing silently.
+  // the state only that half can see, so deleting either line reddens a test rather than passing silently
+  // — and BOTH routes to the digest half above have a case of their own there, the symlink swap and a
+  // `tr A-Z a-z` clean filter, so neither can be simplified away on the grounds that the other covers it.
   const moved = [
     ...(after.commitSha === before.commitSha ? [] : [`commitSha ${before.commitSha} -> ${after.commitSha}`]),
     ...(after.specTreeSha256 === before.specTreeSha256 ? [] : [`specTreeSha256 ${before.specTreeSha256} -> ${after.specTreeSha256}`]),

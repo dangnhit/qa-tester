@@ -461,6 +461,48 @@ describe("executeObservedPlaywright anchor re-verification", () => {
     expect(await registeredOfType(built, "evidence")).toHaveLength(0);
   }, 60_000);
 
+  it("refuses a size-preserving clean filter that hides a mid-run edit from git status, which only the digest half can see", async () => {
+    const built = await fixture();
+    // The SECOND state `execute-observed-playwright.ts` names as reaching the digest half alone, and the
+    // one its comment claimed was pinned when only the symlink case was. `specTreeLine` hashes the RAW
+    // working-tree bytes (`src/core/git-anchor.ts`, whose contract says contents are never normalized)
+    // while `git status` compares CLEAN-FILTER OUTPUT against the index blob. A filter whose output is
+    // unchanged by the edit therefore leaves the tree spotless at HEAD while the hashed bytes moved.
+    //
+    // `tr A-Z a-z` is that filter: it is size-preserving, and lowercasing an already-lowercase committed
+    // blob is the identity, so `clean(UPPERCASE) === clean(lowercase)` and git sees no difference at all.
+    // MEASURED on git 2.44.0 before this test was written — `git status --porcelain --untracked-files=all
+    // --ignored=matching -- :(literal)specs` prints nothing after the rewrite — and asserted again below
+    // rather than trusted, because a filter that silently failed to run would make this test pass through
+    // the DIRTY branch instead, which refuses with the same code.
+    await appendFile(join(built.root, ".git", "config"), ["[filter.lowercase]", "\tclean = tr A-Z a-z", ""].join("\n"));
+    // Scoped to one file: `observed.spec.js` contains `toBe`, so a filter applied to it would lowercase
+    // that too and the tree would be dirty before the run for a reason that has nothing to do with this.
+    // And it lives INSIDE the anchored directory, where it must be COMMITTED — measured, an uncommitted
+    // `specs/.gitattributes` shows as `?? specs/.gitattributes` in the scoped status and `resolveGitAnchor`
+    // refuses SPEC_TREE_DIRTY up front, which looks like this test passing and is not.
+    await writeFile(join(built.root, "specs", ".gitattributes"), "filtered.spec.js filter=lowercase\n");
+    await writeFile(join(built.root, "specs", "filtered.spec.js"), "// lowercase marker\n");
+    await git(built.root, "add", "-A");
+    await git(built.root, "commit", "-q", "-m", "a filtered spec");
+
+    const runner = spy(runnerReport([passingSpec()], built.root), 0, async () => {
+      await writeFile(join(built.root, "specs", "filtered.spec.js"), "// LOWERCASE MARKER\n");
+    });
+
+    const refusal = await refusalOf(executeObservedPlaywright({ root: built.root, runId: built.runId, specDir: "specs", args: [], execute: runner.execute }));
+
+    // The tree git can see is still clean, so the dirty check inside the second `resolveGitAnchor` had
+    // nothing to report and the refusal below cannot have come from it.
+    expect(await git(built.root, "status", "--porcelain", "--untracked-files=all", "--ignored=matching", "--", ":(literal)specs")).toBe("");
+    expect(refusal.code).toBe("OBSERVED_RUN_ANCHOR_CHANGED");
+    expect(refusal.message).toContain("- specTreeSha256 ");
+    // HEAD never moved and the commit half stays silent, so this pins the digest comparison alone.
+    expect(refusal.message).not.toContain("- commitSha ");
+    expect(await registeredOfType(built, "test-result-batch")).toHaveLength(0);
+    expect(await registeredOfType(built, "evidence")).toHaveLength(0);
+  }, 60_000);
+
   it("registers the run when the spec tree is untouched, so the re-check costs a clean run nothing", async () => {
     const built = await fixture();
     // The companion to the three above: the re-check must not refuse a run that changed nothing. A file

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 
 import { describe, expect, it } from "vitest";
 
-import { renderSarif } from "../../../src/reporting/projections/sarif.js";
+import { renderSarif, type SarifProjection } from "../../../src/reporting/projections/sarif.js";
 import type { AttemptRow, ProjectionModel } from "../../../src/reporting/projections/projection-model.js";
 
 // The shared catalog instance is Ajv2020 with strict:true (src/contracts/catalog.ts:71). The SARIF
@@ -62,7 +62,9 @@ type SarifDoc = {
     results: SarifResult[];
   }];
 };
-const parseSarif = (json: string): SarifDoc => JSON.parse(json) as SarifDoc;
+/** Takes the whole `SarifProjection` rather than its `document`, so every case below reads
+ *  `parseSarif(renderSarif(...))` unchanged and only the cases that care about the count name it. */
+const parseSarif = (rendered: SarifProjection): SarifDoc => JSON.parse(rendered.document) as SarifDoc;
 
 describe("renderSarif", () => {
   it("validates against the official SARIF 2.1.0 schema", async () => {
@@ -77,7 +79,7 @@ describe("renderSarif", () => {
       ],
       attempts: [{ lane: "observed-entry", id: "E-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", durationMs: 5, provenance: "runtime-observed", location: { file: "specs/checkout.spec.ts", line: 42 } }],
       anchor: { commitSha: "d".repeat(40), specTreeSha256: "e".repeat(64) },
-    }))))).toBe(true);
+    })).document))).toBe(true);
   });
 
   /**
@@ -99,7 +101,7 @@ describe("renderSarif", () => {
     ["a literal percent sign", "e2e/100%-done.spec.ts"],
     ["a bracket", "e2e/a[1].spec.ts"],
   ])("still validates against the official schema when a spec filename carries %s", async (_case, file) => {
-    expect((await compileSarifSchema())(JSON.parse(renderSarif(model({ attempts: [rowLocatedAt(file)] }))))).toBe(true);
+    expect((await compileSarifSchema())(JSON.parse(renderSarif(model({ attempts: [rowLocatedAt(file)] })).document))).toBe(true);
   });
 
   /**
@@ -156,7 +158,7 @@ describe("renderSarif", () => {
    * the whole failure pass.
    */
   it("does not throw on a spec filename carrying a lone surrogate, and omits the location rather than naming a file that does not exist", () => {
-    const render = (): string => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800name.spec.ts")] }));
+    const render = (): SarifProjection => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800name.spec.ts")] }));
 
     expect(render).not.toThrow();
 
@@ -171,7 +173,7 @@ describe("renderSarif", () => {
    * surrogate in the last segment; `encodeURIComponent` throws on whichever segment holds it.
    */
   it("does not throw when the lone surrogate is in a directory segment rather than the filename", () => {
-    const render = (): string => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800dir/name.spec.ts")] }));
+    const render = (): SarifProjection => renderSarif(model({ attempts: [rowLocatedAt("e2e/bad\uD800dir/name.spec.ts")] }));
 
     expect(render).not.toThrow();
 
@@ -205,6 +207,38 @@ describe("renderSarif", () => {
     expect(observed[0]?.locations?.[0]?.physicalLocation).toEqual({ artifactLocation: { uri: "specs/checkout.spec.ts" }, region: { startLine: 42 } });
     expect(observed[1]?.locations).toBeUndefined();
     expect(observed[2]?.locations?.[0]?.physicalLocation).toEqual({ artifactLocation: { uri: "specs/no-line.spec.ts" } });
+  });
+
+  /**
+   * The COUNT, over BOTH reasons a result carries no location, because the renderer treats them as one
+   * claim — "this run cannot say where" — and `observedResult`'s TSDoc says they are deliberately
+   * indistinguishable in the output. E-2 has no `location` on the model at all; E-4's location is a path
+   * no URI can spell, which is invisible on the model and visible only after `artifactUri` has answered.
+   * A count derived from `model.attempts` instead of from the rendered results would say 1 here.
+   *
+   * The located row and the PASSED row hold the denominator honest, and the base model's failing gate
+   * verdict is the third: it is a result with no location and must NOT be counted, because a gate rule is
+   * not a file position that failed to resolve.
+   */
+  it("counts every observed failure it emitted without a location, whichever of the two reasons applied", () => {
+    const rendered = renderSarif(model({
+      findings: [{ ruleId: "open-bug", level: "warning", id: "BUG-2", message: "open bug BUG-2, severity Minor" }],
+      attempts: [
+        { lane: "observed-entry", id: "E-1", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INST-1", status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "api", durationMs: 5, provenance: "runtime-observed", location: { file: "specs/checkout.spec.ts", line: 42 } },
+        { lane: "observed-entry", id: "E-2", testCaseId: "TC-2", testCaseRevisionId: "REV-2", testCaseInstanceId: "INST-2", status: "FAILED", failureClassification: "PRODUCT_DEFECT", executionSurface: "unit", durationMs: 5, provenance: "runtime-observed" },
+        { lane: "observed-entry", id: "E-3", testCaseId: "TC-3", testCaseRevisionId: "REV-3", testCaseInstanceId: "INST-3", status: "PASSED", failureClassification: "NONE", executionSurface: "unit", durationMs: 5, provenance: "runtime-observed" },
+        rowLocatedAt("e2e/bad\uD800name.spec.ts"),
+      ],
+    }));
+
+    expect(rendered.observedResultsWithoutLocation).toBe(2);
+    // And the count agrees with the bytes it was reported alongside, which is the only thing that makes
+    // it worth returning from here rather than deriving it somewhere else.
+    expect(parseSarif(rendered).runs[0].results.filter((result) => result.ruleId === "observed-failure" && result.locations === undefined)).toHaveLength(2);
+  });
+
+  it("counts zero when every observed failure it emitted was placed", () => {
+    expect(renderSarif(model({ attempts: [rowLocatedAt("e2e/checkout.spec.ts")] })).observedResultsWithoutLocation).toBe(0);
   });
 
   // Controller decision (not in the brief): a projection never filters on provenance
@@ -261,7 +295,7 @@ describe("renderSarif", () => {
    * sidecar that vouches for it can disagree.
    */
   it("names the model's own producerVersion, not a version read from anywhere else", () => {
-    const sarif = JSON.parse(renderSarif(model({ producerVersion: "9.9.9-test" }))) as { runs: [{ tool: { driver: { version: string } } }] };
+    const sarif = JSON.parse(renderSarif(model({ producerVersion: "9.9.9-test" })).document) as { runs: [{ tool: { driver: { version: string } } }] };
     expect(sarif.runs[0].tool.driver.version).toBe("9.9.9-test");
   });
 });
