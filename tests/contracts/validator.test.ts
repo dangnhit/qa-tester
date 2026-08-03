@@ -525,8 +525,14 @@ describe("test-result schema 3.0.0 (observed engine)", () => {
     );
   });
 
-  it("rejects a test result still declaring schemaVersion 1.0.0", () => {
-    expect(validateArtifact("test-result", { ...result, schemaVersion: "1.0.0" }).valid).toBe(false);
+  /** 1.0.0 is the version the `observedEngine` requirement superseded; 2.0.0 is the one the identity
+   *  fields' colon `pattern` superseded, and it is the only version whose rejection proves THAT bump
+   *  landed. Both are asserted on the `/schemaVersion` `const` error, so neither row can stay green
+   *  because the fixture went invalid for an unrelated reason. */
+  it.each(["1.0.0", "2.0.0"] as const)("rejects a test result still declaring schemaVersion %s", (schemaVersion) => {
+    expect(validateArtifact("test-result", { ...result, schemaVersion }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
+    );
   });
 
   it("rejects an empty observed engine, which would name no engine at all", () => {
@@ -834,12 +840,27 @@ describe("accessibilityMethod is an enum (coverage-obligation 4.0.0, test-case 3
     },
   );
 
-  /** Both bumps are independently breaking: a previously-valid free-form label is now invalid, so a
-   *  2.0.0 obligation or a 1.0.0 test case cannot be reinterpreted under the new contract. Hard break,
-   *  no migration layer. */
-  it("rejects the superseded schemaVersion on each schema (hard break, no migration layer)", () => {
-    expect(validateArtifact("coverage-obligation", { ...obligation, schemaVersion: "2.0.0" }).valid).toBe(false);
-    expect(validateArtifact("test-case", { ...testCase, schemaVersion: "1.0.0" }).valid).toBe(false);
+  /**
+   * The version each schema ACTUALLY superseded, which is the only version that proves a bump landed.
+   * `coverage-obligation` went 3.0.0 → 4.0.0 and `test-case` went 2.0.0 → 3.0.0 when the identity fields
+   * gained their colon `pattern`; the versions before those (2.0.0 and 1.0.0) are the ones the earlier
+   * `accessibilityMethod` enum break superseded, and asserting THOSE proves nothing about this bump —
+   * they were already invalid against the previous `const`, so the row passed identically before it.
+   * Measured: with both `const`s reverted to 3.0.0/2.0.0, the old assertions still passed.
+   *
+   * Asserted on the `/schemaVersion` `const` error rather than on `valid: false`, so a fixture that
+   * became invalid for some unrelated reason cannot keep this row green either. Hard break, no migration
+   * layer: a 3.0.0 obligation or a 2.0.0 test case cannot be reinterpreted under the new contract.
+   */
+  it.each([
+    ["coverage-obligation", "3.0.0", obligation],
+    ["coverage-obligation", "2.0.0", obligation],
+    ["test-case", "2.0.0", testCase],
+    ["test-case", "1.0.0", testCase],
+  ] as const)("rejects %s at the superseded schemaVersion %s (hard break, no migration layer)", (type, schemaVersion, artifact) => {
+    expect(validateArtifact(type, { ...artifact, schemaVersion }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
+    );
   });
 
   it("keeps the TypeScript mirror equal to the schema enum", () => {
@@ -1018,6 +1039,15 @@ describe("identity fields forbid a colon (closes the collision class at the data
 
   it("rejects an evidence gap whose evidenceGapId could rejoin to another's", () => {
     expect(validateArtifact("evidence-gap", { ...evidenceGap, evidenceGapId: "GAP:1" }).valid).toBe(false);
+  });
+
+  /** `evidence-gap` had NO `schemaVersion` assertion of any kind before this row, so nothing pinned its
+   *  1.0.0 → 2.0.0 bump: the `pattern` above could have been added without the bump and every test would
+   *  still have passed. Asserted on the `/schemaVersion` `const` error for the same reason as the others. */
+  it("rejects an evidence gap still declaring the superseded schemaVersion 1.0.0", () => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGap, schemaVersion: "1.0.0" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
+    );
   });
 
   const attestation = {
