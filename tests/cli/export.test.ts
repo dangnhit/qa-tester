@@ -101,18 +101,19 @@ describe("qa-skill export", () => {
 
   /**
    * MEASURED, not assumed, and deliberately NOT special-cased for this command. An unknown run id never
-   * reaches `exportProjection` at all: `RunWorkspace.open`'s `realpath` throws a raw ENOENT, which
-   * `program.ts` maps to ABORTED_OR_INTERNAL — byte for byte what `validate`, `approval record` and
-   * `attestation record` already do (`execute-observed-playwright.ts:343-346` states that ruling).
-   * Making `export` alone answer 3 here would put one command out of step with every sibling.
+   * reaches `exportProjection` at all: `RunWorkspace.open` refuses it directly (`core/run-workspace.ts`),
+   * naming the run rather than leaking the raw ENOENT its `realpath` used to throw — byte for byte what
+   * `validate`, `approval record` and `attestation record` already get from the same open call. Making
+   * `export` special-case this itself would put one command out of step with every sibling that shares it.
    */
   it("leaves an unknown run on the same exit code every other run-scoped command gives it", async () => {
     const built = await notReadyRun();
 
     const result = await runCli(["export", "--root", built.root, "--run-id", "RUN-DOES-NOT-EXIST", "--format", "junit", "--out", join(built.root, "x.xml")], { cwd: built.root });
 
-    expect(result.exitCode).toBe(ExitCode.ABORTED_OR_INTERNAL);
-    expect(result.stderr).toContain("ENOENT");
+    expect(result.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stderr).toMatch(/RUN-DOES-NOT-EXIST.*was not found/i);
   });
 
   it("still exits 0 when a registered runner report is unreadable, but says on stderr what it could not read", async () => {

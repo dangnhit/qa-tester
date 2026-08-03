@@ -1,3 +1,4 @@
+import { QaSkillsError } from "../core/errors.js";
 import { isRecord } from "../core/values.js";
 
 export type ChangeScope = Readonly<{ id: string; requirementIds: readonly string[]; codeSurfaces: readonly string[]; declaredDependencies: readonly string[]; gitPaths: readonly string[]; userScope: readonly string[] }>;
@@ -11,7 +12,7 @@ function strings(value: unknown): readonly string[] { return Array.isArray(value
 export function regressionCaseFromCanonical(value: Record<string, unknown>): RegressionCase {
   const index = isRecord(value.regressionIndex) ? value.regressionIndex : {};
   const coverage = isRecord(value.coverage) ? value.coverage : {};
-  if (typeof value.testCaseId !== "string" || typeof value.revisionId !== "string" || typeof value.instanceId !== "string") throw new Error("Canonical test case lacks exact regression instance identity");
+  if (typeof value.testCaseId !== "string" || typeof value.revisionId !== "string" || typeof value.instanceId !== "string") throw new QaSkillsError("Canonical test case lacks exact regression instance identity", "INVALID_ARTIFACT");
   return {
     testCaseId: value.testCaseId, revisionId: value.revisionId, instanceId: value.instanceId,
     requirementIds: index.requirementIds === undefined && typeof coverage.requirementId === "string" ? [coverage.requirementId] : strings(index.requirementIds),
@@ -60,8 +61,8 @@ export function isChangeScope(value: unknown): value is ChangeScope {
 
 /** Canonicalizes an explicit change input; selection never trusts an unchecksummed caller summary. */
 export async function registerChangeScope(input: Readonly<{ workspace: ChangeScopeWorkspace; changes: readonly ChangeScope[]; provenance: { kind: "git-diff" | "user-change" | "declared-change"; reference: string } }>): Promise<ArtifactRecord> {
-  if (input.changes.length === 0) throw new Error("Change scope requires at least one declared change");
-  if (!input.changes.every(isChangeScope)) throw new Error(`Change scope change must declare a string id and ${changeMappingFields.join(", ")} as arrays of strings`);
+  if (input.changes.length === 0) throw new QaSkillsError("Change scope requires at least one declared change", "INVALID_ARTIFACT");
+  if (!input.changes.every(isChangeScope)) throw new QaSkillsError(`Change scope change must declare a string id and ${changeMappingFields.join(", ")} as arrays of strings`, "INVALID_ARTIFACT");
   const changes = [...input.changes].sort((left, right) => left.id.localeCompare(right.id)).map((change) => ({ ...change, requirementIds: [...change.requirementIds].sort(), codeSurfaces: [...change.codeSurfaces].sort(), declaredDependencies: [...change.declaredDependencies].sort(), gitPaths: [...change.gitPaths].sort(), userScope: [...change.userScope].sort() }));
   const inputChecksum = sha256Text(JSON.stringify({ changes, provenance: input.provenance }));
   return input.workspace.registerArtifactValue({ type: "change-scope", value: { artifactType: "change-scope", schemaVersion: "1.0.0", producerVersion: "0.1.0", changeScopeId: `CHANGE-${input.workspace.runId}`, runId: input.workspace.runId, changes, inputChecksum, provenance: input.provenance }, relationships: [], provenance: "runtime" });

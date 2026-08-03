@@ -1059,7 +1059,21 @@ async function runQaTesterWithAdapters(runtime: QaRuntimeRegistry, input: QaWork
     const checkpoint = await checkpointWorkflow(workspace, input);
     const state: WorkflowExecutionState = { workspace, input, runtime, outputs, checkpoint, executionCaseIds: [], importedArtifactIds: [], reproductionAttemptIds: [], regressionAttemptIds: [], exploratoryFindingIds: [] };
     await hydrateCheckpointState(state);
-    if (input.retest && checkpoint.completedOperations.includes("reproduce-bug")) state.retestSource = await sourceBugFromReference(workspace, input.retest.sourceBug);
+    if (input.retest && checkpoint.completedOperations.includes("reproduce-bug")) {
+      // `input.retest &&` alone is a truthiness check, not the `!input.retest` shape its five siblings
+      // use, and neither form stops a `retest: {}` (present, but missing `sourceBug`): `{}` is truthy,
+      // so `!{}` is false too. The dereference below needs `sourceBug` itself, so that is what is
+      // checked, exactly like the `reproduce-bug` operation's own guard just below.
+      //
+      // MEASURED: this branch is unreachable with `sourceBug` undefined given the current code, and no
+      // test in this repo exercises it -- `checkpointWorkflow`'s own inputChecksum equality check (a few
+      // lines above) already refuses any resume whose current `input.retest` differs at all from what a
+      // prior successful `reproduce-bug` checkpointed, and `sourceBug` is part of that checksum. Fixed
+      // anyway for structural consistency with the five guards below, at zero cost, should that
+      // invariant ever change.
+      if (!input.retest.sourceBug) throw new QaSkillsError("Retest requires a checksum-bound source bug reference", "ARTIFACT_BINDING");
+      state.retestSource = await sourceBugFromReference(workspace, input.retest.sourceBug);
+    }
     const missing = missingRuntimeLabel(runtime, input);
     if (missing !== undefined) return { runId: workspace.runId, mode: input.mode, outcome: "AWAITING_RUNTIME", operationOrder: order, outputs, validation: await workspace.validate(input.mode) };
     if (input.mode === "retest") {
@@ -1135,7 +1149,11 @@ async function runClosedOperation<Name extends WorkflowOperationName>(state: Wor
     return charter as WorkflowOperationOutputMap[Name];
   }
   if (name === "reproduce-bug") {
-    if (!input.retest) throw new QaSkillsError("Retest requires a checksum-bound source bug reference", "ARTIFACT_BINDING");
+    // `!input.retest` alone passes a `retest: {}` (present, but missing `sourceBug`) straight through to
+    // the dereference below, because `{}` is truthy: `sourceBugFromReference` would then open the linked
+    // run and crash on `reference.artifactId` with `reference` undefined. Checking `sourceBug` itself is
+    // what the dereference actually needs.
+    if (!input.retest?.sourceBug) throw new QaSkillsError("Retest requires a checksum-bound source bug reference", "ARTIFACT_BINDING");
     const source = await sourceBugFromReference(workspace, input.retest.sourceBug);
     state.retestSource = source;
     const available = await cases();

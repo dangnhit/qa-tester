@@ -241,8 +241,9 @@ describe("exportProjection", () => {
 
   /**
    * The name promises an ORDERING, so the ordering is what is asserted: the run id names no run at all,
-   * so if the format check did not come first, `RunWorkspace.open`'s `realpath` would answer ENOENT
-   * instead. Getting the format message back is the proof that nothing was opened.
+   * so if the format check did not come first, `RunWorkspace.open` would refuse it directly instead (a
+   * clean refusal naming the run, not the format problem). Getting the format message back is the proof
+   * that nothing was opened.
    */
   it("refuses an unsupported format before opening anything", async () => {
     const { root } = await finalizedRun();

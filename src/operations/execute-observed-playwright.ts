@@ -341,9 +341,9 @@ function runnerWorkingDirOf(report: PlaywrightJsonReport): string | undefined {
  * Refusals from `resolveGitAnchor` and `runObservedPlaywright` are re-thrown untouched, so their own
  * messages — which name the offending paths — reach the operator verbatim rather than being reworded
  * by a second layer. This operation adds no catch-all of its own, and deliberately does not claim one:
- * exactly like `validate`, `approval record` and `attestation record`, a `--root` that does not resolve
- * surfaces as the raw filesystem error `RunWorkspace.open`'s `realpath` throws, which
- * `src/cli/program.ts` maps to `ABORTED_OR_INTERNAL`.
+ * exactly like `validate`, `approval record` and `attestation record`, an unknown `--root` or `--run-id`
+ * is refused by `RunWorkspace.open` itself (`core/run-workspace.ts`), which names the run rather than
+ * leaking the raw filesystem error its `realpath` used to throw.
  *
  * **It deliberately does NOT refuse a run whose workflow already completed `execute-browser-test`,** and
  * that is a decision rather than an omission. Registering a batch for a case lane 1 already drove states

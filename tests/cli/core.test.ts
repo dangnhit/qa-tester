@@ -151,4 +151,37 @@ describe("CLI core", () => {
     await symlink(outside, join(directory, "qa-results", "linked-run"));
     expect((await runCli(["validate", "--root", directory, "--run-id", "linked-run"], { cwd: directory })).exitCode).toBe(ExitCode.SAFETY_DENIED);
   });
+
+  // Item 2.3 (phase9-debt-clearing task 3): a missing root or missing run directory is a user typo, not
+  // an internal crash. `RunWorkspace.open`'s bare `realpath` used to throw a raw, uncoded `ENOENT`, which
+  // fell through `program.ts`'s catch-all to `ABORTED_OR_INTERNAL` (exit 5) with a filesystem path in the
+  // message -- a CI script branching on the exit code to tell "bad input" from "the tool broke" got the
+  // wrong branch, and the operator saw a raw Node path instead of the run ID they typed.
+  it("refuses an unknown run id as bad input, not an internal error", async () => {
+    const directory = await root();
+    const run = await runCli(["validate", "--root", directory, "--run-id", "no-such-run"], { cwd: directory });
+    expect(run.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(run.stderr).not.toMatch(/ENOENT/);
+    expect(run.stderr).toMatch(/no-such-run/);
+  });
+
+  it("refuses a --root that does not exist the same way as an unknown run id", async () => {
+    const directory = await root();
+    const run = await runCli(["validate", "--root", join(directory, "does-not-exist"), "--run-id", "no-such-run"], { cwd: directory });
+    expect(run.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(run.stderr).not.toMatch(/ENOENT/);
+  });
+
+  // The constraint that matters most: only ENOENT is translated. A root path that climbs through a plain
+  // file (not a directory) fails with ENOTDIR, a different errno the translation must leave alone -- a
+  // permission or I/O error is a real fault and must still surface as the internal error it is, not be
+  // folded into "bad run id".
+  it("does not swallow a non-ENOENT realpath failure into invalid input", async () => {
+    const directory = await root();
+    const filePath = join(directory, "not-a-directory");
+    await writeFile(filePath, "file");
+    const run = await runCli(["validate", "--root", join(filePath, "nested"), "--run-id", "no-such-run"], { cwd: directory });
+    expect(run.exitCode).toBe(ExitCode.ABORTED_OR_INTERNAL);
+    expect(run.stderr).toMatch(/ENOTDIR/);
+  });
 });

@@ -8,6 +8,7 @@ import { sha256, sha256Text } from "../../src/core/checksum.js";
 import type { ArtifactType } from "../../src/contracts/types.js";
 import type { ArtifactProfileName } from "../../src/core/artifact-profiles.js";
 import { atomicWriteFile } from "../../src/core/fs.js";
+import { QaSkillsError } from "../../src/core/errors.js";
 import { RunWorkspace } from "../../src/core/run-workspace.js";
 import { createBugFingerprint, createRunScopedBugId } from "../../src/defects/fingerprint.js";
 
@@ -415,6 +416,38 @@ describe("RunWorkspace", () => {
     await rename(workspace.path, movedWorkspace);
     await symlink(movedWorkspace, workspace.path);
     await expect(RunWorkspace.open(directory, workspace.runId)).rejects.toThrow(/symlink|escape/i);
+  });
+
+  // Item 2.3: a missing root or a missing run directory used to throw a raw `ENOENT` from `realpath`
+  // (bare at run-workspace.ts, and inside fs.ts's `assertRealpathWithin`), which is not a `QaSkillsError`
+  // and so fell through `program.ts`'s catch-all to `ABORTED_OR_INTERNAL` (exit 5) with a filesystem path
+  // in the message -- for what is, in both cases below, simply a run ID that does not exist.
+  it("refuses an unknown run id under a real root, naming the run rather than the raw ENOENT", async () => {
+    const directory = await root();
+    const error: unknown = await RunWorkspace.open(directory, "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(QaSkillsError);
+    expect((error as QaSkillsError).code).toBe("INVALID_ARTIFACT");
+    expect((error as Error).message).toMatch(/run 20260101T000000Z-abcdef was not found/i);
+    expect((error as Error).message).not.toMatch(/ENOENT/);
+  });
+
+  it("refuses a root that does not exist at all the same way, not a raw ENOENT from the first realpath", async () => {
+    const directory = await root();
+    const error: unknown = await RunWorkspace.open(join(directory, "does-not-exist"), "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(QaSkillsError);
+    expect((error as Error).message).toMatch(/run 20260101T000000Z-abcdef was not found/i);
+  });
+
+  // The translation above must not widen into swallowing every realpath failure: a root path that climbs
+  // THROUGH a plain file (not a directory) fails with ENOTDIR, a different errno the wrap must leave
+  // alone -- a permission or I/O error is a real fault, not a bad run id, and must still surface as one.
+  it("does not swallow a non-ENOENT realpath failure as an unknown run id", async () => {
+    const directory = await root();
+    const filePath = join(directory, "not-a-directory");
+    await writeFile(filePath, "file");
+    const error: unknown = await RunWorkspace.open(join(filePath, "nested"), "20260101T000000Z-abcdef").then(() => undefined, (caught: unknown) => caught);
+    expect(error).not.toBeInstanceOf(QaSkillsError);
+    expect((error as Error).message).toMatch(/ENOTDIR/);
   });
 
   it("registers the environment profile in the manifest and detects profile tampering", async () => {

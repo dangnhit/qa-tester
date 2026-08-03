@@ -413,6 +413,49 @@ describe("workflow scaffold: modes, charter, change scope, and retest wiring", (
     // assertion would see the earlier "not configured" message instead and fail.
     await expect(runLocalWorkflow({ cwd: root, inputPath })).rejects.toThrow(/canonical plan bundle/i);
   });
+
+  // Phase 9 debt-clearing, Task 3, Item 2.1: `changeScope` is a `runLocalWorkflow`-only field
+  // (src/cli/workflow.ts), read RAW from the `--input` file with no validation unless
+  // `workflow scaffold --change-scope-file` produced it -- exactly the seam a hand-edited file reaches
+  // that scaffold's own pre-check cannot, because it never ran. Before this fix, an empty `changes` array
+  // reached `registerChangeScope`'s bare `Error` and landed on exit 5, the code reserved for a crash.
+  it("refuses a hand-written changeScope with no declared changes as bad input, not a crash inside select-regression", async () => {
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const inputPath = join(root, "regression-empty-scope.json");
+    await scaffoldWorkflowInput({ root, mode: "regression", outputPath: inputPath, sourceRoot: root, sourceRunId: planRunId });
+    const raw = JSON.parse(await readFile(inputPath, "utf8")) as Record<string, unknown>;
+    await writeFile(inputPath, JSON.stringify({
+      ...raw,
+      changeScope: { changes: [], provenance: { kind: "declared-change", reference: "PR-1" } },
+      runtime: { changeScopeSourceId: "local-change-scope" },
+    }));
+
+    const result = await runCli(["workflow", "run", "--input", inputPath], { cwd: root });
+
+    expect(result.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(result.stderr).toMatch(/at least one declared change/i);
+  }, 30_000);
+
+  // Item 2.2: `retest: {}` is present but missing `sourceBug`, which a plain `!input.retest` guard does
+  // not catch (`{}` is truthy). Before this fix, `reproduce-bug` dereferenced `undefined.artifactId`
+  // inside `sourceBugFromReference` -- a raw TypeError with no error code, landing on exit 5 exactly like
+  // the change-scope throw above.
+  it("refuses a hand-written retest input whose retest is {} as bad input, not a crash reading its source bug", async () => {
+    const planRunId = await planningOnlyRun(root, envPath, bugIdentity);
+    const executed = await executedRunWithBug(root);
+    const scopePath = join(root, "retest-scope.json");
+    await writeFile(scopePath, JSON.stringify({ changes: [{ id: "CHG-1", requirementIds: [bugIdentity.requirementId], codeSurfaces: [], declaredDependencies: [], gitPaths: [], userScope: [] }], provenance: { kind: "declared-change", reference: "PR-1" } }));
+    const inputPath = join(root, "retest-empty.json");
+    await scaffoldWorkflowInput({ root, mode: "retest", outputPath: inputPath, sourceRoot: root, sourceRunId: planRunId, bugRunId: executed.runId, changeScopePath: scopePath });
+    const raw = JSON.parse(await readFile(inputPath, "utf8")) as Record<string, unknown>;
+    await writeFile(inputPath, JSON.stringify({ ...raw, retest: {} }));
+
+    const result = await runCli(["workflow", "run", "--input", inputPath], { cwd: root });
+
+    expect(result.exitCode).toBe(ExitCode.INVALID_INPUT);
+    expect(result.stderr).toMatch(/source bug/i);
+    expect(result.stderr).not.toMatch(/cannot read propert/i);
+  }, 30_000);
 });
 
 // Phase 8b Task 5b: the two flags the two-lane flow needs between pause and resume --
