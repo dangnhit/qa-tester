@@ -54,7 +54,7 @@ jobs:
       # a no-op cost on windows-latest.
       - run: npx playwright install chromium
       - name: Unit, path, init, and installer lifecycle tests
-        run: npm test -- tests/core tests/contracts tests/cli tests/installer
+        run: npm test -- tests/core tests/contracts tests/cli tests/installer tests/operations
       - run: npm run build
 
   browser-demo:
