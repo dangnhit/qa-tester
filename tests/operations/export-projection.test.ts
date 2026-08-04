@@ -104,7 +104,7 @@ async function finalizedRun(observations: readonly Observation[] = [observation(
   for (const entry of observations) await registerObservation(workspace, entry, root);
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
-    value: { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
+    value: { artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
   });
   await generateQaReport({ workspace });
   await workspace.finalize("execute");

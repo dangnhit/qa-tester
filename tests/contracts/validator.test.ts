@@ -162,7 +162,7 @@ const otherArtifactContracts = [
     requiredField: "affectedClaim",
     valid: {
       artifactType: "evidence-gap",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
       reason: "The upstream system redacted the response.",
@@ -1031,7 +1031,7 @@ describe("identity fields forbid a colon (closes the collision class at the data
   });
 
   const evidenceGap = {
-    artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
     reason: "The upstream system redacted the response.",
     affectedClaim: "The order was persisted successfully.",
@@ -1041,11 +1041,27 @@ describe("identity fields forbid a colon (closes the collision class at the data
     expect(validateArtifact("evidence-gap", { ...evidenceGap, evidenceGapId: "GAP:1" }).valid).toBe(false);
   });
 
-  /** `evidence-gap` had NO `schemaVersion` assertion of any kind before this row, so nothing pinned its
-   *  1.0.0 → 2.0.0 bump: the `pattern` above could have been added without the bump and every test would
-   *  still have passed. Asserted on the `/schemaVersion` `const` error for the same reason as the others. */
-  it("rejects an evidence gap still declaring the superseded schemaVersion 1.0.0", () => {
-    expect(validateArtifact("evidence-gap", { ...evidenceGap, schemaVersion: "1.0.0" }).errors).toEqual(
+  /** The triple lives only in the `scope: "attempt"` branch (`allOf[0].then`): the `operational` branch
+   *  (`allOf[1]`) forbids `attemptId`/`testCaseId`/`testCaseRevisionId`/`testCaseInstanceId` outright via
+   *  `not.anyOf.required`, so `evidenceGap` above -- which is `operational` -- cannot host this fixture. */
+  const evidenceGapAttempt = {
+    ...evidenceGap, scope: "attempt",
+    attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+  };
+
+  it("rejects an evidence gap's attempt-scoped identity components whose value could rejoin to another's", () => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseId: "TC:1" }).valid).toBe(false);
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseRevisionId: "R:A" }).valid).toBe(false);
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseInstanceId: "A:B" }).valid).toBe(false);
+  });
+
+  /** `evidence-gap` had NO `schemaVersion` assertion of any kind before the 1.0.0 → 2.0.0 row, so nothing
+   *  pinned that bump: a `pattern` could have been added without it and every test would still have
+   *  passed. 2.0.0 is the version the identity fields' colon `pattern` superseded, and is the only version
+   *  whose rejection proves THAT bump landed. Both rows are asserted on the `/schemaVersion` `const` error
+   *  for the same reason as the others. */
+  it.each(["1.0.0", "2.0.0"])("rejects an evidence gap still declaring the superseded schemaVersion %s", (schemaVersion) => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGap, schemaVersion }).errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
     );
   });

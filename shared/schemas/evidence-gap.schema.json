@@ -7,15 +7,15 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceGapId", "runId", "scope", "reason", "affectedClaim"],
   "properties": {
     "artifactType": { "const": "evidence-gap" }, "evidenceGapId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
-    "schemaVersion": { "const": "2.0.0" },
+    "schemaVersion": { "const": "3.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 }, "scope": { "enum": ["attempt", "operational"] }, "attemptId": { "type": "string", "minLength": 1 },
-    "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 },
+    "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseRevisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseInstanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" },
     "reason": { "type": "string", "minLength": 1 },
     "affectedClaim": { "type": "string", "minLength": 1 }
   },
   "allOf": [
-    { "if": { "properties": { "scope": { "const": "attempt" } } }, "then": { "properties": { "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } }, "required": ["attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } },
+    { "if": { "properties": { "scope": { "const": "attempt" } } }, "then": { "properties": { "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseRevisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseInstanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" } }, "required": ["attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } },
     { "if": { "properties": { "scope": { "const": "operational" } } }, "then": { "not": { "anyOf": [{ "required": ["attemptId"] }, { "required": ["testCaseId"] }, { "required": ["testCaseRevisionId"] }, { "required": ["testCaseInstanceId"] }] } } }
   ]
 }

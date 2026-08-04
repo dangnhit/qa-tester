@@ -60,8 +60,8 @@ async function attemptBinding(workspace: RunWorkspace, attemptId: string): Promi
 async function registerGap(workspace: RunWorkspace, attemptId: string, reason: string, affectedClaim: string): Promise<GapResult> {
   const binding = await attemptBinding(workspace, attemptId);
   const gap = binding === undefined
-    ? { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
-    : { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
+    ? { artifactType: "evidence-gap" as const, schemaVersion: "3.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
+    : { artifactType: "evidence-gap" as const, schemaVersion: "3.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
   const record = await workspace.registerArtifactValue({ type: "evidence-gap", value: gap, relationships: binding === undefined ? [] : [binding.artifactId], provenance: "runtime" });
   return { kind: "evidence-gap", descriptorArtifactId: record.id, gap };
 }

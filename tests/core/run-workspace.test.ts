@@ -740,7 +740,7 @@ describe("RunWorkspace", () => {
     const gapPath = join(directory, "gap.yaml");
     await writeFile(gapPath, [
       "artifactType: evidence-gap",
-      "schemaVersion: 2.0.0",
+      "schemaVersion: 3.0.0",
       "producerVersion: 1.0.0",
       "evidenceGapId: GAP-1",
       `runId: ${workspace.runId}`,
@@ -760,7 +760,7 @@ describe("RunWorkspace", () => {
     const gapPath = join(directory, "gap.json");
     await writeFile(gapPath, JSON.stringify({
       artifactType: "evidence-gap",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       runId: workspace.runId,
       reason: "The upstream system redacted the response.",

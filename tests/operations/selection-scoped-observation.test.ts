@@ -119,7 +119,7 @@ async function scopedWorkspace(root: string, observed: readonly ObservedEntry[],
   // attempt-scoped gap would need exactly one (`evidenceGapRule`). "Lane 2 reported no evidence" is the
   // honest reading for a run credited entirely by an observed batch.
   await workspace.registerArtifactValue({ type: "evidence-gap", relationships: [], value: {
-    artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     evidenceGapId: "GAP-SEL", runId: workspace.runId, scope: "operational",
     reason: "The observed execution reported no evidence artifacts.", affectedClaim: "observed execution evidence",
   } });
