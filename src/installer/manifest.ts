@@ -67,28 +67,40 @@ export function isRuntimeCompatible(version: string, range = runtimeCompatibilit
  *  itself semver. That same test file also covers a value with no patch ("1.2"), one with only a
  *  major ("1"), and one with a non-numeric component ("1.a.0"), so between the two anchors and
  *  those three shapes, no way to smuggle a valid-looking major past this pattern goes untested
- *  (I1, v1.0 contract freeze follow-up). */
+ *  (I1, v1.0 contract freeze follow-up). The trailing `(?:-[0-9A-Za-z.-]+)?` prerelease group is real,
+ *  not decorative: `isRuntimeCompatible` (above) accepts a prerelease like "1.0.0-rc.1", so
+ *  `createManifest` can write it as `sourceVersion`, and this pattern must still recognize the result
+ *  as a well-formed major-"1" version rather than reject the very manifest a compatible build just
+ *  wrote -- pinned by mutation in tests/installer/legacy-manifest.test.ts. */
 const semverShapePattern = /^(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 /** This project has only ever written a `runtimeRange` in this exact two-comparator shape (see
  *  `runtimeCompatibility` above and every superseded literal before it: `>=0.1.0 <1.0.0`,
  *  `>=1.0.0 <2.0.0`, ...). A range that does not parse this way is not a range to compare a major
  *  against -- `isManifest` treats it as disqualifying, the same as a missing field (I2, v1.0 contract
- *  freeze follow-up). */
+ *  freeze follow-up). A range that only STARTS like this shape -- missing its upper bound, doubling
+ *  the separating space, or trailing whitespace after it -- is disqualifying for the same reason, and
+ *  is pinned the same way, by mutation, in tests/installer/legacy-manifest.test.ts. */
 const rangeLowerBoundPattern = /^>=(\d+)\.\d+\.\d+ <\d+\.\d+\.\d+$/;
 
 /** The major version component of `value`, or `""` if `value` is not a string or is not shaped like
- *  semver at all (`exec` on a non-string coerces via `ToString`, so a number/`undefined`/object all
- *  land here too). `""` never equals a `rangeLowerBoundMajor` result -- that pattern's `(\d+)` group
- *  cannot capture zero digits -- so a shape failure and a major mismatch are rejected by the exact
- *  same comparison in `isManifest`, on purpose: two independent-looking guards that could never
- *  disagree are one guard, not two, and this keeps the code honest about that. */
+ *  semver at all. The `typeof value === "string"` check below short-circuits BEFORE `exec` ever runs
+ *  on anything else -- it is not decorative: without it, `exec` on a non-string argument coerces that
+ *  argument via `ToString` first, so `semverShapePattern.exec(["1.0.0"])` would match the array's
+ *  coerced "1.0.0" and hand back "1", accepting a `sourceVersion`/`runtime.version` that is not a
+ *  string at all. Pinned by mutation in tests/installer/legacy-manifest.test.ts. `""` never equals a
+ *  `rangeLowerBoundMajor` result -- that pattern's `(\d+)` group cannot capture zero digits -- so a
+ *  shape failure and a major mismatch are rejected by the exact same comparison in `isManifest`, on
+ *  purpose: two independent-looking guards that could never disagree are one guard, not two, and this
+ *  keeps the code honest about that. */
 function semverMajor(value: unknown): string {
   return typeof value === "string" ? (semverShapePattern.exec(value)?.[1] ?? "") : "";
 }
 
 /** The major version this manifest's own `runtimeRange` names -- its lower bound's major, e.g. "0"
- *  for `>=0.1.0 <1.0.0"` or "1" for `>=1.0.0 <2.0.0`. `undefined` for anything that does not parse
- *  as a range in this project's shape (I2). */
+ *  for `>=0.1.0 <1.0.0` or "1" for `>=1.0.0 <2.0.0`. `undefined` for anything that does not parse
+ *  as a range in this project's shape (I2), including a range that starts right but is missing its
+ *  upper bound, doubles a separating space, or trails whitespace -- pinned by mutation in
+ *  tests/installer/legacy-manifest.test.ts. */
 function rangeLowerBoundMajor(range: string): string | undefined {
   return rangeLowerBoundPattern.exec(range)?.[1];
 }

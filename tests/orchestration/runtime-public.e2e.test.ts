@@ -339,7 +339,7 @@ describe("public runtime QA Tester", () => {
     const resumedWorkspace = await RunWorkspace.open(root, targetRunId);
     const artifacts = await resumedWorkspace.readRegisteredArtifacts();
     // The attempt already had registered evidence: no live browser session existed on resume for it,
-    // so a broken guard that cannot see schema-3.0.0 evidence would report a false gap here instead.
+    // so a broken guard that cannot see schema-4.0.0 evidence would report a false gap here instead.
     expect(artifacts.filter((artifact) => artifact.record.type === "evidence-gap" && artifact.value.attemptId === attemptId)).toHaveLength(0);
     await resumedWorkspace.close();
   });

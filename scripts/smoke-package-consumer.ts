@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
+import ts from "typescript";
+
 const root = resolve(".");
 const consumer = await mkdtemp(join(tmpdir(), "qa-skills-consumer-"));
 const run = (command: string, args: string[], cwd = root): string => {
@@ -11,8 +13,88 @@ const run = (command: string, args: string[], cwd = root): string => {
   return result.stdout;
 };
 
+/**
+ * The public value+type surface `consumer.mts` (below) is generated from. This list is NOT re-derived
+ * from `src/orchestration/qa-tester.ts` at run time -- it is a checked-in, hand-maintained expectation,
+ * the same relationship `src/contracts/generated/*.d.ts` has to its schema: a human updates it, a check
+ * catches drift. Deriving it live from the current source instead would make the whole smoke test
+ * unable to fail on the one regression it exists to catch (B6, whole-branch review, Task 7 follow-up):
+ * a name added to `qa-tester.ts` and never added here would just get silently picked up, proving
+ * nothing. `readQaTesterExports` below reads the ACTUAL current exports and `verifyExportsMatch` diffs
+ * them against these two lists before anything is built or packed, so adding an export to
+ * `qa-tester.ts` without updating this file throws immediately, naming exactly what drifted.
+ *
+ * `kind` records the runtime shape each value is checked against below -- `class`-declared exports
+ * (`TestDataHookRegistry`, `ExternalPermitRegistry`) are `typeof === "function"` at runtime same as a
+ * plain function, which is why both share the "function" kind rather than needing a third.
+ */
+const expectedValueExports: readonly { name: string; kind: "function" | "array" }[] = [
+  { name: "createQaTester", kind: "function" },
+  { name: "qaTester", kind: "function" },
+  { name: "TestDataHookRegistry", kind: "function" },
+  { name: "ExternalPermitRegistry", kind: "function" },
+  { name: "selectRegressionCases", kind: "function" },
+  { name: "regressionMappingSources", kind: "array" },
+];
+const expectedTypeExports: readonly string[] = [
+  "QaRuntimeRegistry", "QaWorkflowInput", "WorkflowResult", "WorkflowOutput", "WorkflowTerminalStatus",
+  "WorkflowOperationInputMap", "WorkflowOperationOutputMap", "CorrelatedWorkflowOutputs",
+  "CanonicalPlanBundleRef", "RegisteredArtifactRef", "PendingHumanInput", "PendingHumanInputSubject",
+  "PendingObservedExecution", "RetestScenario", "RetestSource", "PublicWorkflowMode", "WorkflowOperationName",
+  "WorkspaceValidation", "WorkspaceDiagnostic", "ArtifactRecord", "ReleaseRecommendation", "ExplorationCharter",
+  "ExplorationAction", "SecretResolver", "TelemetryFinding", "EvidencePolicyLayers", "EvidencePolicyLayer",
+  "EvidenceChannel", "EvidenceMode", "EvidenceRedactionPolicy", "TelemetryScrubber", "TelemetryPayload",
+  "TestDataHookDescriptor", "HookRunners", "ProducedResource", "ExternalPermit", "ChangeScope", "RegressionCase",
+  "RegressionDecision", "RegressionSelection", "RegressionSource", "UnmappedChangeRisk",
+];
+
+/** Syntactic-only export scan (no type checker, no program) of one source file: every top-level
+ *  `export { ... }` / `export type { ... }` clause (from-re-export or local), plus a directly-exported
+ *  `function`/`class`/`const` declaration. Good enough for `qa-tester.ts`'s actual shape -- a barrel of
+ *  re-exports plus one local `function` -- without needing a full `ts.Program`. */
+function readQaTesterExports(sourcePath: string, sourceText: string): { values: string[]; types: string[] } {
+  const sourceFile = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const values: string[] = [];
+  const types: string[] = [];
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) {
+        (statement.isTypeOnly || element.isTypeOnly ? types : values).push(element.name.text);
+      }
+      continue;
+    }
+    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+    if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) values.push(statement.name.text);
+    else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) values.push(declaration.name.text);
+    }
+  }
+  return { values, types };
+}
+
+/** Throws naming every name that drifted, in either direction, the moment `qa-tester.ts`'s real exports
+ *  and the two expected lists above disagree -- before `npm run build` even starts. Confirmed by
+ *  mutation: adding an export to `qa-tester.ts` with nothing else touched left this smoke test green
+ *  before this function existed. */
+function verifyExportsMatch(actual: { values: string[]; types: string[] }): void {
+  const expectedValueNames = expectedValueExports.map((entry) => entry.name);
+  const drift = [
+    ...expectedValueNames.filter((name) => !actual.values.includes(name)).map((name) => `expected value export missing from qa-tester.ts: ${name}`),
+    ...actual.values.filter((name) => !expectedValueNames.includes(name)).map((name) => `qa-tester.ts exports a value not listed here: ${name}`),
+    ...expectedTypeExports.filter((name) => !actual.types.includes(name)).map((name) => `expected type export missing from qa-tester.ts: ${name}`),
+    ...actual.types.filter((name) => !expectedTypeExports.includes(name)).map((name) => `qa-tester.ts exports a type not listed here: ${name}`),
+  ];
+  if (drift.length > 0) {
+    throw new Error(`consumer.mts's expected public API list has drifted from src/orchestration/qa-tester.ts -- update expectedValueExports/expectedTypeExports in scripts/smoke-package-consumer.ts to match:\n${drift.map((line) => `  - ${line}`).join("\n")}`);
+  }
+}
+
 let tarball: string | undefined;
 try {
+  const qaTesterPath = join(root, "src", "orchestration", "qa-tester.ts");
+  verifyExportsMatch(readQaTesterExports(qaTesterPath, await readFile(qaTesterPath, "utf8")));
+
   run("npm", ["run", "build"]);
   const packed = JSON.parse(run("npm", ["pack", "--json"])) as { filename: string; files: { path: string }[] }[];
   const packageResult = packed[0];
@@ -28,27 +110,18 @@ try {
   // resolves in the source tree but not from the installed tarball. This used to import only
   // `createQaTester` -- one name out of forty-eight -- which is not a smoke test of "the public API
   // installs correctly," just of one function in it. Values and types are two separate
-  // `import`/`import type` statements because they are proven two different ways: the 42 types have
+  // `import`/`import type` statements because they are proven two different ways: the types have
   // no runtime shape, so naming them in an `import type` and letting `tsc` resolve each against the
   // installed package's `.d.ts` (failing with "has no exported member" the moment one is missing) IS
-  // the whole assertion for those. The 6 values get that same `.d.ts` check AND, because `tsc --noEmit`
+  // the whole assertion for those. The values get that same `.d.ts` check AND, because `tsc --noEmit`
   // emits no JS and this script never previously ran the file, a second and different failure mode:
   // the `typeof`/`Array.isArray` checks below only prove anything once `consumer.mts` is actually
   // executed, which happens after the `tsc` invocation.
   const consumerSource = `import {
-  createQaTester, qaTester, TestDataHookRegistry, ExternalPermitRegistry,
-  selectRegressionCases, regressionMappingSources,
+  ${expectedValueExports.map((entry) => entry.name).join(", ")},
 } from "@vigentix/qa-skills";
 import type {
-  QaRuntimeRegistry, QaWorkflowInput, WorkflowResult, WorkflowOutput, WorkflowTerminalStatus,
-  WorkflowOperationInputMap, WorkflowOperationOutputMap, CorrelatedWorkflowOutputs,
-  CanonicalPlanBundleRef, RegisteredArtifactRef, PendingHumanInput, PendingHumanInputSubject,
-  PendingObservedExecution, RetestScenario, RetestSource, PublicWorkflowMode, WorkflowOperationName,
-  WorkspaceValidation, WorkspaceDiagnostic, ArtifactRecord, ReleaseRecommendation, ExplorationCharter,
-  ExplorationAction, SecretResolver, TelemetryFinding, EvidencePolicyLayers, EvidencePolicyLayer,
-  EvidenceChannel, EvidenceMode, EvidenceRedactionPolicy, TelemetryScrubber, TelemetryPayload,
-  TestDataHookDescriptor, HookRunners, ProducedResource, ExternalPermit, ChangeScope, RegressionCase,
-  RegressionDecision, RegressionSelection, RegressionSource, UnmappedChangeRisk,
+  ${expectedTypeExports.join(", ")},
 } from "@vigentix/qa-skills";
 // Type-only namespace import: proves the "./cli" subpath resolves to a real declaration file at the
 // packaging boundary without importing a VALUE from it. "./cli" compiles to the same file
@@ -61,13 +134,10 @@ import type {
 import type * as QaSkillsCli from "@vigentix/qa-skills/cli";
 type CliSubpathHasTypes = typeof QaSkillsCli;
 
-if (typeof createQaTester !== "function") throw new Error("missing public API: createQaTester");
-if (typeof qaTester !== "function") throw new Error("missing public API: qaTester");
-if (typeof TestDataHookRegistry !== "function") throw new Error("missing public API: TestDataHookRegistry");
-if (typeof ExternalPermitRegistry !== "function") throw new Error("missing public API: ExternalPermitRegistry");
-if (typeof selectRegressionCases !== "function") throw new Error("missing public API: selectRegressionCases");
-if (!Array.isArray(regressionMappingSources)) throw new Error("missing public API: regressionMappingSources");
-process.stdout.write("consumer.mts: all 6 public values present with the expected runtime shape\\n");
+${expectedValueExports.map((entry) => entry.kind === "function"
+    ? `if (typeof ${entry.name} !== "function") throw new Error("missing public API: ${entry.name}");`
+    : `if (!Array.isArray(${entry.name})) throw new Error("missing public API: ${entry.name}");`).join("\n")}
+process.stdout.write("consumer.mts: all ${expectedValueExports.length} public values present with the expected runtime shape\\n");
 `;
   await writeFile(join(consumer, "consumer.mts"), consumerSource);
   run(process.execPath, [

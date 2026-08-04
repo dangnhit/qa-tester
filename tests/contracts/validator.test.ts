@@ -1078,9 +1078,14 @@ describe("identity fields forbid a colon (closes the collision class at the data
     expect(validateArtifact("human-attestation", { ...attestation, obligationId: "COV:1" }).valid).toBe(false);
   });
 
-  /** `evidence.subject`'s attempt branch carries the exact same testCaseId/revisionId/instanceId triple
-   *  as the other six schemas above, but was left out of the original sweep: it lives one level down,
-   *  inside a `oneOf` branch rather than at the artifact's top level. */
+  /** `evidence.subject`'s attempt branch carries the same testCaseId/testCaseRevisionId/testCaseInstanceId
+   *  triple as two of the six schemas above (`test-result`, `test-result-batch`'s entries) -- Task 7 made
+   *  evidence-gap's attempt scope a third. The remaining three (`test-case`, `coverage-obligation`,
+   *  `human-attestation`) do not: `test-case` carries its own, differently-named identity
+   *  (testCaseId/revisionId/instanceId), and the other two carry a single id. `evidence.subject` was left
+   *  out of the original sweep not because it lives one level down -- `test-result-batch.entries[]` does
+   *  too, and was patched in Phase 9 -- but because it lives inside a `oneOf` branch, which that sweep's
+   *  site list never reached. */
   const evidence = {
     artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",

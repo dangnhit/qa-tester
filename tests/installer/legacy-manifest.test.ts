@@ -287,3 +287,68 @@ describe("I1: semverShapePattern must be full semver, not just \"starts with dig
     });
   }
 });
+
+/**
+ * B1 (whole-branch review, Task 7 follow-up): `rangeLowerBoundPattern` gates `runtimeRange` the same
+ * way I1's `semverShapePattern` gates `sourceVersion`/`runtime.version` above, but before the cases
+ * below, no test told apart the full two-comparator shape (`^>=X.Y.Z <A.B.C$`) from a pattern that only
+ * checks the string STARTS `>=digits`. Measured by mutation (controller): dropping everything from the
+ * required space onward left `tests/installer` green, and loosening all the way to a bare digit-capture
+ * left it green too. The three values below are three ways a `runtimeRange` can start exactly right and
+ * still not be this project's shape: no upper bound, a doubled separating space, and trailing
+ * whitespace after the upper bound.
+ */
+describe("B1: rangeLowerBoundPattern must be the exact two-comparator shape, not just \"starts with >=digits\"", () => {
+  const malformedButLowerBoundLooking = [
+    [">=1.0.0", "missing upper bound"],
+    [">=1.0.0  <2.0.0", "a doubled space between the two comparators"],
+    [">=1.0.0 <2.0.0 ", "trailing whitespace after the upper bound"],
+  ] as const;
+
+  for (const [value, why] of malformedButLowerBoundLooking) {
+    it(`readManifest rejects runtimeRange "${value}" (${why}) even though it starts like a real range`, async () => {
+      const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+      const installed = await installSkills(options);
+      const path = join(installed.root, manifestFilename);
+      const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+      await writeFile(path, JSON.stringify({ ...manifest, runtimeRange: value }));
+
+      await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+    });
+  }
+});
+
+/**
+ * B2 (whole-branch review, Task 7 follow-up): two more spots in the same file with real behavior no
+ * mutation caught. First, `semverShapePattern`'s prerelease group was never pinned: dropping it left
+ * `tests/installer` green, even though `compatibility.test.ts` asserts
+ * `isRuntimeCompatible("1.0.0-rc.1") === true`, so `createManifest` can write that exact string as
+ * `sourceVersion` -- under the mutation, `readManifest` would refuse the very manifest a compatible
+ * build just wrote. Second, `semverMajor`'s `typeof value === "string"` narrowing was never pinned
+ * either: dropping it also left `tests/installer` green, because `semverShapePattern.exec` coerces a
+ * non-string argument via `ToString` before matching, so a `sourceVersion` written as the JSON array
+ * `["1.0.0"]` coerces to the string "1.0.0" and would be accepted as major "1" -- a manifest field that
+ * is not even a string sneaking past shape validation.
+ */
+describe("B2: semverShapePattern's prerelease group, and semverMajor's typeof narrowing", () => {
+  it("readManifest accepts a sourceVersion carrying a prerelease suffix, the exact shape createManifest can write when isRuntimeCompatible allows it", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, sourceVersion: "1.0.0-rc.1" }));
+
+    const verification = await verifySkills(options);
+    expect(verification.status).toBe("valid");
+  });
+
+  it("readManifest rejects a sourceVersion given as a JSON array, even though exec would coerce it to a matching string", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, sourceVersion: ["1.0.0"] }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
+});

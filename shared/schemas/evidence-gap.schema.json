@@ -15,7 +15,7 @@
     "affectedClaim": { "type": "string", "minLength": 1 }
   },
   "allOf": [
-    { "if": { "properties": { "scope": { "const": "attempt" } } }, "then": { "properties": { "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseRevisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseInstanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" } }, "required": ["attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } },
+    { "if": { "properties": { "scope": { "const": "attempt" } } }, "then": { "properties": { "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } }, "required": ["attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"] } },
     { "if": { "properties": { "scope": { "const": "operational" } } }, "then": { "not": { "anyOf": [{ "required": ["attemptId"] }, { "required": ["testCaseId"] }, { "required": ["testCaseRevisionId"] }, { "required": ["testCaseInstanceId"] }] } } }
   ]
 }
