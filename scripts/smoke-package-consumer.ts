@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import ts from "typescript";
@@ -20,9 +20,13 @@ const run = (command: string, args: string[], cwd = root): string => {
  * catches drift. Deriving it live from the current source instead would make the whole smoke test
  * unable to fail on the one regression it exists to catch (B6, whole-branch review, Task 7 follow-up):
  * a name added to `qa-tester.ts` and never added here would just get silently picked up, proving
- * nothing. `readQaTesterExports` below reads the ACTUAL current exports and `verifyExportsMatch` diffs
- * them against these two lists before anything is built or packed, so adding an export to
- * `qa-tester.ts` without updating this file throws immediately, naming exactly what drifted.
+ * nothing. `readQaTesterExports` below asks the TypeScript type checker what `qa-tester.ts` actually
+ * exports -- every declaration form, because the checker resolves the module's export table rather
+ * than pattern-matching syntax kinds -- and `verifyExportsMatch` diffs that against these two lists
+ * before anything is built or packed, so adding ANY export to `qa-tester.ts` without updating this
+ * file throws immediately, naming exactly what drifted. (A first version of `readQaTesterExports` used
+ * a syntactic node-kind scan instead and missed five declaration forms entirely -- see that function's
+ * own comment.)
  *
  * `kind` records the runtime shape each value is checked against below -- `class`-declared exports
  * (`TestDataHookRegistry`, `ExternalPermitRegistry`) are `typeof === "function"` at runtime same as a
@@ -48,35 +52,66 @@ const expectedTypeExports: readonly string[] = [
   "RegressionDecision", "RegressionSelection", "RegressionSource", "UnmappedChangeRisk",
 ];
 
-/** Syntactic-only export scan (no type checker, no program) of one source file: every top-level
- *  `export { ... }` / `export type { ... }` clause (from-re-export or local), plus a directly-exported
- *  `function`/`class`/`const` declaration. Good enough for `qa-tester.ts`'s actual shape -- a barrel of
- *  re-exports plus one local `function` -- without needing a full `ts.Program`. */
-function readQaTesterExports(sourcePath: string, sourceText: string): { values: string[]; types: string[] } {
-  const sourceFile = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+/**
+ * Full-`ts.Program` export read: resolves `qaTesterPath` through the real type checker and asks it,
+ * via `checker.getExportsOfModule`, what the module's export table actually contains -- every
+ * declaration form uniformly, because the checker answers "what does this module export" rather than
+ * matching a finite list of AST node kinds.
+ *
+ * The FIRST version of this function was a syntactic scan (`ts.isExportDeclaration` / `isFunctionDeclaration`
+ * / `isClassDeclaration` / `isVariableStatement`, one `if` per kind) and missed five real declaration
+ * forms entirely (B6 round 2, whole-branch review, measured by mutation): `export type`/`export
+ * interface` declarations, `export * from "..."` (re-exports EVERY name from the target module flatly
+ * -- the most dangerous miss, since a barrel file doing this leaks its target's whole export surface
+ * into the public API silently), `export * as ns from "..."` (one namespace export), and `export
+ * default`. Each missing `if` branch was a silent pass-through, not a throw -- the exact "check that
+ * cannot fail" shape B6 exists to close. A node-kind enumeration is inherently partial: there is always
+ * a form not yet on the list. Asking the checker for the resolved export table has no such list to be
+ * incomplete.
+ *
+ * Value vs. type is read off each exported symbol's own flags (`ts.SymbolFlags.Value`), not off which
+ * import/export keyword named it -- so `export type { X }` correctly classifies as a type because `X`'s
+ * origin declaration has no value flag, and a `class`/`function`/`const`/`enum` correctly classifies as
+ * a value even when re-exported through `export *`.
+ */
+function readQaTesterExports(qaTesterPath: string): { values: string[]; types: string[] } {
+  const configPath = ts.findConfigFile(root, (path) => ts.sys.fileExists(path), "tsconfig.json");
+  if (!configPath) throw new Error(`no tsconfig.json found from ${root}`);
+  const configFile = ts.readConfigFile(configPath, (path) => ts.sys.readFile(path));
+  if (configFile.error) throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
+  const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, dirname(configPath));
+  // Only `qaTesterPath` is a root: `ts.createProgram` still resolves its whole transitive import graph
+  // (module symbols require it), but this stays far smaller and faster than compiling every file
+  // `tsconfig.json`'s own `include` glob names (all of tests/, scripts/, fixtures/).
+  const program = ts.createProgram({ rootNames: [qaTesterPath], options: parsedConfig.options });
+  const sourceFile = program.getSourceFile(qaTesterPath);
+  if (!sourceFile) throw new Error(`ts.Program could not load ${qaTesterPath}`);
+  const checker = program.getTypeChecker();
+  const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+  if (!moduleSymbol) throw new Error(`${qaTesterPath} has no resolvable module symbol -- is it missing a top-level import/export?`);
   const values: string[] = [];
   const types: string[] = [];
-  for (const statement of sourceFile.statements) {
-    if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-      for (const element of statement.exportClause.elements) {
-        (statement.isTypeOnly || element.isTypeOnly ? types : values).push(element.name.text);
-      }
-      continue;
-    }
-    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-    if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
-    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) values.push(statement.name.text);
-    else if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) values.push(declaration.name.text);
-    }
+  for (const symbol of checker.getExportsOfModule(moduleSymbol)) {
+    // Every re-export (`export { X } from "..."`, `export * from "..."`, `export * as ns from "..."`)
+    // is an ALIAS symbol at this module's boundary -- its OWN flags say only `Alias`, never `Value`,
+    // regardless of what it points at. Resolving through `getAliasedSymbol` down to the origin
+    // declaration is what makes the flag check below correct for those, not just for names declared
+    // directly in `qa-tester.ts` (which carry their real flags with no alias hop at all).
+    let resolved = symbol;
+    for (let hop = 0; hop < 10 && resolved.flags & ts.SymbolFlags.Alias; hop++) resolved = checker.getAliasedSymbol(resolved);
+    (resolved.flags & ts.SymbolFlags.Value ? values : types).push(symbol.name);
   }
   return { values, types };
 }
 
 /** Throws naming every name that drifted, in either direction, the moment `qa-tester.ts`'s real exports
- *  and the two expected lists above disagree -- before `npm run build` even starts. Confirmed by
- *  mutation: adding an export to `qa-tester.ts` with nothing else touched left this smoke test green
- *  before this function existed. */
+ *  (read by `readQaTesterExports` above, exhaustively -- see its own comment for why a prior, partial
+ *  version of that function could miss a drift entirely) and the two expected lists above disagree --
+ *  before `npm run build` even starts. Confirmed by mutation, both rounds: adding a value export with
+ *  nothing else touched left this smoke test green before `verifyExportsMatch` existed at all: adding
+ *  any of five OTHER declaration forms (type alias, interface, `export *`, `export * as`, `export
+ *  default`) left it green again after `verifyExportsMatch` existed but `readQaTesterExports` still
+ *  scanned syntax instead of asking the checker -- see the six-row table in `task-7-report.md`. */
 function verifyExportsMatch(actual: { values: string[]; types: string[] }): void {
   const expectedValueNames = expectedValueExports.map((entry) => entry.name);
   const drift = [
@@ -93,7 +128,7 @@ function verifyExportsMatch(actual: { values: string[]; types: string[] }): void
 let tarball: string | undefined;
 try {
   const qaTesterPath = join(root, "src", "orchestration", "qa-tester.ts");
-  verifyExportsMatch(readQaTesterExports(qaTesterPath, await readFile(qaTesterPath, "utf8")));
+  verifyExportsMatch(readQaTesterExports(qaTesterPath));
 
   run("npm", ["run", "build"]);
   const packed = JSON.parse(run("npm", ["pack", "--json"])) as { filename: string; files: { path: string }[] }[];
