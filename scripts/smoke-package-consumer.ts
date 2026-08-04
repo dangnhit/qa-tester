@@ -22,7 +22,48 @@ try {
   tarball = join(root, packageResult.filename);
   run("npm", ["init", "-y"], consumer);
   run("npm", ["install", tarball, "--ignore-scripts"], consumer);
-  await writeFile(join(consumer, "consumer.mts"), 'import { createQaTester } from "@vigentix/qa-skills";\nif (typeof createQaTester !== "function") throw new Error("missing public API");\n');
+  // Type-checks every name `.` re-exports (the whole public value+type surface, src/orchestration/
+  // qa-tester.ts) plus the "./cli" subpath, at the one packaging boundary where a consumer's own
+  // `tsc` run is what would catch a name that resolves in the source tree but not from the installed
+  // tarball. This used to import only `createQaTester` -- one name out of forty-eight -- which is not
+  // a smoke test of "the public API installs correctly," just of one function in it. Values and types
+  // are two separate `import`/`import type` statements because only the six values below have a
+  // runtime shape a `typeof`/`Array.isArray` check can confirm; the 42 types have none -- for those,
+  // merely naming them in an `import type` is the whole assertion: `tsc` resolves each named import
+  // against the installed package's `.d.ts` and fails with "has no exported member" the moment one is
+  // missing, which is the same mechanism a consumer's own build would hit.
+  const consumerSource = `import {
+  createQaTester, qaTester, TestDataHookRegistry, ExternalPermitRegistry,
+  selectRegressionCases, regressionMappingSources,
+} from "@vigentix/qa-skills";
+import type {
+  QaRuntimeRegistry, QaWorkflowInput, WorkflowResult, WorkflowOutput, WorkflowTerminalStatus,
+  WorkflowOperationInputMap, WorkflowOperationOutputMap, CorrelatedWorkflowOutputs,
+  CanonicalPlanBundleRef, RegisteredArtifactRef, PendingHumanInput, PendingHumanInputSubject,
+  PendingObservedExecution, RetestScenario, RetestSource, PublicWorkflowMode, WorkflowOperationName,
+  WorkspaceValidation, WorkspaceDiagnostic, ArtifactRecord, ReleaseRecommendation, ExplorationCharter,
+  ExplorationAction, SecretResolver, TelemetryFinding, EvidencePolicyLayers, EvidencePolicyLayer,
+  EvidenceChannel, EvidenceMode, EvidenceRedactionPolicy, TelemetryScrubber, TelemetryPayload,
+  TestDataHookDescriptor, HookRunners, ProducedResource, ExternalPermit, ChangeScope, RegressionCase,
+  RegressionDecision, RegressionSelection, RegressionSource, UnmappedChangeRisk,
+} from "@vigentix/qa-skills";
+// Type-only namespace import: proves the "./cli" subpath resolves to a real declaration file at the
+// packaging boundary without importing a VALUE from it. "./cli" compiles to the same file
+// bin.qa-skill points at (src/cli/index.ts) and runs the CLI as a side effect the instant it is
+// imported as a value -- see "What v1.0 freezes" in the README. \`import type * as\` is erased
+// entirely at compile time (no JS emitted, nothing executed), so this line can only ever fail by not
+// type-checking, never by running the CLI mid-smoke-test.
+import type * as QaSkillsCli from "@vigentix/qa-skills/cli";
+type CliSubpathHasTypes = typeof QaSkillsCli;
+
+if (typeof createQaTester !== "function") throw new Error("missing public API: createQaTester");
+if (typeof qaTester !== "function") throw new Error("missing public API: qaTester");
+if (typeof TestDataHookRegistry !== "function") throw new Error("missing public API: TestDataHookRegistry");
+if (typeof ExternalPermitRegistry !== "function") throw new Error("missing public API: ExternalPermitRegistry");
+if (typeof selectRegressionCases !== "function") throw new Error("missing public API: selectRegressionCases");
+if (!Array.isArray(regressionMappingSources)) throw new Error("missing public API: regressionMappingSources");
+`;
+  await writeFile(join(consumer, "consumer.mts"), consumerSource);
   run(process.execPath, [
     join(root, "node_modules/typescript/bin/tsc"), "consumer.mts", "--noEmit", "--strict",
     "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ESNext",

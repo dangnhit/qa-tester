@@ -51,6 +51,19 @@ The demo binds an ephemeral `127.0.0.1` port and makes no external request. Its 
 
 The command exits `0` only when the intentional defect is detected as `FAILED + PRODUCT_DEFECT`, the QA Run is `COMPLETED_WITH_FAILURES`, the release recommendation is `NOT_READY`, each desktop/mobile attempt has its required evidence, cleanup completes, and all expected artifacts validate. Canonical run data is written under `qa-results/`; convenient copied evidence projections are written under `demo-artifacts/`. Both are ignored.
 
+## What v1.0 freezes
+
+Starting at v1.0, this package's public contract is exactly two surfaces:
+
+1. **The named exports re-exported from `.`** (`@vigentix/qa-skills`) — every value and type `src/orchestration/qa-tester.ts` re-exports: 6 runtime values (`createQaTester`, `qaTester`, `TestDataHookRegistry`, `ExternalPermitRegistry`, `selectRegressionCases`, `regressionMappingSources`) plus the type names alongside them. A name importable only through a deep or transitive import — one this module does not itself re-export — is not part of the contract, even if it happens to resolve today.
+2. **The CLI contract** — every command in the [CLI reference](#cli-reference) table below, its documented flags, and the exit code table that follows it.
+
+Everything else — `dist/` file layout, internal module boundaries, helper function names, and any artifact JSON shape beyond its published JSON Schema — is an implementation detail and may change in a minor release without notice.
+
+`./cli` (`@vigentix/qa-skills/cli`) is **not** part of the export contract in that sense: it is the `qa-skill` bin script (`package.json`'s `bin.qa-skill` points at the same compiled file), and importing it **runs the CLI as a side effect**. It exports nothing for a consumer to read. The subpath exists so its `.d.ts`/`.js` resolve for tooling that needs to confirm the bin script is present and typed, not to be imported for values.
+
+One consequence of freezing the CLI contract: `qa-skill skills verify` — and `skills uninstall`/`skills update`, which share its detection — no longer treats a skill manifest written by a pre-1.0 install as corrupt. Such a manifest is well-formed; it just names a `runtimeRange` (`>=0.1.0 <1.0.0`, or whichever pre-1.0 line wrote it) this build no longer publishes. `verify` reports it with `status: "runtime-incompatible"` and a `reason` naming both the manifest's own range and the range this build supports, exiting with the same code every other `verify` drift result uses (`1`, not `5`). Reinstall with `skills install`, or run `skills update --force`, to move it onto the current manifest.
+
 ## CLI reference
 
 Commands that produce output use machine-readable JSON unless noted. Successful `qa-skill init` and `qa-skill artifact ingest` are intentionally silent on stdout.

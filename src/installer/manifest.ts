@@ -55,6 +55,17 @@ export function isRuntimeCompatible(version: string, range = runtimeCompatibilit
   return /^1\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+/** Generic semver-SHAPE check, deliberately independent of `runtimeCompatibility`'s major lock above.
+ *  `isManifest` uses this (not `isRuntimeCompatible`) for `sourceVersion` and `runtime.version`: a
+ *  manifest a pre-1.0 install wrote records both as something like "0.3.0", which is a well-formed
+ *  version of a DIFFERENT major, not a malformed one (I4, v1.0 contract freeze). Whether THIS build
+ *  still considers that major current is a `verifySkills` question (it compares the manifest's own
+ *  `runtimeRange` against `runtimeCompatibility` and reports `runtime-incompatible` when they differ),
+ *  not a `readManifest` one -- `readManifest` only rules on whether the JSON is shaped like a manifest. */
+function isSemverLike(value: unknown): value is string {
+  return typeof value === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
+}
+
 async function listFiles(root: string, directory = root): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files: string[] = [];
@@ -102,15 +113,14 @@ function isManifest(value: unknown): value is SkillManifest {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   const runtime = candidate.runtime;
-  return candidate.manifestVersion === 1 && typeof candidate.sourceVersion === "string" && typeof candidate.runtimeRange === "string" && isRuntimeCompatible(candidate.sourceVersion, candidate.runtimeRange)
+  return candidate.manifestVersion === 1 && isSemverLike(candidate.sourceVersion) && typeof candidate.runtimeRange === "string" && candidate.runtimeRange.length > 0
     && (candidate.agent === "codex" || candidate.agent === "claude" || candidate.agent === "cursor")
     && (candidate.target === "project" || candidate.target === "user")
     && runtime !== null && typeof runtime === "object"
     && typeof (runtime as Record<string, unknown>).command === "string"
     && typeof (runtime as Record<string, unknown>).resolvedPath === "string"
     && ((runtime as Record<string, unknown>).source === "project" || (runtime as Record<string, unknown>).source === "path")
-    && typeof (runtime as Record<string, unknown>).version === "string"
-    && isRuntimeCompatible(String((runtime as Record<string, unknown>).version), candidate.runtimeRange)
+    && isSemverLike((runtime as Record<string, unknown>).version)
     && typeof (runtime as Record<string, unknown>).sha256 === "string"
     && /^[a-f0-9]{64}$/.test(String((runtime as Record<string, unknown>).sha256))
     && Array.isArray(candidate.files) && candidate.files.every(isManifestEntry)

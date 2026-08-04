@@ -286,10 +286,18 @@ validating. Reopening such a run reports validation diagnostics rather than sile
 the current contract no longer describes.
 
 A run is self-contained, so the remedy is to **start a new run** — there is nothing to repair in place.
-No migration path is offered before v1.0: there is no converter, no compatibility mode, and no
-multi-version validator. Artifacts from a prior run are read-only history; do not hand-edit their
-`schemaVersion` to make them validate, because the rest of the payload will not match the new contract
-and the checksum will no longer match the manifest.
+No migration path is offered, at v1.0 or after: there is no converter, no compatibility mode, and no
+multi-version validator for a run's artifacts, and freezing the v1.0 contract does not add one. Artifacts
+from a prior run are read-only history; do not hand-edit their `schemaVersion` to make them validate,
+because the rest of the payload will not match the new contract and the checksum will no longer match
+the manifest.
+
+This is a different axis from the *installed skill manifest*'s own version, which does get a defined
+v1.0 report: `qa-skill skills verify` (and `uninstall`/`update`, which share its detection) names a
+manifest written by a pre-1.0 install `runtime-incompatible` rather than raising an internal error — see
+[What v1.0 freezes](../../../README.md#what-v10-freezes) in the README. That is a diagnosis, not a
+migration: it identifies a stale install so it can be reinstalled or force-updated, and it carries
+forward none of a run's artifacts, which remain exactly as unmigratable as described above.
 
 That is the whole story only when the artifact you are re-reading belongs to the run you opened. It is
 not the whole story for `retest` and `regression`, both of which open a second, **linked source run** and

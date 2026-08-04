@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { sha256Text } from "../core/checksum.js";
 import { captureRuntimeBinding, resolveCompatibleRuntime, type AgentName, type InstallTarget, resolveAgentRoot, resolveInstallRoot } from "./agents.js";
-import { manifestFilename, readManifest, type RuntimeBinding, type SkillManifest, validateRelativeFilePath } from "./manifest.js";
+import { manifestFilename, readManifest, runtimeCompatibility, type RuntimeBinding, type SkillManifest, validateRelativeFilePath } from "./manifest.js";
 import { readShimManagedContent } from "./shims.js";
 
 export type DriftStatus = "missing" | "modified" | "unexpected" | "runtime-missing" | "runtime-changed" | "runtime-incompatible" | "valid";
@@ -37,6 +37,20 @@ function overall(entries: readonly VerificationEntry[]): DriftStatus {
 }
 
 async function verifyRuntimeBinding(manifest: SkillManifest, projectRoot: string): Promise<RuntimeVerification> {
+  // A manifest whose OWN recorded `runtimeRange` predates what this build supports is not corrupt --
+  // it is a well-formed manifest of a superseded major (I4, v1.0 contract freeze; every 0.x install
+  // wrote ">=0.1.0 <1.0.0" here). Reusing `runtime-incompatible` rather than adding a new `DriftStatus`
+  // value keeps the CLI's typed status set frozen at 1.0; the distinguishing detail a reader needs --
+  // both ranges -- lives in `reason`, the same way it already does for `runtime-missing` below. This is
+  // checked before touching the live runtime at all: a stale recorded range disqualifies the binding
+  // regardless of which binary happens to be resolvable on PATH right now.
+  if (manifest.runtimeRange !== runtimeCompatibility) {
+    return {
+      status: "runtime-incompatible",
+      expected: manifest.runtime,
+      reason: `Installed skill manifest records runtime range ${manifest.runtimeRange}, which predates the range this build verifies (${runtimeCompatibility}); reinstall with "skills install" or run "skills update --force" to move it onto the current manifest.`,
+    };
+  }
   try {
     await lstat(manifest.runtime.command);
   } catch {
