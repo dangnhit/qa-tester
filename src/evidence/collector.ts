@@ -112,7 +112,7 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   if (!input.binary.mediaType) throw new Error("Evidence media type is required");
   if (input.provenance.captureType === "screenshot" && !input.provenance.dimensions) throw new Error("Screenshot evidence dimensions are required");
   return {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId: input.evidenceId, runId: input.workspace.runId,
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: runtimeVersion, evidenceId: input.evidenceId, runId: input.workspace.runId,
     subject: { kind: "attempt", attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId },
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings

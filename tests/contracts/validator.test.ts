@@ -98,7 +98,7 @@ const otherArtifactContracts = [
     requiredField: "sha256",
     valid: {
       artifactType: "evidence",
-      schemaVersion: "3.0.0",
+      schemaVersion: "4.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
@@ -312,7 +312,7 @@ describe("validateArtifact", () => {
 describe("evidence schema 3.0.0", () => {
   const attemptSubject = { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" };
   const logEvidence = {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
     subject: attemptSubject, kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
     sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
@@ -369,7 +369,7 @@ describe("evidence schema 3.0.0", () => {
     expect(validateArtifact("evidence", { ...logEvidence, attemptId: "ATTEMPT-1" }).valid).toBe(false);
   });
 
-  it.each(["1.0.0", "2.0.0"])("rejects evidence still declaring schemaVersion %s", (schemaVersion) => {
+  it.each(["1.0.0", "2.0.0", "3.0.0"])("rejects evidence still declaring schemaVersion %s", (schemaVersion) => {
     expect(validateArtifact("evidence", { ...logEvidence, schemaVersion }).valid).toBe(false);
   });
 });
@@ -395,7 +395,7 @@ describe("evidence schema 3.0.0", () => {
  *  discriminated THIRD case rather than a loophole that widens the existing two. */
 describe("evidence schema 3.0.0 (runner-report)", () => {
   const runnerReport = {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
     subject: { kind: "observed-execution", executionId: "EXEC-1" },
     kind: "runner-report", capturedAt: "2026-07-23T12:34:56.000Z",
@@ -1060,6 +1060,52 @@ describe("identity fields forbid a colon (closes the collision class at the data
 
   it("rejects a human attestation whose obligationId could rejoin to another's", () => {
     expect(validateArtifact("human-attestation", { ...attestation, obligationId: "COV:1" }).valid).toBe(false);
+  });
+
+  /** `evidence.subject`'s attempt branch carries the exact same testCaseId/revisionId/instanceId triple
+   *  as the other six schemas above, but was left out of the original sweep: it lives one level down,
+   *  inside a `oneOf` branch rather than at the artifact's top level. */
+  const evidence = {
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
+    evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
+    subject: { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" },
+    kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
+    sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
+    binaryArtifactIds: ["binary-1"],
+    binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
+    provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+  };
+
+  it("rejects an evidence subject whose identity components could rejoin to another's", () => {
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseId: "TC:1" } }).valid).toBe(false);
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseRevisionId: "R:A" } }).valid).toBe(false);
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseInstanceId: "A:B" } }).valid).toBe(false);
+  });
+
+  /** `regression-selection`'s `$defs.decision` carries the same triple and is shared by both
+   *  `selected` and `excluded` -- one `pattern` addition on the shared `$defs` entry covers both arrays,
+   *  proven below by rejecting a colon in each array in turn. */
+  const decision = {
+    testCaseId: "TC-1", revisionId: "REV-1", instanceId: "TC-1--INSTANCE-1",
+    source: "requirement-mapping", rationale: "Directly covers the changed requirement.", confidence: 0.9,
+  };
+  const selection = {
+    artifactType: "regression-selection", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    selectionId: "REG-1", runId: "20260723T123456Z-a1b2c3",
+    changeScopeArtifactId: "CHANGE-SCOPE-1", changeScopeSha256: "a".repeat(64), decisionChecksum: "b".repeat(64),
+    selected: [decision], excluded: [], unmappedChangeRisks: [], complete: true,
+  };
+
+  it("rejects a regression-selection decision whose identity components could rejoin to another's", () => {
+    expect(validateArtifact("regression-selection", { ...selection, selected: [{ ...decision, testCaseId: "TC:1" }] }).valid).toBe(false);
+    expect(validateArtifact("regression-selection", { ...selection, selected: [{ ...decision, revisionId: "R:A" }] }).valid).toBe(false);
+    expect(validateArtifact("regression-selection", { ...selection, excluded: [{ ...decision, instanceId: "A:B" }] }).valid).toBe(false);
+  });
+
+  it("rejects a regression-selection still declaring the superseded schemaVersion 1.0.0", () => {
+    expect(validateArtifact("regression-selection", { ...selection, schemaVersion: "1.0.0" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
+    );
   });
 });
 

@@ -55,7 +55,7 @@ async function notReadyRun(
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
-      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0",
+      artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "0.1.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
       subject: { kind: "observed-execution", executionId: "EXEC-1" },
       kind: "runner-report", capturedAt: "2026-07-29T00:01:00.000Z",

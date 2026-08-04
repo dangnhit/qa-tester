@@ -126,7 +126,7 @@ function runnerReportBundle(workspace: RunWorkspace, input: { evidenceId: string
     binaries: [{ filename: `${input.evidenceId}-report.json`, contents: Buffer.from('{"suites":[]}\n'), mediaType: "application/json", captureType: "runner-report" }],
     relationships: input.relationships ?? [],
     descriptor: (binaries) => ({
-      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: input.evidenceId, runId: workspace.runId,
+      artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0", evidenceId: input.evidenceId, runId: workspace.runId,
       subject: { kind: "observed-execution", executionId: input.executionId },
       kind: "runner-report", capturedAt: "2026-07-23T12:34:56.000Z",
       sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
@@ -201,7 +201,7 @@ function failSecondEvidenceBinaryWrite() {
 function screenshotDescriptor(workspace: RunWorkspace, binaries: readonly { id: string; relativePath: string; sha256: string; mediaType?: string }[], overrides: Record<string, unknown> = {}) {
   const primary = binaries[0];
   return {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, subject: { kind: "attempt", attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1" }, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "0.1.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId, subject: { kind: "attempt", attemptId: "ATTEMPT-EVIDENCE", testCaseId: "TC-EVIDENCE", testCaseRevisionId: "REV-TC-EVIDENCE", testCaseInstanceId: "TC-EVIDENCE--INSTANCE-1" }, kind: "screenshot", capturedAt: "2026-07-23T00:00:00.000Z", sha256: primary?.sha256, relativePath: primary?.relativePath, mediaType: primary?.mediaType,
     binaryArtifactIds: binaries.map((binary) => binary.id), binaryArtifacts: binaries.map((binary) => ({ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType })),
     provenance: { captureType: "screenshot", dimensions: { width: 1, height: 1 }, dpr: 1, scroll: { x: 0, y: 0 }, clip: { x: 0, y: 0, width: 1, height: 1 }, url: "about:blank", viewport: { width: 1, height: 1 }, browser: "chromium", build: "test", capturedAt: "2026-07-23T00:00:00.000Z" },
     ...overrides,
@@ -966,7 +966,7 @@ describe("RunWorkspace", () => {
     const attemptSubject = { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-1", testCaseRevisionId: "REV-TC-1", testCaseInstanceId: "TC-1--INSTANCE-1" };
     const evidence = {
       artifactType: "evidence",
-      schemaVersion: "3.0.0",
+      schemaVersion: "4.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: workspace.runId,
@@ -1016,7 +1016,7 @@ describe("RunWorkspace", () => {
       binaries: [{ filename: `${evidenceId}.json`, contents: Buffer.from("observed\n"), mediaType: "application/json", captureType: "log" }],
       relationships,
       descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId, runId: workspace.runId,
+        artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0", evidenceId, runId: workspace.runId,
         subject: { kind: "observed-execution", executionId: "EXEC-1" },
         kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
         binaryArtifactIds: binaries.map((binary) => binary.id),
@@ -1142,7 +1142,7 @@ describe("RunWorkspace", () => {
       binaries: [{ filename: "attempt-log.json", contents: Buffer.from("attempt\n"), mediaType: "application/json", captureType: "log" }],
       relationships: [attempt.id],
       descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", runId: workspace.runId,
+        artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0", evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXY2", runId: workspace.runId,
         subject: { kind: "attempt", attemptId: "ATTEMPT-1", testCaseId: "TC-ATTEMPT", testCaseRevisionId: "REV-TC-ATTEMPT", testCaseInstanceId: "TC-ATTEMPT--INSTANCE-1" },
         kind: "log", capturedAt: "2026-07-23T12:34:56.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: binaries[0]!.mediaType,
         binaryArtifactIds: binaries.map((binary) => binary.id),

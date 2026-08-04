@@ -69,7 +69,7 @@ async function registerObservation(workspace: RunWorkspace, entry: Observation, 
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
-      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0",
+      artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "0.1.0",
       evidenceId: entry.evidenceId, runId: workspace.runId,
       subject: { kind: "observed-execution", executionId },
       kind: "runner-report", capturedAt: "2026-07-29T00:01:00.000Z",
@@ -820,7 +820,7 @@ describe("exportProjection", () => {
 const evidenceDescriptor = (overrides: Readonly<Record<string, unknown>> = {}): ProjectionArtifact => ({
   record: { id: "evidence-1", sha256: "f".repeat(64), type: "evidence", provenance: "runtime" },
   value: {
-    artifactType: "evidence", schemaVersion: "3.0.0", evidenceId: "EV-1", runId: "RUN-1",
+    artifactType: "evidence", schemaVersion: "4.0.0", evidenceId: "EV-1", runId: "RUN-1",
     subject: { kind: "observed-execution", executionId: "EXEC-1" }, kind: "runner-report",
     relativePath: "evidence/1-sanitized-runner-report.json", mediaType: "application/json",
     ...overrides,

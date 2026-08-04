@@ -2,7 +2,7 @@
 
 export interface EvidenceItem {
   artifactType: "evidence";
-  schemaVersion: "3.0.0";
+  schemaVersion: "4.0.0";
   producerVersion: string;
   evidenceId: string;
   runId: string;

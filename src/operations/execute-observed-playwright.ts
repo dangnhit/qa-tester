@@ -401,7 +401,7 @@ export async function executeObservedPlaywright(input: ObservedPlaywrightExecuti
         const binary = binaries[0];
         if (binary === undefined) throw new QaSkillsError("The runner-report evidence bundle registered no binary", "OBSERVED_RUN_EVIDENCE_FAILED");
         return {
-          artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion,
+          artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: runtimeVersion,
           evidenceId, runId: workspace.runId,
           subject: { kind: "observed-execution", executionId },
           kind: "runner-report", capturedAt: run.finishedAt,
