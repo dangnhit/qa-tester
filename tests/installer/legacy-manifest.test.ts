@@ -266,7 +266,7 @@ describe("I1: semverShapePattern must be full semver, not just \"starts with dig
   ] as const;
 
   for (const [value, why] of malformedButMajorLooking) {
-    it(`readManifest rejects sourceVersion "${value}" (${why}) even though its leading digit is the manifest's own major`, async () => {
+    it(`readManifest rejects sourceVersion "${value}" (${why}) even though the manifest's own major appears in it`, async () => {
       const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
       const installed = await installSkills(options);
       const path = join(installed.root, manifestFilename);
@@ -276,7 +276,7 @@ describe("I1: semverShapePattern must be full semver, not just \"starts with dig
       await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
     });
 
-    it(`readManifest rejects runtime.version "${value}" (${why}) even though its leading digit is the manifest's own major`, async () => {
+    it(`readManifest rejects runtime.version "${value}" (${why}) even though the manifest's own major appears in it`, async () => {
       const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
       const installed = await installSkills(options);
       const path = join(installed.root, manifestFilename);
