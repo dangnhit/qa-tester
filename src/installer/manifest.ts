@@ -57,15 +57,17 @@ export function isRuntimeCompatible(version: string, range = runtimeCompatibilit
 
 /** Full semver SHAPE, deliberately independent of `runtimeCompatibility`'s major lock above (I4):
  *  a manifest a pre-1.0 install wrote records `sourceVersion`/`runtime.version` as something like
- *  "0.3.0", a well-formed version of a DIFFERENT major, not a malformed one. Anchored at both ends,
- *  so `exec` only matches a value that is semver top-to-bottom -- "1.2" (no patch), "1.a.0"
- *  (non-numeric minor), and "1.0.0x" (trailing garbage) all fail to match and so cannot produce a
- *  major through `semverMajor` below, which reads that group. There is no separate "is this
- *  semver-shaped" predicate: one that reused this same pattern to answer only that question would
- *  be true on EXACTLY the inputs `semverMajor` already turns into a real major, making it provably
- *  redundant with the major-equality check `isManifest` performs below -- dead code no mutation of
- *  it could ever turn a test red on, which is itself the defect (I1, v1.0 contract freeze follow-up:
- *  an unkillable guard is not a guard). */
+ *  "0.3.0", a well-formed version of a DIFFERENT major, not a malformed one. Anchored at BOTH ends,
+ *  and each anchor is pinned by its own mutation-killing case in the "I1" describe block of
+ *  tests/installer/legacy-manifest.test.ts, not by an argument about redundancy: the trailing `$`
+ *  rejects a value with a valid semver prefix followed by garbage ("1.0.0x"), and the leading `^`
+ *  rejects a value with garbage BEFORE a valid semver suffix ("v1.0.0", the git-tag convention of
+ *  prefixing a release with "v") -- drop `^` and `exec` still finds and matches the trailing
+ *  "1.0.0" substring, so `semverMajor` below would hand back a real major for a string that is not
+ *  itself semver. That same test file also covers a value with no patch ("1.2"), one with only a
+ *  major ("1"), and one with a non-numeric component ("1.a.0"), so between the two anchors and
+ *  those three shapes, no way to smuggle a valid-looking major past this pattern goes untested
+ *  (I1, v1.0 contract freeze follow-up). */
 const semverShapePattern = /^(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 /** This project has only ever written a `runtimeRange` in this exact two-comparator shape (see
  *  `runtimeCompatibility` above and every superseded literal before it: `>=0.1.0 <1.0.0`,

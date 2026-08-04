@@ -235,3 +235,55 @@ describe("C1 + I3: the runtime-incompatible reason names only a remedy that actu
     expect(JSON.parse(verified.stdout)).toMatchObject({ status: "valid" });
   });
 });
+
+/**
+ * I1 (review round 2): deleting `isSemverLike` (dead, correctly confirmed so in review round 2) does not
+ * close I1 -- the finding does not say "there is a redundant predicate", it says "a constraint with real
+ * behaviour that no mutation can kill is a constraint that is not pinned". `semverShapePattern` is
+ * exactly that constraint: it still decides whether `semverMajor` returns a real major or not, but before
+ * the tests below existed, no test told apart the full pattern (`^\d+\.\d+\.\d+(?:-...)?$`) from a looser
+ * one that only requires the major to be numeric. The first four values are four ways a string can carry
+ * a valid major while NOT being full semver: missing patch, trailing garbage, major only, and a
+ * non-numeric component -- exactly the four cases the reviewer listed in review round 2, and all four pin
+ * the same anchor: `$`. Re-measuring by mutation (controller, not reviewer) exposed the missing half:
+ * dropping `^` ALONE left those four cases green at 69/69, because none of them carries garbage at the
+ * START of the string. The fifth value, `"v1.0.0"`, closes exactly that gap -- this is not invented
+ * garbage, it is the real git tag convention (`git tag v1.0.0`). Without `^`, `semverShapePattern` still
+ * matches the `"1.0.0"` tail of this string and `semverMajor` still returns `"1"`, equal to the major of
+ * the current `runtimeRange` -- so a 0.x manifest with a mistyped `v` (`sourceVersion: "v0.3.0"`) would
+ * be ACCEPTED instead of rejected. Placed on BOTH the `sourceVersion` and `runtime.version` fields
+ * because those are two separate code paths (`semverMajor(candidate.sourceVersion)` and
+ * `semverMajor((runtime...).version)`), keeping the same convention I2 already used for the major
+ * comparison.
+ */
+describe("I1: semverShapePattern must be full semver, not just \"starts with digits\"", () => {
+  const malformedButMajorLooking = [
+    ["1.2", "missing patch"],
+    ["1.0.0x", "trailing garbage after the patch"],
+    ["1", "major only, no minor/patch"],
+    ["1.a.0", "non-numeric minor"],
+    ["v1.0.0", "garbage at the START of the string -- the 'v' prefix of the git tag convention"],
+  ] as const;
+
+  for (const [value, why] of malformedButMajorLooking) {
+    it(`readManifest rejects sourceVersion "${value}" (${why}) even though its leading digit is the manifest's own major`, async () => {
+      const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+      const installed = await installSkills(options);
+      const path = join(installed.root, manifestFilename);
+      const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+      await writeFile(path, JSON.stringify({ ...manifest, sourceVersion: value }));
+
+      await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+    });
+
+    it(`readManifest rejects runtime.version "${value}" (${why}) even though its leading digit is the manifest's own major`, async () => {
+      const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+      const installed = await installSkills(options);
+      const path = join(installed.root, manifestFilename);
+      const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+      await writeFile(path, JSON.stringify({ ...manifest, runtime: { ...manifest.runtime, version: value } }));
+
+      await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+    });
+  }
+});
