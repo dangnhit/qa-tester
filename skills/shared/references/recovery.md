@@ -294,10 +294,12 @@ the manifest.
 
 This is a different axis from the *installed skill manifest*'s own version, which does get a defined
 v1.0 report: `qa-skill skills verify` (and `uninstall`/`update`, which share its detection) names a
-manifest written by a pre-1.0 install `runtime-incompatible` rather than raising an internal error — see
-[What v1.0 freezes](../../../README.md#what-v10-freezes) in the README. That is a diagnosis, not a
-migration: it identifies a stale install so it can be reinstalled or force-updated, and it carries
-forward none of a run's artifacts, which remain exactly as unmigratable as described above.
+manifest whose own `runtimeRange` differs from what this build verifies `runtime-incompatible` rather
+than raising an internal error (for example, one written by a pre-1.0 install) — see
+[What v1.0 freezes](../../../README.md#what-v10-freezes) in the README for the exact `reason` text and
+why `skills update --force`, not `skills install`, is the only remedy it names. That is a diagnosis, not
+a migration: it identifies a stale binding and can rewrite it, and it carries forward none of a run's
+artifacts, which remain exactly as unmigratable as described above.
 
 That is the whole story only when the artifact you are re-reading belongs to the run you opened. It is
 not the whole story for `retest` and `regression`, both of which open a second, **linked source run** and

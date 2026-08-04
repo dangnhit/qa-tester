@@ -37,18 +37,30 @@ function overall(entries: readonly VerificationEntry[]): DriftStatus {
 }
 
 async function verifyRuntimeBinding(manifest: SkillManifest, projectRoot: string): Promise<RuntimeVerification> {
-  // A manifest whose OWN recorded `runtimeRange` predates what this build supports is not corrupt --
-  // it is a well-formed manifest of a superseded major (I4, v1.0 contract freeze; every 0.x install
-  // wrote ">=0.1.0 <1.0.0" here). Reusing `runtime-incompatible` rather than adding a new `DriftStatus`
-  // value keeps the CLI's typed status set frozen at 1.0; the distinguishing detail a reader needs --
-  // both ranges -- lives in `reason`, the same way it already does for `runtime-missing` below. This is
-  // checked before touching the live runtime at all: a stale recorded range disqualifies the binding
-  // regardless of which binary happens to be resolvable on PATH right now.
+  // A manifest whose OWN recorded `runtimeRange` differs from what this build verifies is not
+  // corrupt -- it is a well-formed manifest of a different major (I4, v1.0 contract freeze; every
+  // 0.x install wrote ">=0.1.0 <1.0.0" here). This guard is symmetric, not "old vs. new": a manifest
+  // recording a range this build does not YET know about (a future major) hits the exact same
+  // branch, so `reason` below states facts only -- which range the manifest names, which range this
+  // build verifies -- and never a directional word like "predates" or "older" that would be false
+  // for the future-range case. Reusing `runtime-incompatible` rather than adding a new `DriftStatus`
+  // value keeps the CLI's typed status set frozen at 1.0.
+  //
+  // The remedy named in `reason` is limited to the one command actually exercised end-to-end
+  // (tests/installer/legacy-manifest.test.ts): "skills update --force" rewrites the manifest onto
+  // `runtimeCompatibility`, the range of the binary CURRENTLY RUNNING the CLI -- which is a downgrade,
+  // not a repair, when that binary is older than the one that wrote the manifest, so `reason` says so.
+  // "skills install" is deliberately NOT suggested: it calls `writeBundle` with `overwrite: false`,
+  // which throws `INSTALLER_SAFETY: Refusing to overwrite unmanaged skill file` the moment any file
+  // from a previous install already exists at the target path -- it cannot recover this manifest.
+  //
+  // Checked before touching the live runtime at all: a mismatched recorded range disqualifies the
+  // binding regardless of which binary happens to be resolvable on PATH right now.
   if (manifest.runtimeRange !== runtimeCompatibility) {
     return {
       status: "runtime-incompatible",
       expected: manifest.runtime,
-      reason: `Installed skill manifest records runtime range ${manifest.runtimeRange}, which predates the range this build verifies (${runtimeCompatibility}); reinstall with "skills install" or run "skills update --force" to move it onto the current manifest.`,
+      reason: `Installed skill manifest records runtime range ${manifest.runtimeRange}; this build verifies ${runtimeCompatibility}. Run "skills update --force" to rewrite the manifest onto the range this build verifies -- that moves the install to whichever range the binary currently running this CLI supports, which is a downgrade rather than a repair if this binary is older than the one that wrote the manifest. "skills install" does not help here: it refuses to overwrite files an existing install already wrote.`,
     };
   }
   try {

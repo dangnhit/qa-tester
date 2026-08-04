@@ -130,3 +130,108 @@ describe("skill manifest written by a pre-1.0 install (I4)", () => {
     await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
   });
 });
+
+/**
+ * I2 (review round 1, C1 sibling): I4 above dropped ONLY the 1.x-only lock on `sourceVersion` and
+ * `runtime.version` -- it must not also drop the requirement that those two fields and the
+ * manifest's own `runtimeRange` all name the SAME major. Each case below is otherwise a real,
+ * freshly-installed manifest (same files, same checksums, same agent/target) with exactly one axis
+ * changed, so a mutation that re-widens any single guard turns exactly the matching test red rather
+ * than several at once.
+ */
+describe("I2: runtimeRange, sourceVersion, and runtime.version must share one major", () => {
+  it("readManifest rejects a runtimeRange that does not parse as >=X.Y.Z <A.B.C at all, even though every other field is otherwise valid", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, runtimeRange: "banana" }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
+
+  it("readManifest rejects a manifest whose runtimeRange is current but sourceVersion names a different major", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, sourceVersion: "0.0.1" }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
+
+  it("readManifest rejects a manifest whose runtimeRange is current but runtime.version names a different major", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, runtime: { ...manifest.runtime, version: "0.3.0" } }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
+
+  it("an internally-consistent manifest naming a FUTURE major is accepted (not thrown) and reported runtime-incompatible with a fact-only reason", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    const future = { ...manifest, sourceVersion: "2.0.0", runtimeRange: ">=2.0.0 <3.0.0", runtime: { ...manifest.runtime, version: "2.0.0" } };
+    await writeFile(path, `${JSON.stringify(future, null, 2)}\n`);
+
+    const verification = await verifySkills(options);
+    expect(verification.status).toBe("runtime-incompatible");
+    expect(verification.runtime?.reason).toContain(">=2.0.0 <3.0.0");
+    expect(verification.runtime?.reason).toContain(runtimeCompatibility);
+    // This is exactly what review round 1 caught: "predates"/"pre-1.0" is right for the 0.x case but
+    // WRONG for this FUTURE-range case -- a sentence stating facts (which range, which range this build
+    // verifies) must not assign a direction. "older" is still allowed to appear ON ITS OWN inside the
+    // conditional clause about --force ("... if this binary is older than the one that wrote the
+    // manifest") because that is the downgrade warning I3 requires, not a claim about the direction of
+    // the range -- so this test does not ban that word, only "predates"/"pre-1.0".
+    expect(verification.runtime?.reason?.toLowerCase()).not.toMatch(/predates|pre-1\.0/);
+  });
+});
+
+/**
+    // This is exactly what review round 1 caught: "predates"/"pre-1.0" is right for the 0.x case but
+    // WRONG for this FUTURE-range case -- a sentence stating facts (which range, which range this build
+    // verifies) must not assign a direction. "older" is still allowed to appear ON ITS OWN inside the
+    // conditional clause about --force ("... if this binary is older than the one that wrote the
+    // manifest") because that is the downgrade warning I3 requires, not a claim about the direction of
+    // the range -- so this test does not ban that word, only "predates"/"pre-1.0".
+ */
+describe("C1 + I3: the runtime-incompatible reason names only a remedy that actually works", () => {
+  it("names skills update --force, warns it can downgrade, and says skills install does not help", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    await ageManifestToPre1(installed.root);
+
+    const reason = (await verifySkills(options)).runtime?.reason ?? "";
+    expect(reason).toContain("skills update --force");
+    expect(reason.toLowerCase()).toContain("downgrade");
+    expect(reason).toContain("skills install");
+    expect(reason.toLowerCase()).toMatch(/does not help|refuses to overwrite/);
+  });
+
+  it("skills install on top of an aged install really does fail -- exit 4, not the remedy the old reason text named", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    await ageManifestToPre1(installed.root);
+
+    const result = await runCli(["skills", "install", "--agent", "codex"], { cwd: options.projectRoot });
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toMatch(/Refusing to overwrite unmanaged skill file/);
+  });
+
+  it("skills update --force really does move the manifest onto the current range, and skills verify then reports valid", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    await ageManifestToPre1(installed.root);
+
+    const forced = await runCli(["skills", "update", "--agent", "codex", "--force"], { cwd: options.projectRoot });
+    expect(forced.exitCode).toBe(0);
+    const verified = await runCli(["skills", "verify", "--agent", "codex"], { cwd: options.projectRoot });
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ status: "valid" });
+  });
+});

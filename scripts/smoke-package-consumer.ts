@@ -22,16 +22,19 @@ try {
   tarball = join(root, packageResult.filename);
   run("npm", ["init", "-y"], consumer);
   run("npm", ["install", tarball, "--ignore-scripts"], consumer);
-  // Type-checks every name `.` re-exports (the whole public value+type surface, src/orchestration/
-  // qa-tester.ts) plus the "./cli" subpath, at the one packaging boundary where a consumer's own
-  // `tsc` run is what would catch a name that resolves in the source tree but not from the installed
-  // tarball. This used to import only `createQaTester` -- one name out of forty-eight -- which is not
-  // a smoke test of "the public API installs correctly," just of one function in it. Values and types
-  // are two separate `import`/`import type` statements because only the six values below have a
-  // runtime shape a `typeof`/`Array.isArray` check can confirm; the 42 types have none -- for those,
-  // merely naming them in an `import type` is the whole assertion: `tsc` resolves each named import
-  // against the installed package's `.d.ts` and fails with "has no exported member" the moment one is
-  // missing, which is the same mechanism a consumer's own build would hit.
+  // Type-checks AND (below, after the tsc run) actually EXECUTES every name `.` re-exports (the
+  // whole public value+type surface, src/orchestration/qa-tester.ts) plus the "./cli" subpath, at the
+  // one packaging boundary where a consumer's own build and `import` are what would catch a name that
+  // resolves in the source tree but not from the installed tarball. This used to import only
+  // `createQaTester` -- one name out of forty-eight -- which is not a smoke test of "the public API
+  // installs correctly," just of one function in it. Values and types are two separate
+  // `import`/`import type` statements because they are proven two different ways: the 42 types have
+  // no runtime shape, so naming them in an `import type` and letting `tsc` resolve each against the
+  // installed package's `.d.ts` (failing with "has no exported member" the moment one is missing) IS
+  // the whole assertion for those. The 6 values get that same `.d.ts` check AND, because `tsc --noEmit`
+  // emits no JS and this script never previously ran the file, a second and different failure mode:
+  // the `typeof`/`Array.isArray` checks below only prove anything once `consumer.mts` is actually
+  // executed, which happens after the `tsc` invocation.
   const consumerSource = `import {
   createQaTester, qaTester, TestDataHookRegistry, ExternalPermitRegistry,
   selectRegressionCases, regressionMappingSources,
@@ -50,9 +53,11 @@ import type {
 // Type-only namespace import: proves the "./cli" subpath resolves to a real declaration file at the
 // packaging boundary without importing a VALUE from it. "./cli" compiles to the same file
 // bin.qa-skill points at (src/cli/index.ts) and runs the CLI as a side effect the instant it is
-// imported as a value -- see "What v1.0 freezes" in the README. \`import type * as\` is erased
-// entirely at compile time (no JS emitted, nothing executed), so this line can only ever fail by not
-// type-checking, never by running the CLI mid-smoke-test.
+// imported as a value -- see "What v1.0 freezes" in the README. \`import type * as\` is erased before
+// EITHER consumer of this source below evaluates the module -- \`tsc --noEmit\` (never emits JS) and
+// \`tsx\` (elides \`import type\` as a syntax-level TypeScript construct, confirmed by measurement, see
+// the comment beside the \`tsx\` invocation) -- so this line can only ever fail by not type-checking,
+// never by running the CLI mid-smoke-test.
 import type * as QaSkillsCli from "@vigentix/qa-skills/cli";
 type CliSubpathHasTypes = typeof QaSkillsCli;
 
@@ -62,6 +67,7 @@ if (typeof TestDataHookRegistry !== "function") throw new Error("missing public 
 if (typeof ExternalPermitRegistry !== "function") throw new Error("missing public API: ExternalPermitRegistry");
 if (typeof selectRegressionCases !== "function") throw new Error("missing public API: selectRegressionCases");
 if (!Array.isArray(regressionMappingSources)) throw new Error("missing public API: regressionMappingSources");
+process.stdout.write("consumer.mts: all 6 public values present with the expected runtime shape\\n");
 `;
   await writeFile(join(consumer, "consumer.mts"), consumerSource);
   run(process.execPath, [
@@ -69,6 +75,23 @@ if (!Array.isArray(regressionMappingSources)) throw new Error("missing public AP
     "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ESNext",
     "--lib", "ESNext,DOM", "--types", "node", "--typeRoots", join(root, "node_modules", "@types"),
   ], consumer);
+  // `tsc --noEmit` above only PROVES every name resolves in the installed package's `.d.ts` -- it
+  // emits no JS and nothing in this script ever ran the file, so the `if (typeof ... ) throw` lines
+  // above never executed and could not have caught a value present in the `.d.ts` but missing (or
+  // wrong-shaped) in the shipped `.js`. Confirmed by mutation: deleting a value's `export` from the
+  // built `.js` while leaving the `.d.ts` untouched left this smoke test green before this fix.
+  //
+  // `consumer.mts` mixes `import type * as QaSkillsCli from "@vigentix/qa-skills/cli"` in with real
+  // value imports, so actually EXECUTING the file must not run "./cli" as a side effect (see "What
+  // v1.0 freezes" in the README on why importing it as a value does). Measured, not assumed: a probe
+  // file with `import type * as X from "<module-with-a-console.log-side-effect>"` printed nothing
+  // under both plain `node` (v22.6+/24, native type-stripping) and `tsx` (esbuild-based, used here) --
+  // `import type` is a syntax-level TypeScript construct erased before either ever evaluates the
+  // module. Run through `tsx` (already this project's own devDependency for running THIS script, not
+  // a new one) rather than bare `node --experimental-strip-types`: `tsx` does not depend on which
+  // Node minor first shipped default type-stripping, so it runs identically on every Node line this
+  // package's `engines` field admits (>=22), not only the Node 24 leg CI gates `smoke:package` behind.
+  run(join(root, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx"), ["consumer.mts"], consumer);
   const installedPackageRoot = join(consumer, "node_modules", "@vigentix", "qa-skills");
   const installed = JSON.parse(await readFile(join(installedPackageRoot, "package.json"), "utf8")) as { version?: string; types?: string; private?: boolean };
   if (!installed.version) throw new Error("installed package.json is missing a version");

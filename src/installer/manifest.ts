@@ -55,15 +55,40 @@ export function isRuntimeCompatible(version: string, range = runtimeCompatibilit
   return /^1\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version);
 }
 
-/** Generic semver-SHAPE check, deliberately independent of `runtimeCompatibility`'s major lock above.
- *  `isManifest` uses this (not `isRuntimeCompatible`) for `sourceVersion` and `runtime.version`: a
- *  manifest a pre-1.0 install wrote records both as something like "0.3.0", which is a well-formed
- *  version of a DIFFERENT major, not a malformed one (I4, v1.0 contract freeze). Whether THIS build
- *  still considers that major current is a `verifySkills` question (it compares the manifest's own
- *  `runtimeRange` against `runtimeCompatibility` and reports `runtime-incompatible` when they differ),
- *  not a `readManifest` one -- `readManifest` only rules on whether the JSON is shaped like a manifest. */
-function isSemverLike(value: unknown): value is string {
-  return typeof value === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
+/** Full semver SHAPE, deliberately independent of `runtimeCompatibility`'s major lock above (I4):
+ *  a manifest a pre-1.0 install wrote records `sourceVersion`/`runtime.version` as something like
+ *  "0.3.0", a well-formed version of a DIFFERENT major, not a malformed one. Anchored at both ends,
+ *  so `exec` only matches a value that is semver top-to-bottom -- "1.2" (no patch), "1.a.0"
+ *  (non-numeric minor), and "1.0.0x" (trailing garbage) all fail to match and so cannot produce a
+ *  major through `semverMajor` below, which reads that group. There is no separate "is this
+ *  semver-shaped" predicate: one that reused this same pattern to answer only that question would
+ *  be true on EXACTLY the inputs `semverMajor` already turns into a real major, making it provably
+ *  redundant with the major-equality check `isManifest` performs below -- dead code no mutation of
+ *  it could ever turn a test red on, which is itself the defect (I1, v1.0 contract freeze follow-up:
+ *  an unkillable guard is not a guard). */
+const semverShapePattern = /^(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+/** This project has only ever written a `runtimeRange` in this exact two-comparator shape (see
+ *  `runtimeCompatibility` above and every superseded literal before it: `>=0.1.0 <1.0.0`,
+ *  `>=1.0.0 <2.0.0`, ...). A range that does not parse this way is not a range to compare a major
+ *  against -- `isManifest` treats it as disqualifying, the same as a missing field (I2, v1.0 contract
+ *  freeze follow-up). */
+const rangeLowerBoundPattern = /^>=(\d+)\.\d+\.\d+ <\d+\.\d+\.\d+$/;
+
+/** The major version component of `value`, or `""` if `value` is not a string or is not shaped like
+ *  semver at all (`exec` on a non-string coerces via `ToString`, so a number/`undefined`/object all
+ *  land here too). `""` never equals a `rangeLowerBoundMajor` result -- that pattern's `(\d+)` group
+ *  cannot capture zero digits -- so a shape failure and a major mismatch are rejected by the exact
+ *  same comparison in `isManifest`, on purpose: two independent-looking guards that could never
+ *  disagree are one guard, not two, and this keeps the code honest about that. */
+function semverMajor(value: unknown): string {
+  return typeof value === "string" ? (semverShapePattern.exec(value)?.[1] ?? "") : "";
+}
+
+/** The major version this manifest's own `runtimeRange` names -- its lower bound's major, e.g. "0"
+ *  for `>=0.1.0 <1.0.0"` or "1" for `>=1.0.0 <2.0.0`. `undefined` for anything that does not parse
+ *  as a range in this project's shape (I2). */
+function rangeLowerBoundMajor(range: string): string | undefined {
+  return rangeLowerBoundPattern.exec(range)?.[1];
 }
 
 async function listFiles(root: string, directory = root): Promise<string[]> {
@@ -113,14 +138,30 @@ function isManifest(value: unknown): value is SkillManifest {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   const runtime = candidate.runtime;
-  return candidate.manifestVersion === 1 && isSemverLike(candidate.sourceVersion) && typeof candidate.runtimeRange === "string" && candidate.runtimeRange.length > 0
+  // I2: dropping the 1.x-only lock (I4) must not also drop internal consistency. A manifest's
+  // `sourceVersion` and `runtime.version` are required to share the SAME major as its own
+  // `runtimeRange` names -- not any major this build happens to support. That is what makes a 0.x
+  // manifest (range, sourceVersion, and runtime.version all "0") a well-formed manifest of a
+  // different major, while a manifest claiming range `>=1.0.0 <2.0.0` but `sourceVersion: "0.0.1"`
+  // (self-contradictory) still fails the same way it did before I4.
+  //
+  // `runtimeRangeMajor` is `string | undefined` and NOT re-checked against `undefined` below: the
+  // two `semverMajor(...) === runtimeRangeMajor` comparisons already reject that case on their own,
+  // because `semverMajor` never returns `undefined` (it falls back to `""`, see its own comment), so
+  // a `string === undefined` comparison is always `false`. An explicit `runtimeRangeMajor !==
+  // undefined` clause here would be the exact same dead-guard mistake `semverMajor`'s comment
+  // documents for `isSemverLike` -- checked and confirmed by mutation before this comment was
+  // written (removing it turns zero tests red).
+  const runtimeRangeMajor = typeof candidate.runtimeRange === "string" ? rangeLowerBoundMajor(candidate.runtimeRange) : undefined;
+  return candidate.manifestVersion === 1
+    && semverMajor(candidate.sourceVersion) === runtimeRangeMajor
     && (candidate.agent === "codex" || candidate.agent === "claude" || candidate.agent === "cursor")
     && (candidate.target === "project" || candidate.target === "user")
     && runtime !== null && typeof runtime === "object"
     && typeof (runtime as Record<string, unknown>).command === "string"
     && typeof (runtime as Record<string, unknown>).resolvedPath === "string"
     && ((runtime as Record<string, unknown>).source === "project" || (runtime as Record<string, unknown>).source === "path")
-    && isSemverLike((runtime as Record<string, unknown>).version)
+    && semverMajor((runtime as Record<string, unknown>).version) === runtimeRangeMajor
     && typeof (runtime as Record<string, unknown>).sha256 === "string"
     && /^[a-f0-9]{64}$/.test(String((runtime as Record<string, unknown>).sha256))
     && Array.isArray(candidate.files) && candidate.files.every(isManifestEntry)
