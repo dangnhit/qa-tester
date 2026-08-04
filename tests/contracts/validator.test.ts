@@ -98,7 +98,7 @@ const otherArtifactContracts = [
     requiredField: "sha256",
     valid: {
       artifactType: "evidence",
-      schemaVersion: "3.0.0",
+      schemaVersion: "4.0.0",
       producerVersion: "1.0.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ",
       runId: "20260723T123456Z-a1b2c3",
@@ -162,7 +162,7 @@ const otherArtifactContracts = [
     requiredField: "affectedClaim",
     valid: {
       artifactType: "evidence-gap",
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       producerVersion: "1.0.0",
       evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
       reason: "The upstream system redacted the response.",
@@ -312,7 +312,7 @@ describe("validateArtifact", () => {
 describe("evidence schema 3.0.0", () => {
   const attemptSubject = { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" };
   const logEvidence = {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
     subject: attemptSubject, kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
     sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
@@ -369,7 +369,7 @@ describe("evidence schema 3.0.0", () => {
     expect(validateArtifact("evidence", { ...logEvidence, attemptId: "ATTEMPT-1" }).valid).toBe(false);
   });
 
-  it.each(["1.0.0", "2.0.0"])("rejects evidence still declaring schemaVersion %s", (schemaVersion) => {
+  it.each(["1.0.0", "2.0.0", "3.0.0"])("rejects evidence still declaring schemaVersion %s", (schemaVersion) => {
     expect(validateArtifact("evidence", { ...logEvidence, schemaVersion }).valid).toBe(false);
   });
 });
@@ -395,7 +395,7 @@ describe("evidence schema 3.0.0", () => {
  *  discriminated THIRD case rather than a loophole that widens the existing two. */
 describe("evidence schema 3.0.0 (runner-report)", () => {
   const runnerReport = {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
     evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
     subject: { kind: "observed-execution", executionId: "EXEC-1" },
     kind: "runner-report", capturedAt: "2026-07-23T12:34:56.000Z",
@@ -1031,7 +1031,7 @@ describe("identity fields forbid a colon (closes the collision class at the data
   });
 
   const evidenceGap = {
-    artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     evidenceGapId: "GAP-1", runId: "20260723T123456Z-a1b2c3", scope: "operational",
     reason: "The upstream system redacted the response.",
     affectedClaim: "The order was persisted successfully.",
@@ -1041,11 +1041,27 @@ describe("identity fields forbid a colon (closes the collision class at the data
     expect(validateArtifact("evidence-gap", { ...evidenceGap, evidenceGapId: "GAP:1" }).valid).toBe(false);
   });
 
-  /** `evidence-gap` had NO `schemaVersion` assertion of any kind before this row, so nothing pinned its
-   *  1.0.0 → 2.0.0 bump: the `pattern` above could have been added without the bump and every test would
-   *  still have passed. Asserted on the `/schemaVersion` `const` error for the same reason as the others. */
-  it("rejects an evidence gap still declaring the superseded schemaVersion 1.0.0", () => {
-    expect(validateArtifact("evidence-gap", { ...evidenceGap, schemaVersion: "1.0.0" }).errors).toEqual(
+  /** The triple lives only in the `scope: "attempt"` branch (`allOf[0].then`): the `operational` branch
+   *  (`allOf[1]`) forbids `attemptId`/`testCaseId`/`testCaseRevisionId`/`testCaseInstanceId` outright via
+   *  `not.anyOf.required`, so `evidenceGap` above -- which is `operational` -- cannot host this fixture. */
+  const evidenceGapAttempt = {
+    ...evidenceGap, scope: "attempt",
+    attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "TC-1--INSTANCE-1",
+  };
+
+  it("rejects an evidence gap's attempt-scoped identity components whose value could rejoin to another's", () => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseId: "TC:1" }).valid).toBe(false);
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseRevisionId: "R:A" }).valid).toBe(false);
+    expect(validateArtifact("evidence-gap", { ...evidenceGapAttempt, testCaseInstanceId: "A:B" }).valid).toBe(false);
+  });
+
+  /** `evidence-gap` had NO `schemaVersion` assertion of any kind before the 1.0.0 → 2.0.0 row, so nothing
+   *  pinned that bump: a `pattern` could have been added without it and every test would still have
+   *  passed. 2.0.0 is the version the identity fields' colon `pattern` superseded, and is the only version
+   *  whose rejection proves THAT bump landed. Both rows are asserted on the `/schemaVersion` `const` error
+   *  for the same reason as the others. */
+  it.each(["1.0.0", "2.0.0"])("rejects an evidence gap still declaring the superseded schemaVersion %s", (schemaVersion) => {
+    expect(validateArtifact("evidence-gap", { ...evidenceGap, schemaVersion }).errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
     );
   });
@@ -1060,6 +1076,57 @@ describe("identity fields forbid a colon (closes the collision class at the data
 
   it("rejects a human attestation whose obligationId could rejoin to another's", () => {
     expect(validateArtifact("human-attestation", { ...attestation, obligationId: "COV:1" }).valid).toBe(false);
+  });
+
+  /** `evidence.subject`'s attempt branch carries the same testCaseId/testCaseRevisionId/testCaseInstanceId
+   *  triple as two of the six schemas above (`test-result`, `test-result-batch`'s entries) -- Task 7 made
+   *  evidence-gap's attempt scope a third. The remaining three (`test-case`, `coverage-obligation`,
+   *  `human-attestation`) do not: `test-case` carries its own, differently-named identity
+   *  (testCaseId/revisionId/instanceId), and the other two carry a single id. `evidence.subject` was left
+   *  out of the original sweep not because it lives one level down -- `test-result-batch.entries[]` does
+   *  too, and was patched in Phase 9 -- but because it lives inside a `oneOf` branch, which that sweep's
+   *  site list never reached. */
+  const evidence = {
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
+    evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: "20260723T123456Z-a1b2c3",
+    subject: { kind: "attempt", attemptId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", testCaseId: "TC-1", testCaseRevisionId: "REV-1", testCaseInstanceId: "INSTANCE-1" },
+    kind: "log", capturedAt: "2026-07-23T12:34:56.000Z",
+    sha256: "a".repeat(64), relativePath: "evidence/log.json", mediaType: "application/json",
+    binaryArtifactIds: ["binary-1"],
+    binaryArtifacts: [{ id: "binary-1", relativePath: "evidence/log.json", sha256: "a".repeat(64), mediaType: "application/json" }],
+    provenance: { captureType: "log", url: "about:blank", browser: "chromium", build: "test", capturedAt: "2026-07-23T12:34:56.000Z" },
+  };
+
+  it("rejects an evidence subject whose identity components could rejoin to another's", () => {
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseId: "TC:1" } }).valid).toBe(false);
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseRevisionId: "R:A" } }).valid).toBe(false);
+    expect(validateArtifact("evidence", { ...evidence, subject: { ...evidence.subject, testCaseInstanceId: "A:B" } }).valid).toBe(false);
+  });
+
+  /** `regression-selection`'s `$defs.decision` carries the same triple and is shared by both
+   *  `selected` and `excluded` -- one `pattern` addition on the shared `$defs` entry covers both arrays,
+   *  proven below by rejecting a colon in each array in turn. */
+  const decision = {
+    testCaseId: "TC-1", revisionId: "REV-1", instanceId: "TC-1--INSTANCE-1",
+    source: "requirement-mapping", rationale: "Directly covers the changed requirement.", confidence: 0.9,
+  };
+  const selection = {
+    artifactType: "regression-selection", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    selectionId: "REG-1", runId: "20260723T123456Z-a1b2c3",
+    changeScopeArtifactId: "CHANGE-SCOPE-1", changeScopeSha256: "a".repeat(64), decisionChecksum: "b".repeat(64),
+    selected: [decision], excluded: [], unmappedChangeRisks: [], complete: true,
+  };
+
+  it("rejects a regression-selection decision whose identity components could rejoin to another's", () => {
+    expect(validateArtifact("regression-selection", { ...selection, selected: [{ ...decision, testCaseId: "TC:1" }] }).valid).toBe(false);
+    expect(validateArtifact("regression-selection", { ...selection, selected: [{ ...decision, revisionId: "R:A" }] }).valid).toBe(false);
+    expect(validateArtifact("regression-selection", { ...selection, excluded: [{ ...decision, instanceId: "A:B" }] }).valid).toBe(false);
+  });
+
+  it("rejects a regression-selection still declaring the superseded schemaVersion 1.0.0", () => {
+    expect(validateArtifact("regression-selection", { ...selection, schemaVersion: "1.0.0" }).errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/schemaVersion", keyword: "const" })]),
+    );
   });
 });
 

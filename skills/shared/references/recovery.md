@@ -286,10 +286,20 @@ validating. Reopening such a run reports validation diagnostics rather than sile
 the current contract no longer describes.
 
 A run is self-contained, so the remedy is to **start a new run** — there is nothing to repair in place.
-No migration path is offered before v1.0: there is no converter, no compatibility mode, and no
-multi-version validator. Artifacts from a prior run are read-only history; do not hand-edit their
-`schemaVersion` to make them validate, because the rest of the payload will not match the new contract
-and the checksum will no longer match the manifest.
+No migration path is offered, at v1.0 or after: there is no converter, no compatibility mode, and no
+multi-version validator for a run's artifacts, and freezing the v1.0 contract does not add one. Artifacts
+from a prior run are read-only history; do not hand-edit their `schemaVersion` to make them validate,
+because the rest of the payload will not match the new contract and the checksum will no longer match
+the manifest.
+
+This is a different axis from the *installed skill manifest*'s own version, which does get a defined
+v1.0 report: `qa-skill skills verify` (and `uninstall`/`update`, which share its detection) names a
+manifest whose own `runtimeRange` differs from what this build verifies `runtime-incompatible` rather
+than raising an internal error (for example, one written by a pre-1.0 install) — see
+[What v1.0 freezes](../../../README.md#what-v10-freezes) in the README for the exact `reason` text and
+why `skills update --force`, not `skills install`, is the only remedy it names. That is a diagnosis, not
+a migration: it identifies a stale binding and can rewrite it, and it carries forward none of a run's
+artifacts, which remain exactly as unmigratable as described above.
 
 That is the whole story only when the artifact you are re-reading belongs to the run you opened. It is
 not the whole story for `retest` and `regression`, both of which open a second, **linked source run** and
@@ -301,10 +311,11 @@ a third and fourth way — the read-path check in `src/core/semantic-rules.ts` a
 `possibleDuplicateSources` and read its registered artifacts to verify the reference.
 `readRegisteredArtifacts()` (`src/core/run-workspace.ts`) throws on **any** diagnostic in the run it
 reads — not only on the specific artifact a caller wanted — so if that other run contains even one
-`evidence` artifact written before the `3.0.0` bump, all four of these flows fail, and they fail while
-acting on the *other* run, not the one you asked to open. Since any run that has actually executed and
-captured evidence writes `evidence` artifacts, this means a source run from before the bump is
-permanently unusable as a retest target, a regression baseline, or a duplicate-comparison source. The
+`evidence` artifact written by a package version older than the one that last bumped `evidence`'s
+`schemaVersion`, all four of these flows fail, and they fail while acting on the *other* run, not the one
+you asked to open. Since any run that has actually executed and captured evidence writes `evidence`
+artifacts, this means a source run written against a superseded `evidence` `schemaVersion` is permanently
+unusable as a retest target, a regression baseline, or a duplicate-comparison source. The
 error you will see on the CLI is exactly `Workspace artifact binding is invalid: Payload does not match
 declared artifact type evidence` — `src/cli/program.ts`'s top-level handler prints only `error.message` to
 stderr, with no code prefix. The thrown `QaSkillsError`'s separate `code` property is `ARTIFACT_BINDING`
@@ -314,17 +325,20 @@ no longer validates," not as a problem with the run you just opened. "Start a ne
 this: the new run reads fine, but the bug it would retest, or the baseline it would import, stays locked
 behind the old-schema source. The only remedy is to **re-execute the linked source run under the current
 package version** so
-it writes fresh `evidence` at `3.0.0`, then retest, regress, or compare against that new run instead.
+it writes fresh `evidence` at the package's current `schemaVersion`, then retest, regress, or compare
+against that new run instead. The current value is deliberately not repeated here — it changes with
+every breaking `evidence` release. Read the `schemaVersion` `const` in
+`shared/schemas/evidence.schema.json` for whatever it is now.
 
 **A bootstrap bundle is not exempt — it is now the most likely thing to break.** A source run created by
 `qa-skill workflow bootstrap` (a `plan`-mode run) never registers `evidence`, so the `evidence` story
 above does not reach it. But it holds `requirement-analysis`, `test-plan`, `test-case`, and
-`coverage-obligation`, and **two of those four broke in this release**: `test-case` went `1.0.0` →
-`2.0.0` and `coverage-obligation` went `1.0.0` → `3.0.0`. The same mechanism applies with the same
-force. `buildCanonicalPlanImportBatch` (`src/operations/run-workflow.ts`) opens the source run and calls
-`readRegisteredArtifacts()` on it, which throws on the **first** diagnostic in that run — so a bootstrap
-bundle written before this release fails the import outright, and it fails while acting on the *source*
-run, not the `full`-mode run you just started.
+`coverage-obligation`, and it takes only one of those four schemas bumping to break it. The same
+mechanism applies with the same force: `buildCanonicalPlanImportBatch` (`src/operations/run-workflow.ts`)
+opens the source run and calls `readRegisteredArtifacts()` on it, which throws on the **first** diagnostic
+in that run — so a bootstrap bundle holding even one artifact whose `schemaVersion` has since been
+superseded fails the import outright, and it fails while acting on the *source* run, not the `full`-mode
+run you just started.
 
 An earlier revision of this section said the opposite — that linking to a bootstrap bundle is "safe no
 matter how old that bundle is". That is now false, and it was the sentence most likely to be read after

@@ -81,7 +81,7 @@ async function executedRunWithBug(root: string, options: { bugs?: number } = {})
       binaries: [{ filename: `${identity.testCaseId}.txt`, contents: Buffer.from("failure"), mediaType: "text/plain", captureType: "log" }],
       relationships: [attempt.id],
       descriptor: (binaries) => ({
-        artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(),
+        artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(),
         runId: source.runId, subject: { kind: "attempt", attemptId, testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId },
         kind: "log", capturedAt: "2026-07-23T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain",
         binaryArtifactIds: binaries.map((binary) => binary.id),
@@ -204,7 +204,7 @@ describe("workflow scaffold", () => {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { artifacts: unknown[] };
     await writeFile(manifestPath, JSON.stringify({ ...manifest, artifacts: [...manifest.artifacts, { id: "unexpected", type: "test-result", sha256: "a".repeat(64), relativePath: "artifacts/unexpected.json" }] }));
     await expect(scaffoldWorkflowInput({ root, mode: "plan", outputPath: join(root, "unsafe.json"), sourceRoot: root, sourceRunId: workspace.runId })).rejects.toThrow(/non-planning/i);
-    const verified = await runCli(["runtime", "verify", "--range", ">=0.1.0 <1.0.0"], { cwd: root });
+    const verified = await runCli(["runtime", "verify", "--range", ">=1.0.0 <2.0.0"], { cwd: root });
     expect(verified.exitCode).toBe(0); expect(JSON.parse(verified.stdout)).toMatchObject({ compatible: true });
   });
 });

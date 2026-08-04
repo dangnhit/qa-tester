@@ -207,7 +207,7 @@ async function bugRun(root: string, identity: Identity, requirementId: string): 
     binaries: [{ filename: `${identity.testCaseId}.txt`, contents: Buffer.from("failure"), mediaType: "text/plain", captureType: "log" }],
     relationships: [attempt.id],
     descriptor: (binaries) => ({
-      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(),
+      artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0", evidenceId: createEntityId(),
       runId: source.runId, subject: { kind: "attempt", attemptId, testCaseId: identity.testCaseId, testCaseRevisionId: identity.revisionId, testCaseInstanceId: identity.instanceId },
       kind: "log", capturedAt: "2026-07-31T00:01:00.000Z", sha256: binaries[0]!.sha256, relativePath: binaries[0]!.relativePath, mediaType: "text/plain",
       binaryArtifactIds: binaries.map((binary) => binary.id),

@@ -119,7 +119,7 @@ async function scopedWorkspace(root: string, observed: readonly ObservedEntry[],
   // attempt-scoped gap would need exactly one (`evidenceGapRule`). "Lane 2 reported no evidence" is the
   // honest reading for a run credited entirely by an observed batch.
   await workspace.registerArtifactValue({ type: "evidence-gap", relationships: [], value: {
-    artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "1.0.0",
+    artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "1.0.0",
     evidenceGapId: "GAP-SEL", runId: workspace.runId, scope: "operational",
     reason: "The observed execution reported no evidence artifacts.", affectedClaim: "observed execution evidence",
   } });
@@ -129,7 +129,7 @@ async function scopedWorkspace(root: string, observed: readonly ObservedEntry[],
     const selection = selectRegressionCases({ changes: [...changes], testCases: registered.filter((artifact) => artifact.record.type === "test-case").map((artifact) => regressionCaseFromCanonical(artifact.value)) });
     if (selection.selected.length !== 1 || selection.selected[0]?.testCaseId !== selectedCase.testCaseId) throw new Error("Fixture must select exactly the one in-scope case");
     await workspace.registerArtifactValue({ type: "regression-selection", relationships: [scope.id, caseIn.id, caseOutside.id], value: {
-      artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: "0.1.0", selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
+      artifactType: "regression-selection", schemaVersion: "2.0.0", producerVersion: "0.1.0", selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
       changeScopeArtifactId: scope.id, changeScopeSha256: scope.sha256, decisionChecksum: sha256Text(JSON.stringify(selection)), ...selection,
     }, provenance: "runtime" });
   }

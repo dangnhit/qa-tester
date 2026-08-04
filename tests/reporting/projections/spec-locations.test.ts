@@ -103,7 +103,7 @@ describe("specLocationsByEntryIdentity", () => {
   // runner-report one" filter moved along with the file read; its own tests pin that.)
   it("finds nothing in an evidence descriptor handed to it in place of the report it references", () => {
     const descriptor: Readonly<Record<string, unknown>> = {
-      artifactType: "evidence", schemaVersion: "3.0.0", evidenceId: "EV-1", runId: "RUN-1",
+      artifactType: "evidence", schemaVersion: "4.0.0", evidenceId: "EV-1", runId: "RUN-1",
       subject: { kind: "observed-execution", executionId: "EX-1" }, kind: "runner-report", capturedAt: base.generatedAt,
       sha256: "f".repeat(64), relativePath: "evidence/1-report.json", mediaType: "application/json",
       binaryArtifactIds: ["bin-1"], binaryArtifacts: [{ id: "bin-1", relativePath: "evidence/1-report.json", sha256: "f".repeat(64), mediaType: "application/json" }],

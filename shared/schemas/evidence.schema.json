@@ -7,14 +7,14 @@
   "required": ["artifactType", "schemaVersion", "producerVersion", "evidenceId", "runId", "subject", "kind", "capturedAt", "sha256", "relativePath", "mediaType", "binaryArtifactIds", "binaryArtifacts", "provenance"],
   "properties": {
     "artifactType": { "const": "evidence" },
-    "schemaVersion": { "const": "3.0.0" },
+    "schemaVersion": { "const": "4.0.0" },
     "producerVersion": { "type": "string", "minLength": 1 },
     "evidenceId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "runId": { "type": "string", "minLength": 1 },
     "subject": {
       "type": "object",
       "oneOf": [
-        { "type": "object", "additionalProperties": false, "required": ["kind", "attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"], "properties": { "kind": { "const": "attempt" }, "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1 }, "testCaseRevisionId": { "type": "string", "minLength": 1 }, "testCaseInstanceId": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "attemptId", "testCaseId", "testCaseRevisionId", "testCaseInstanceId"], "properties": { "kind": { "const": "attempt" }, "attemptId": { "type": "string", "minLength": 1 }, "testCaseId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseRevisionId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" }, "testCaseInstanceId": { "type": "string", "minLength": 1, "pattern": "^[^:]+$" } } },
         { "type": "object", "additionalProperties": false, "required": ["kind", "executionId"], "properties": { "kind": { "const": "observed-execution" }, "executionId": { "type": "string", "minLength": 1 } } }
       ]
     },

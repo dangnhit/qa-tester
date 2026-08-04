@@ -29,7 +29,7 @@ export function projectRuntimePath(projectRoot: string): string {
  * reported version alone, so `verify` can be driven to `runtime-changed` rather than
  * `runtime-incompatible`.
  */
-export async function writeRuntime(binDirectory: string, output = "0.1.0", marker?: string): Promise<string> {
+export async function writeRuntime(binDirectory: string, output = "1.0.0", marker?: string): Promise<string> {
   const path = runtimePath(binDirectory);
   const body = process.platform === "win32"
     ? `@echo off\r\n${marker === undefined ? "" : `rem ${marker}\r\n`}echo ${output}\r\n`
@@ -40,7 +40,7 @@ export async function writeRuntime(binDirectory: string, output = "0.1.0", marke
 }
 
 /** Creates `<projectRoot>/node_modules/.bin` and writes the platform's runtime into it. */
-export async function writeProjectRuntime(projectRoot: string, output = "0.1.0", marker?: string): Promise<string> {
+export async function writeProjectRuntime(projectRoot: string, output = "1.0.0", marker?: string): Promise<string> {
   const binDirectory = join(projectRoot, "node_modules", ".bin");
   await mkdir(binDirectory, { recursive: true });
   return writeRuntime(binDirectory, output, marker);

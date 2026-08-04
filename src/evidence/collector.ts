@@ -60,8 +60,8 @@ async function attemptBinding(workspace: RunWorkspace, attemptId: string): Promi
 async function registerGap(workspace: RunWorkspace, attemptId: string, reason: string, affectedClaim: string): Promise<GapResult> {
   const binding = await attemptBinding(workspace, attemptId);
   const gap = binding === undefined
-    ? { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
-    : { artifactType: "evidence-gap" as const, schemaVersion: "2.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
+    ? { artifactType: "evidence-gap" as const, schemaVersion: "3.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "operational" as const, reason, affectedClaim }
+    : { artifactType: "evidence-gap" as const, schemaVersion: "3.0.0" as const, producerVersion: runtimeVersion, evidenceGapId: createEntityId(), runId: workspace.runId, scope: "attempt" as const, attemptId, testCaseId: binding.testCaseId, testCaseRevisionId: binding.testCaseRevisionId, testCaseInstanceId: binding.testCaseInstanceId, reason, affectedClaim };
   const record = await workspace.registerArtifactValue({ type: "evidence-gap", value: gap, relationships: binding === undefined ? [] : [binding.artifactId], provenance: "runtime" });
   return { kind: "evidence-gap", descriptorArtifactId: record.id, gap };
 }
@@ -112,7 +112,7 @@ function descriptor(input: { evidenceId: string; workspace: RunWorkspace; attemp
   if (!input.binary.mediaType) throw new Error("Evidence media type is required");
   if (input.provenance.captureType === "screenshot" && !input.provenance.dimensions) throw new Error("Screenshot evidence dimensions are required");
   return {
-    artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId: input.evidenceId, runId: input.workspace.runId,
+    artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: runtimeVersion, evidenceId: input.evidenceId, runId: input.workspace.runId,
     subject: { kind: "attempt", attemptId: input.attemptId, testCaseId: input.binding.testCaseId, testCaseRevisionId: input.binding.testCaseRevisionId, testCaseInstanceId: input.binding.testCaseInstanceId },
     kind: input.provenance.captureType, capturedAt: input.provenance.capturedAt, sha256: input.binary.sha256, relativePath: input.binary.relativePath, mediaType: input.binary.mediaType, binaryArtifactIds: [input.binary.id], binaryArtifacts: [{ id: input.binary.id, relativePath: input.binary.relativePath, sha256: input.binary.sha256, mediaType: input.binary.mediaType }],
     ...(input.telemetryFindings === undefined ? {} : { telemetryFindings: input.telemetryFindings

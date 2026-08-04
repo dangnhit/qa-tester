@@ -2,7 +2,7 @@
 
 export interface RegressionSelection {
   artifactType: "regression-selection";
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   producerVersion: string;
   selectionId: string;
   runId: string;

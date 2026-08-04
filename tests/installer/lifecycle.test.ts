@@ -36,7 +36,7 @@ describe("portable skill installer", () => {
     expect(installed.root).toMatch(/\.codex[\\/]skills$/);
     expect(await readFile(join(installed.root, "qa-tester", "SKILL.md"), "utf8")).toContain("name: qa-tester");
     const manifest = JSON.parse(await readFile(join(installed.root, manifestFilename), "utf8")) as { runtime: { command: string; resolvedPath: string; source: string; version: string; sha256: string } };
-    expect(manifest.runtime).toMatchObject({ command: projectRuntimePath(options.projectRoot), source: "project", version: "0.1.0" });
+    expect(manifest.runtime).toMatchObject({ command: projectRuntimePath(options.projectRoot), source: "project", version: "1.0.0" });
     expect(manifest.runtime.resolvedPath).toBe(await realpath(manifest.runtime.command));
     expect(manifest.runtime.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(await verifySkills(options)).toMatchObject({ status: "valid", runtime: { status: "valid", expected: manifest.runtime, actual: manifest.runtime } });
@@ -47,8 +47,11 @@ describe("portable skill installer", () => {
     await installSkills(options);
     const runtime = projectRuntimePath(options.projectRoot);
 
-    await writeProjectRuntime(options.projectRoot, "0.1.0", "compatible but different identity");
+    await writeProjectRuntime(options.projectRoot, "1.0.0", "compatible but different identity");
     expect(await verifySkills(options)).toMatchObject({ status: "runtime-changed", runtime: { status: "runtime-changed" } });
+    // "9.0.0" still asserts incompatible, but it and any 0.x version now fail the same regex
+    // clause in isRuntimeCompatible (see manifest.ts): this case no longer distinguishes
+    // "an unfamiliar future version" from "our own superseded 0.x line."
     await writeProjectRuntime(options.projectRoot, "9.0.0");
     expect(await verifySkills(options)).toMatchObject({ status: "runtime-incompatible", runtime: { status: "runtime-incompatible" } });
     await rm(runtime);
@@ -111,7 +114,7 @@ describe("portable skill installer", () => {
   it("prefers and executes the project runtime, rejects incompatible versions, and never falls back remotely", async () => {
     const options = await fixture();
     const resolved = await resolveCompatibleRuntime(options.projectRoot, "");
-    expect(resolved).toMatchObject({ source: "project", version: "0.1.0" });
+    expect(resolved).toMatchObject({ source: "project", version: "1.0.0" });
     await writeProjectRuntime(options.projectRoot, "nope");
     await expect(installSkills({ ...options, agent: "codex", target: "project" })).rejects.toThrow(/version|compatible|setup/i);
   });

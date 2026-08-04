@@ -16,9 +16,11 @@ import { isRecord } from "./values.js";
  * forgetting the other reddens. Two additional subset assertions guard the case that derived equality
  * cannot see: a member dropped from BOTH lists at once.
  *
- * `runner-report` (evidence 3.0.0) is lane 2's: one raw JSON report for a whole Runtime-Observed
- * Execution. It is deliberately the SAME token as the evidence `kind` and the provenance
- * `captureType`, because `matchesEvidencePrimary` requires all three to be equal.
+ * `runner-report` (added by evidence schema 3.0.0; the current version is deliberately not repeated
+ * here -- it changes with every breaking evidence release, so read the `schemaVersion` `const` in
+ * `shared/schemas/evidence.schema.json` for whatever it is now) is lane 2's: one raw JSON report for a
+ * whole Runtime-Observed Execution. It is deliberately the SAME token as the evidence `kind` and the
+ * provenance `captureType`, because `matchesEvidencePrimary` requires all three to be equal.
  */
 export type EvidenceCaptureType = "screenshot" | "trace" | "console" | "network" | "log" | "runner-report";
 
@@ -72,10 +74,13 @@ export type WorkspaceDiagnostic = { code: string; message: string; relativePath?
  *  gating) and `semantic-rules.ts` (cleanup-run source-run immutability). */
 export const terminalStatuses = new Set<RunStatus>(["COMPLETED", "COMPLETED_WITH_FAILURES", "BLOCKED", "ABORTED"]);
 
-/** What an evidence record is *about* (evidence schema 3.0.0). `attempt` is lane 1 — a runtime-driven
- *  browser attempt bound to one canonical `test-result`. `observed-execution` is lane 2 — an externally
- *  observed Playwright execution, whose `executionId` is the identity field of the `test-result-batch`
- *  artifact; it binds no attempt and therefore no `test-result`. */
+/** What an evidence record is *about* (the `subject` union, added by evidence schema 2.0.0; the current
+ *  version is deliberately not repeated here -- it changes with every breaking evidence release, so
+ *  read the `schemaVersion` `const` in `shared/schemas/evidence.schema.json` for whatever it is now).
+ *  `attempt` is lane 1 — a runtime-driven browser attempt bound to one canonical `test-result`.
+ *  `observed-execution` is lane 2 — an externally observed Playwright execution, whose `executionId` is
+ *  the identity field of the `test-result-batch` artifact; it binds no attempt and therefore no
+ *  `test-result`. */
 export type EvidenceSubject =
   | { kind: "attempt"; attemptId: string; testCaseId: string; testCaseRevisionId: string; testCaseInstanceId: string }
   | { kind: "observed-execution"; executionId: string };

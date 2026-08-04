@@ -9,8 +9,8 @@ export type TestDataHookDescriptor =
   | Readonly<{ id: string; kind: "command"; command: readonly [string, ...string[]] }>
   | Readonly<{ id: string; kind: "api"; fixture: string }>
   | Readonly<{ id: string; kind: "module"; modulePath: string; exportName?: string }>;
-type ProducedResource = Readonly<{ id: string; cleanupAction: string }>;
-type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: TestDataHookDescriptor, operation?: Readonly<Record<string, unknown>>) => Promise<readonly ProducedResource[]>>>;
+export type ProducedResource = Readonly<{ id: string; cleanupAction: string }>;
+export type HookRunners = Partial<Record<TestDataHookDescriptor["kind"], (descriptor: TestDataHookDescriptor, operation?: Readonly<Record<string, unknown>>) => Promise<readonly ProducedResource[]>>>;
 
 /** Strictly inside `directory` — the directory itself is not a module target. Delegates the escape
  *  test to the shared `isPathWithin` so it is separator-aware: the previous literal `"../"` check

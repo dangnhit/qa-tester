@@ -20,7 +20,7 @@ From a checkout:
 npm ci
 npm run build
 npx playwright install chromium
-node dist/src/cli/index.js runtime verify --range ">=0.1.0 <1.0.0"
+node dist/src/cli/index.js runtime verify --range ">=1.0.0 <2.0.0"
 ```
 
 For a consuming project, install this package from a pinned local path or approved registry version, then use `node_modules/.bin/qa-skill`. Do not use a remote `npx` fallback during QA execution.
@@ -50,6 +50,19 @@ npm run demo
 The demo binds an ephemeral `127.0.0.1` port and makes no external request. Its fixture deliberately leaves an authoritative validation message empty, emits `QA_DEMO_CONSOLE_ERROR`, and calls a local endpoint that deterministically fails. The runtime executes Chromium desktop and emulated mobile Test Case Instances, records traces, sanitized raw and annotated screenshots, console/network telemetry, product Bug Candidates, a QA report, and a validated Full Artifact Profile. It also creates one owned synthetic Test Resource and proves its lifecycle through a separate linked Cleanup Run.
 
 The command exits `0` only when the intentional defect is detected as `FAILED + PRODUCT_DEFECT`, the QA Run is `COMPLETED_WITH_FAILURES`, the release recommendation is `NOT_READY`, each desktop/mobile attempt has its required evidence, cleanup completes, and all expected artifacts validate. Canonical run data is written under `qa-results/`; convenient copied evidence projections are written under `demo-artifacts/`. Both are ignored.
+
+## What v1.0 freezes
+
+Starting at v1.0, this package's public contract is exactly two surfaces:
+
+1. **The named exports re-exported from `.`** (`@vigentix/qa-skills`) — every value and type `src/orchestration/qa-tester.ts` re-exports: 6 runtime values (`createQaTester`, `qaTester`, `TestDataHookRegistry`, `ExternalPermitRegistry`, `selectRegressionCases`, `regressionMappingSources`) plus the type names alongside them. A name importable only through a deep or transitive import — one this module does not itself re-export — is not part of the contract, even if it happens to resolve today.
+2. **The CLI contract** — every command in the [CLI reference](#cli-reference) table below, its documented flags, and the exit code table that follows it.
+
+Everything else — `dist/` file layout, internal module boundaries, helper function names, and any artifact JSON shape beyond its published JSON Schema — is an implementation detail and may change in a minor release without notice.
+
+`./cli` (`@vigentix/qa-skills/cli`) is **not** part of the export contract in that sense: it is the `qa-skill` bin script (`package.json`'s `bin.qa-skill` points at the same compiled file), and importing it **runs the CLI as a side effect**. It exports nothing for a consumer to read. The subpath exists so its `.d.ts`/`.js` resolve for tooling that needs to confirm the bin script is present and typed, not to be imported for values.
+
+One consequence of freezing the CLI contract: `qa-skill skills verify` — and `skills uninstall`/`skills update`, which share its detection — no longer treats a skill manifest whose own `runtimeRange` differs from the range this build verifies as corrupt (for example, one written by a pre-1.0 install, which recorded `>=0.1.0 <1.0.0`). Such a manifest is well-formed. `verify` reports it with `status: "runtime-incompatible"` and a `reason` stating both the manifest's own range and the range this build verifies — as facts, not as "older"/"newer", since the same check also catches a manifest naming a range newer than this build knows about. Run `skills update --force` to rewrite the manifest onto the range this build verifies; that moves the install to whichever range the binary currently running the CLI supports, which is a downgrade rather than a repair if that binary is older than the one that wrote the manifest. `skills install` does not help here — it refuses to overwrite files an existing install already wrote.
 
 ## CLI reference
 

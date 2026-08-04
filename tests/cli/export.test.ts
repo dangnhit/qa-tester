@@ -55,7 +55,7 @@ async function notReadyRun(
     relationships: [],
     provenance: "runtime",
     descriptor: (binaries) => ({
-      artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "0.1.0",
+      artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "0.1.0",
       evidenceId: "01K0ABCDEFGHJKMNPQRSTVWXYZ", runId: workspace.runId,
       subject: { kind: "observed-execution", executionId: "EXEC-1" },
       kind: "runner-report", capturedAt: "2026-07-29T00:01:00.000Z",
@@ -80,7 +80,7 @@ async function notReadyRun(
   }
   await workspace.registerArtifactValue({
     type: "evidence-gap", relationships: [],
-    value: { artifactType: "evidence-gap", schemaVersion: "2.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
+    value: { artifactType: "evidence-gap", schemaVersion: "3.0.0", producerVersion: "0.1.0", evidenceGapId: "GAP-1", runId: workspace.runId, scope: "operational", reason: "Trace retention refused by the environment profile", affectedClaim: "the checkout total shown to a signed-in buyer" },
   });
   await generateQaReport({ workspace });
   await workspace.finalize("execute");

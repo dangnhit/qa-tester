@@ -190,7 +190,7 @@ describe("evaluateReleaseGate", () => {
       record: { id: "GAP-1", sha256: "a".repeat(64), type: "evidence-gap" },
       value: {
         artifactType: "evidence-gap",
-        schemaVersion: "2.0.0",
+        schemaVersion: "3.0.0",
         producerVersion: "0.1.0",
         evidenceGapId: "GAP-1",
         runId: "RUN-1",

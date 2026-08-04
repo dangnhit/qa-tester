@@ -668,7 +668,7 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
               provenance: "runtime",
               descriptor: (binaries) => {
                 const binary = binaries[0]!;
-                const value = { artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: runtimeVersion, evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: engine, build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
+                const value = { artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: runtimeVersion, evidenceId, runId: workspace.runId, subject: { kind: "attempt", attemptId, testCaseId: String(testCase.value.testCaseId), testCaseRevisionId: String(testCase.value.revisionId), testCaseInstanceId: String(testCase.value.instanceId) }, kind: "trace", capturedAt, sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType, binaryArtifactIds: [binary.id], binaryArtifacts: [{ id: binary.id, relativePath: binary.relativePath, sha256: binary.sha256, mediaType: binary.mediaType }], provenance: { captureType: "trace", url: safeUrl, viewport, browser: engine, build: "runtime", capturedAt, testcaseId: String(testCase.value.testCaseId) } };
                 const validation = validateArtifact("evidence", value);
                 if (!validation.valid) throw new QaSkillsError(`Trace evidence descriptor is invalid: ${JSON.stringify(validation.errors)}`, "INVALID_ARTIFACT");
                 return value;
@@ -728,8 +728,8 @@ async function executeWithRuntime(workspace: RunWorkspace, runtime: QaRuntimeReg
   return results;
 }
 
-type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string; parameters: Readonly<Record<string, unknown>> }>;
-type RetestSource = Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
+export type RetestScenario = Readonly<{ sourceAttemptArtifactId: string; sourceTestCaseArtifactId: string; testCaseId: string; revisionId: string; instanceId: string; parameters: Readonly<Record<string, unknown>> }>;
+export type RetestSource = Readonly<{ bugId: string; scenarios: readonly RetestScenario[] }>;
 
 function scenarioIdForRegisteredAttempt(artifacts: readonly RegisteredWorkspaceArtifact[], attempt: RegisteredWorkspaceArtifact): string {
   const testCase = artifacts.find((artifact) => artifact.record.type === "test-case" && attempt.record.relationships.includes(artifact.record.id));
@@ -831,7 +831,7 @@ async function registerSelection(workspace: RunWorkspace, selection: RegressionS
   const relationships = decisions.flatMap((decision) => casesByIdentity.get({ testCaseId: decision.testCaseId, testCaseRevisionId: decision.revisionId, testCaseInstanceId: decision.instanceId }));
   if (relationships.length !== decisions.length) throw new QaSkillsError("Regression selection requires every decision to bind one registered canonical test case revision", "ARTIFACT_BINDING");
   return workspace.registerArtifactValue({ type: "regression-selection", value: {
-    artifactType: "regression-selection", schemaVersion: "1.0.0", producerVersion: runtimeVersion, selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
+    artifactType: "regression-selection", schemaVersion: "2.0.0", producerVersion: runtimeVersion, selectionId: `REG-${workspace.runId}`, runId: workspace.runId,
     changeScopeArtifactId: changeScope.id, changeScopeSha256: changeScope.sha256, decisionChecksum: sha256Text(JSON.stringify(selection)), ...selection,
   }, relationships: [changeScope.id, ...relationships.map((artifact) => artifact.record.id)], provenance: "runtime" });
 }

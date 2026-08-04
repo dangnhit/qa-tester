@@ -5,7 +5,7 @@ export type EvidenceGap = {
 } & {
   artifactType: "evidence-gap";
   evidenceGapId: string;
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   producerVersion: string;
   runId: string;
   scope: "attempt" | "operational";

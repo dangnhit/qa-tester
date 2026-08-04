@@ -286,7 +286,7 @@ async function registerObservedBatch(root: string, runId: string, observed: read
         const binary = binaries[0];
         if (binary === undefined) throw new Error("Expected a registered runner-report binary");
         return {
-          artifactType: "evidence", schemaVersion: "3.0.0", producerVersion: "1.0.0",
+          artifactType: "evidence", schemaVersion: "4.0.0", producerVersion: "1.0.0",
           evidenceId, runId, subject: { kind: "observed-execution", executionId },
           kind: "runner-report", capturedAt: "2026-07-31T00:00:01.000Z",
           sha256: binary.sha256, relativePath: binary.relativePath, mediaType: binary.mediaType,
