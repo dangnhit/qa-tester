@@ -109,4 +109,24 @@ describe("skill manifest written by a pre-1.0 install (I4)", () => {
 
     await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
   });
+
+  it("readManifest rejects an otherwise-valid manifest on manifestVersion alone -- isolates that one field, not the whole shape check", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, manifestVersion: 2 }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
+
+  it("readManifest rejects a sha256 that is not 64 lowercase hex characters, everything else left valid", async () => {
+    const options = { ...(await fixture()), agent: "codex" as const, target: "project" as const };
+    const installed = await installSkills(options);
+    const path = join(installed.root, manifestFilename);
+    const manifest = JSON.parse(await readFile(path, "utf8")) as SkillManifest;
+    await writeFile(path, JSON.stringify({ ...manifest, runtime: { ...manifest.runtime, sha256: "not-a-checksum" } }));
+
+    await expect(verifySkills(options)).rejects.toThrow(/Invalid QA skill manifest/);
+  });
 });
