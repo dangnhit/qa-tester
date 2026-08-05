@@ -1,6 +1,6 @@
 {
   "name": "@dangnhit/qa-skills",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Deterministic, evidence-backed QA runtime for Codex, Claude Code, and Cursor: versioned artifact contracts, a Playwright Runtime Browser Driver, redacted evidence, and reproducible release gates. Never calls an LLM.",
   "keywords": [
     "qa",

@@ -11,6 +11,13 @@ JSON Schema are implementation details and may change in a minor release.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-08-05
+
+Everything below came out of a pre-publication audit run over this repository as an open-source
+candidate. Nothing here changes the frozen contract: no named export was added or removed, and no
+CLI command, flag, or exit code changed. Two entries are worth reading before upgrading — where
+the Codex user-scope shim lands, and the `sharp` bump — and both are noted in place.
+
 ### Fixed
 
 - `skills install --agent codex --target user` wrote its discovery shim to `~/AGENTS.md`. Codex
@@ -60,5 +67,6 @@ JSON Schema are implementation details and may change in a minor release.
 
 First stable release; the public contract described above is frozen for the whole `1.x` range.
 
-[Unreleased]: https://github.com/dangnhit/qa-tester/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/dangnhit/qa-tester/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/dangnhit/qa-tester/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/dangnhit/qa-tester/releases/tag/v1.0.0

@@ -32,7 +32,7 @@ Minimal valid example:
 {
   "artifactType": "requirement-analysis",
   "schemaVersion": "1.0.0",
-  "producerVersion": "1.0.0",
+  "producerVersion": "1.0.1",
   "requirementAnalysisId": "REQUIREMENT-ANALYSIS-PLACEHOLDER",
   "statements": [
     {
@@ -76,7 +76,7 @@ Minimal valid example (note there is no `approvalDecision` key):
 {
   "artifactType": "test-plan",
   "schemaVersion": "1.0.0",
-  "producerVersion": "1.0.0",
+  "producerVersion": "1.0.1",
   "testPlanId": "TEST-PLAN-PLACEHOLDER",
   "approvalPolicy": {
     "mode": "human-review"
@@ -154,7 +154,7 @@ identity values before registering):
 {
   "artifactType": "test-case",
   "schemaVersion": "3.0.0",
-  "producerVersion": "1.0.0",
+  "producerVersion": "1.0.1",
   "testCaseId": "TC-PLACEHOLDER-1",
   "revisionId": "REPLACE_WITH_QA_SKILL_FINGERPRINT_OUTPUT",
   "instanceId": "TC-PLACEHOLDER-1--REPLACE_WITH_FIRST_16_HEX_CHARS_OF_FINGERPRINT",
@@ -254,7 +254,7 @@ Minimal valid example:
 {
   "artifactType": "coverage-obligation",
   "schemaVersion": "4.0.0",
-  "producerVersion": "1.0.0",
+  "producerVersion": "1.0.1",
   "obligationId": "COV-PLACEHOLDER-1",
   "requirementId": "REQ-PLACEHOLDER-1",
   "requirementAnalysisArtifactId": "REPLACE_WITH_REGISTERED_REQUIREMENT_ANALYSIS_ARTIFACT_ID",
