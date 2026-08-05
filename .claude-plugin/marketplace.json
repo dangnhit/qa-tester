@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "qa-skills",
+  "description": "Deterministic, evidence-backed QA runtime for Claude Code, Codex, and Cursor. Versioned artifact contracts, a Playwright Runtime Browser Driver, redacted evidence, and reproducible release gates. The runtime never calls an LLM.",
+  "owner": {
+    "name": "Dang Nguyen",
+    "url": "https://github.com/dangnhit/qa-tester"
+  },
+  "plugins": [
+    {
+      "name": "qa-skills-bootstrap",
+      "description": "Install and verify the local QA Skills runtime, then hand off to the eight canonical QA skills it installs. Does not carry copies of them.",
+      "source": "./plugins/qa-skills-bootstrap",
+      "category": "testing"
+    }
+  ]
+}
