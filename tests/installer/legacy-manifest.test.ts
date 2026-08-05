@@ -193,12 +193,11 @@ describe("I2: runtimeRange, sourceVersion, and runtime.version must share one ma
 });
 
 /**
-    // This is exactly what review round 1 caught: "predates"/"pre-1.0" is right for the 0.x case but
-    // WRONG for this FUTURE-range case -- a sentence stating facts (which range, which range this build
-    // verifies) must not assign a direction. "older" is still allowed to appear ON ITS OWN inside the
-    // conditional clause about --force ("... if this binary is older than the one that wrote the
-    // manifest") because that is the downgrade warning I3 requires, not a claim about the direction of
-    // the range -- so this test does not ban that word, only "predates"/"pre-1.0".
+ * C1 + I3 (review round 1): the old reason named "skills install" as a remedy, but measured for real
+ * against an already-existing installation `installSkills` always throws INSTALLER_SAFETY (the files are
+ * already there from the previous install) -- wrong advice in shipped text. And the word "predates"
+ * assigns a direction to a symmetric gate (it catches both older ranges and future ones), so `--force`
+ * has to be stated plainly as something that CAN downgrade, not always a repair.
  */
 describe("C1 + I3: the runtime-incompatible reason names only a remedy that actually works", () => {
   it("names skills update --force, warns it can downgrade, and says skills install does not help", async () => {
