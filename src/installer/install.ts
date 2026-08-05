@@ -119,7 +119,7 @@ export async function writeBundle(options: InstallOptions, root: string, overwri
   await assertNoSymlinksTree(sourceRoot); await assertTargetComponents(root); await assertNoSymlinksTree(root);
   const runtimeBinding = await captureRuntimeBinding(runtime);
   const baseManifest = await createManifest({ sourceRoot, agent: options.agent, target: options.target, runtime: runtimeBinding, sourceVersion: options.sourceVersion ?? runtimeVersion });
-  const shimArtifacts = buildShims(options.agent, deriveSkillNames(baseManifest.files.map((file) => file.path)));
+  const shimArtifacts = buildShims(options.agent, deriveSkillNames(baseManifest.files.map((file) => file.path)), options.target);
   const manifest = { ...baseManifest, shims: shimArtifacts.map((artifact) => artifact.entry) };
   const paths = manifest.files.map((file) => validateRelativeFilePath(file.path));
   const contents = await Promise.all(paths.map(async (file) => ({ file, contents: await readFile(join(sourceRoot, file)) })));

@@ -24,7 +24,16 @@ async function filesBelow(root: string, current = root): Promise<string[]> {
     }
     return files;
   } catch (error: unknown) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    if (error instanceof Error && "code" in error) {
+      if (error.code === "ENOENT") return [];
+      // A managed top-level entry is not necessarily a directory: the bundle root holds
+      // `NOTICE.md` beside the per-skill directories, and the caller walks each top-level name
+      // without first stat-ing it. `readdir` answers ENOTDIR for a file, and the file IS the whole
+      // subtree, so yield it rather than throwing. Before this branch existed, any file at the
+      // bundle root made `skills verify` exit 5 (ABORTED_OR_INTERNAL) with a raw ENOTDIR instead
+      // of reporting drift — an internal failure where the answer was simply "nothing unexpected".
+      if (error.code === "ENOTDIR") return current === root ? [] : [current];
+    }
     throw error;
   }
 }

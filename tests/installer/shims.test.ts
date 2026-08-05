@@ -298,3 +298,116 @@ describe("per-agent discovery shims (ADR-0011)", () => {
     expect(await readFile(agentsPath, "utf8")).toBe(before);
   });
 });
+
+/**
+ * User-scope Codex installs (ADR-0011 follow-up). Codex reads its global instructions from its
+ * Codex home -- `~/.codex/AGENTS.md` -- not from `~/AGENTS.md`, so a user-scope shim written to
+ * the home root is inert: it reproduces exactly the "installed but never discovered" failure
+ * ADR-0011 exists to close, while also depositing a file in the user's home directory.
+ *
+ * The second test here is the one that matters most. `removeShim` and `readShimManagedContent`
+ * used to decide "is this a managed block?" by comparing the recorded path against a single
+ * constant. A second Codex path added without updating that predicate makes both fall through to
+ * their whole-file branches: uninstall would `unlink` a user's global AGENTS.md outright, taking
+ * every line they wrote outside the markers with it, and verify would checksum the whole file and
+ * report drift for any edit they made around the block. That is a worse bug than the one being
+ * fixed, so it is pinned here rather than left to review.
+ */
+describe("codex user-scope shim", () => {
+  it("writes the managed block where Codex actually reads it", async () => {
+    const base = await fixture();
+    const userHome = join(base.projectRoot, "home");
+    await mkdir(userHome, { recursive: true });
+    const options = { ...base, userHome, agent: "codex" as const, target: "user" as const };
+
+    await installSkills(options);
+
+    expect(await readFile(join(userHome, ".codex", "AGENTS.md"), "utf8")).toContain(CODEX_START);
+    // The home root stays clean: nothing is deposited beside the user's own files.
+    await expect(readFile(join(userHome, "AGENTS.md"), "utf8")).rejects.toThrow();
+    expect((await readManifestShims(join(userHome, ".codex", "skills"))).map((shim) => shim.path)).toEqual([".codex/AGENTS.md"]);
+  });
+
+  it("says which scope it was installed for", async () => {
+    const base = await fixture();
+    const userHome = join(base.projectRoot, "home");
+    await mkdir(userHome, { recursive: true });
+    await installSkills({ ...base, userHome, agent: "codex" as const, target: "user" as const });
+    await installSkills({ ...base, agent: "codex" as const, target: "project" as const });
+
+    expect(await readFile(join(userHome, ".codex", "AGENTS.md"), "utf8")).toContain("your user account");
+    expect(await readFile(join(base.projectRoot, "AGENTS.md"), "utf8")).toContain("this project");
+  });
+
+  it("preserves surrounding user content on uninstall instead of deleting the file", async () => {
+    const base = await fixture();
+    const userHome = join(base.projectRoot, "home");
+    await mkdir(join(userHome, ".codex"), { recursive: true });
+    const agentsPath = join(userHome, ".codex", "AGENTS.md");
+    await writeFile(agentsPath, "# My personal instructions\n\nAlways write tests first.\n");
+    const options = { ...base, userHome, agent: "codex" as const, target: "user" as const };
+
+    await installSkills(options);
+    expect(await readFile(agentsPath, "utf8")).toContain(CODEX_START);
+
+    await uninstallSkills(options);
+
+    const after = await readFile(agentsPath, "utf8");
+    expect(after).toContain("Always write tests first.");
+    expect(after).not.toContain(CODEX_START);
+    expect(after).not.toContain(CODEX_END);
+  });
+
+  it("reports drift only for the managed block, not for edits around it", async () => {
+    const base = await fixture();
+    const userHome = join(base.projectRoot, "home");
+    await mkdir(userHome, { recursive: true });
+    const options = { ...base, userHome, agent: "codex" as const, target: "user" as const };
+    await installSkills(options);
+    const agentsPath = join(userHome, ".codex", "AGENTS.md");
+
+    // An edit OUTSIDE the managed block is the user's own content and is not drift.
+    await writeFile(agentsPath, `# Added later\n\n${await readFile(agentsPath, "utf8")}`);
+    expect((await verifySkills(options)).status).toBe("valid");
+
+    // An edit INSIDE the managed block is drift.
+    const withBlockEdit = (await readFile(agentsPath, "utf8")).replace(CODEX_END, `tampered\n${CODEX_END}`);
+    await writeFile(agentsPath, withBlockEdit);
+    expect((await verifySkills(options)).status).toBe("modified");
+  });
+});
+
+/**
+ * The canonical bundle root holds `NOTICE.md` beside the per-skill directories, so that a copy
+ * installed into someone else's repository does not arrive stripped of the license it is under.
+ *
+ * `verifySkills` walks each managed top-level NAME without stat-ing it first, so a file there hits
+ * `readdir` and answers ENOTDIR. That escaped as exit 5 (ABORTED_OR_INTERNAL) with a raw errno --
+ * an internal failure reported where the honest answer was "nothing unexpected". These pin the
+ * file's presence and the walk's tolerance together, because the first is what exposes the second.
+ */
+describe("a file at the bundle root", () => {
+  it("installs, verifies clean, and is removed on uninstall", async () => {
+    const base = await fixture();
+    await writeFile(join(base.sourceRoot, "NOTICE.md"), "Copyright 2026 Dang Nguyen\n");
+    const options = { ...base, agent: "claude" as const, target: "project" as const };
+
+    const installed = await installSkills(options);
+    expect(await readFile(join(installed.root, "NOTICE.md"), "utf8")).toContain("Copyright");
+    expect((await verifySkills(options)).status).toBe("valid");
+
+    await uninstallSkills(options);
+    await expect(readFile(join(installed.root, "NOTICE.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("is drift when edited in place, like any other managed file", async () => {
+    const base = await fixture();
+    await writeFile(join(base.sourceRoot, "NOTICE.md"), "Copyright 2026 Dang Nguyen\n");
+    const options = { ...base, agent: "claude" as const, target: "project" as const };
+    const installed = await installSkills(options);
+
+    await writeFile(join(installed.root, "NOTICE.md"), "relicensed\n");
+
+    expect((await verifySkills(options)).status).toBe("modified");
+  });
+});

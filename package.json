@@ -27,8 +27,13 @@
   "type": "module",
   "files": [
     "dist",
-    "skills"
+    "skills",
+    "NOTICE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     ".": {
       "types": "./dist/src/orchestration/qa-tester.d.ts",
@@ -37,7 +42,8 @@
     "./cli": {
       "types": "./dist/src/cli/index.d.ts",
       "import": "./dist/src/cli/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "types": "./dist/src/orchestration/qa-tester.d.ts",
   "bin": {
@@ -47,6 +53,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepack": "npm run build",
     "build": "tsc -p tsconfig.build.json && tsx scripts/copy-assets.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -67,7 +74,7 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "commander": "^14.0.0",
-    "sharp": "^0.34.3",
+    "sharp": "^0.35.3",
     "ulid": "^3.0.1",
     "yaml": "^2.8.1"
   },

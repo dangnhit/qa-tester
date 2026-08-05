@@ -1,8 +1,24 @@
 QA Skills
 Copyright 2026 Dang Nguyen
 
-This product is licensed under the Apache License, Version 2.0.
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
 
-It includes software distributed under the licenses declared by the
-package-lock.json dependency graph. Those dependencies are not relicensed
-by this NOTICE file.
+Third-party content
+-------------------
+
+This project depends on third-party packages but does not bundle or redistribute
+them. The published npm tarball contains only this project's own compiled output
+and skill bundle; dependencies resolve from the registry on the consumer's
+machine, under their own licenses. Nothing in this NOTICE relicenses them.
+
+One third-party artifact IS present in this source repository, and is NOT covered
+by the Apache-2.0 grant in LICENSE:
+
+  fixtures/sarif/sarif-2.1.0-schema.json
+    The JSON Schema for the Static Analysis Results Interchange Format (SARIF)
+    Version 2.1.0, an OASIS Standard.
+    Copyright (c) OASIS Open. All Rights Reserved.
+    Governed by the OASIS IPR Policy:
+    https://www.oasis-open.org/policies-guidelines/ipr
+    Redistributed unmodified. Test fixture only; absent from every published npm
+    tarball. Full provenance: fixtures/sarif/NOTICE.md

@@ -12,6 +12,8 @@ The runtime never calls an LLM. Agents may author requirement and testcase draft
 
 QA execution never downloads a runtime or browser implicitly.
 
+**What does run at install time, and it is not this package.** `@dangnhit/qa-skills` declares no `preinstall`, `install`, `postinstall`, or `prepare` script, so nothing of its own executes when you install it. One dependency does: `sharp`, used to compose annotated screenshots, runs `node install/check.js || npm run build`. On a machine with a system libvips, or with `npm_config_build_from_source` set, that fallback compiles libvips from source. This is stated because the sentence above is otherwise easy to read as covering the whole install, and it does not.
+
 ## Install and verify
 
 From a checkout:
@@ -291,6 +293,20 @@ qa-skill skills install --agent cursor --target project
 ```
 
 The roots are `.codex/skills`, `.claude/skills`, and `.cursor/skills`. Use `--target user` for the corresponding directory under the user home. The installation manifest binds the runtime command, real path, resolution source, version, and executable checksum; `skills verify` fails closed with a typed Runtime Binding status if any of that identity is missing, changed, or incompatible. After source updates, run `skills verify`, then `skills update`; never patch an installed copy directly.
+
+### Every path an install writes
+
+Two of the three agents need a **discovery shim** outside the skills root, because neither reads a bare `skills/` directory (ADR-0011). Both are recorded in the manifest and checksummed like any other installed file, and `skills uninstall` reverses both.
+
+| `--agent` | `--target project` | `--target user` |
+| --- | --- | --- |
+| `codex` | `.codex/skills/**` **plus a managed block inside the project's own `AGENTS.md`** | `~/.codex/skills/**` plus a managed block inside `~/.codex/AGENTS.md` |
+| `claude` | `.claude/skills/**` — no shim, Claude Code reads it natively | `~/.claude/skills/**` |
+| `cursor` | `.cursor/skills/**` **plus `.cursor/rules/qa-skills.mdc`** | `~/.cursor/skills/**` plus `~/.cursor/rules/qa-skills.mdc` |
+
+**`AGENTS.md` is a file you own, and `--agent codex` edits it in place.** It is the one path here that touches pre-existing content, so it is bounded on every side: the install owns only the text between its `<!-- qa-skills:start … -->` and `<!-- qa-skills:end -->` markers, never touches a byte outside them, and refuses outright — before any file is written — when the markers are already malformed, rather than guessing which pair to overwrite. `skills verify` checksums only the managed region, so your own edits around the block are not drift. `skills uninstall` strips the block and leaves the rest of the file as you wrote it, deleting `AGENTS.md` only if the block was the entire file. `--agent cursor` creates a file it owns outright; that one is deleted whole on uninstall.
+
+Codex reads global instructions from its Codex home (`~/.codex/AGENTS.md`, or `$CODEX_HOME`), which is why the user-scope shim goes there rather than to `~/AGENTS.md`.
 
 ## Two execution lanes
 
