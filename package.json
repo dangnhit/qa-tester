@@ -33,6 +33,8 @@
     "test:coverage": "vitest run --coverage",
     "demo": "tsx scripts/run-demo.ts",
     "scan:secrets": "tsx scripts/check-secrets.ts",
+    "scan:language": "tsx scripts/check-language.ts --files",
+    "hooks:install": "git config core.hooksPath .githooks",
     "check:examples": "tsx scripts/check-examples.ts",
     "generate:types": "tsx scripts/generate-types.ts",
     "check:generated": "npm run generate:types && git diff --exit-code -- src/contracts/generated",

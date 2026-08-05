@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rejects a commit message that contains Vietnamese. Install with `npm run hooks:install`,
+# which points core.hooksPath at this directory. CI runs the same scanner, so a machine that
+# never installed the hook is still gated -- this only moves the failure earlier.
+set -e
+exec npx tsx "$(git rev-parse --show-toplevel)/scripts/check-language.ts" --message "$1"
