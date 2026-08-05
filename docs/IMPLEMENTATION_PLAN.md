@@ -67,7 +67,6 @@ The runtime never calls an LLM. Agent-authored and runtime-produced artifacts sh
 ├── qa.config.example.yaml
 ├── docs/
 │   ├── IMPLEMENTATION_PLAN.md
-│   ├── README.vi.md
 │   └── adr/
 ├── skills/
 │   ├── qa-tester/
@@ -414,10 +413,9 @@ One canonical standards-compatible Skill Bundle is copied into agent-specific pr
 
 ## Localization
 
-- Code, contracts, enums, skills, canonical docs, and examples use English.
+- Everything authored in this repository is English, including commit messages and comments.
 - JSON artifacts are never localized.
-- Markdown projections support `en` and `vi`, defaulting to English.
-- A Vietnamese quickstart lives in `docs/README.vi.md`.
+- Markdown projections support `en` and `vi`, defaulting to English. This is the sole place a language other than English appears, and it is product output rather than repository prose.
 - Agent replies follow the user’s language independently of artifact locale.
 
 ## Implementation phases
