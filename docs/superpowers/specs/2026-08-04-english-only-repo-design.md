@@ -94,7 +94,28 @@ Procedure, each step with its check:
 
 Measured blast radius: `main == origin/main`, 0 forks, 0 tags, 0 open pull requests, no branch protection or rulesets on `main`, one worktree, clean tree. The rewrite changes SHAs for 65 commits and breaks nobody.
 
-File contents inside history are **not** rewritten. `git show 50d63ad:docs/.../plan.md` will still produce Vietnamese, because that is what the file said at that commit. The working tree is corrected by ordinary commits on top. Rewriting historical blobs would mean a `--tree-filter` over 65 commits for no gain the gates measure.
+## Rewriting the file contents inside history
+
+Rewriting messages leaves `git show <old commit>:<path>` producing Vietnamese, because that is what the file said at that commit. A second pass closes it, over the whole of `main` rather than one range, since `docs/README.vi.md` existed from the MVP.
+
+Measured first: **26 blobs across 8 paths** carry Vietnamese outside the Artifact Locale assets, out of 1,754 blobs in history. Small enough to treat each one deliberately rather than sweeping.
+
+| Paths | Blobs | Treatment |
+| --- | --- | --- |
+| `sarif.ts`, `sarif.test.ts`, `spec-locations.test.ts` | 12 | Literal substitution of the fixture filename. Their only Vietnamese is that one string, so every intermediate edit survives byte-for-byte. |
+| `legacy-manifest.test.ts` | 4 | Each contiguous Vietnamese comment run is replaced by the English block that says the same thing at HEAD, keyed by an ASCII marker inside the run. Table rows are rewritten row by row. |
+| Phase 10 plan, Phase 10 spec, `compatibility.test.ts` | 3 | Replaced wholesale by the HEAD version. Each has exactly one Vietnamese blob in history, so no intermediate edit is collapsed. |
+| `docs/README.vi.md` | 7 | Dropped from every tree. The file is deleted at HEAD, and translating seven versions of a document that no longer exists buys nothing. |
+
+The replacements are written into the object database and verified **before** any commit is touched, so the `--index-filter` itself is a lookup of old blob SHA to new blob SHA and cannot invent content. Each replacement is re-scanned for Vietnamese as it is built, and the 17 TypeScript replacements are parsed with the TypeScript compiler before use.
+
+Verification of the pass:
+
+- **HEAD is untouched:** the tree hash is identical before and after (`b4faca9`), which is the proof that no current file changed.
+- **Topology holds:** 261 commits, the merge still has two parents.
+- **History is clean:** every blob reachable from `main` is scanned; the only Vietnamese left is in the five Artifact Locale paths, and `docs/README.vi.md` appears in no tree.
+
+The five locale paths keep their Vietnamese in history for the same reason they keep it at HEAD. Note that `shared/templates/report.vi.md` is ASCII at HEAD but was Vietnamese in an earlier version, so it is exempt as a path rather than by its current contents.
 
 ## Verification
 
