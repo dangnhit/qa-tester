@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/exploratory-finding.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/exploratory-finding.schema.json",
   "title": "Exploratory Finding",
   "type": "object", "additionalProperties": false,
   "required": ["artifactType", "schemaVersion", "producerVersion", "findingId", "runId", "charterId", "observation", "authority", "satisfiesCoverage"],

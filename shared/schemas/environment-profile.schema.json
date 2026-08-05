@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/environment-profile.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/environment-profile.schema.json",
   "title": "Environment Profile",
   "type": "object",
   "additionalProperties": false,

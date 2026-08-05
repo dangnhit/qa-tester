@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/regression-selection.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/regression-selection.schema.json",
   "title": "Regression Selection",
   "type": "object",
   "additionalProperties": false,

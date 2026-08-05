@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/requirement-analysis.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/requirement-analysis.schema.json",
   "title": "Requirement Analysis",
   "type": "object",
   "additionalProperties": false,

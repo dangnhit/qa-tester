@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/exploration-charter.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/exploration-charter.schema.json",
   "title": "Exploration Charter",
   "type": "object",
   "additionalProperties": false,

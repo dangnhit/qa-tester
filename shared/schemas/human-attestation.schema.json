@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/human-attestation.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/human-attestation.schema.json",
   "title": "Human Attestation",
   "description": "An identified person's immutable signed claim that an evaluation no machine performed was actually carried out (CONTEXT.md:143-145). Deliberately NOT an approval-decision: that glossary entry's own _Avoid_ line names 'sign-off, approval decision' as the concepts a Human Attestation must not be confused with. An approval-decision authorises a plan; this records that a manual evaluation happened.",
   "type": "object",

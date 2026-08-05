@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/incident.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/incident.schema.json",
   "title": "QA Incident or Investigation Finding",
   "type": "object",
   "additionalProperties": false,

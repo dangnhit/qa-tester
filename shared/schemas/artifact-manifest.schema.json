@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/artifact-manifest.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/artifact-manifest.schema.json",
   "title": "Run Artifact Manifest",
   "type": "object",
   "additionalProperties": false,

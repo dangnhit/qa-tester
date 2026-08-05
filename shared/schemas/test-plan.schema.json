@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/test-plan.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/test-plan.schema.json",
   "title": "Test Plan",
   "type": "object",
   "additionalProperties": false,

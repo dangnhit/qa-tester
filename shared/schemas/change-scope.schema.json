@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/change-scope.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/change-scope.schema.json",
   "title": "Canonical Change Scope",
   "type": "object", "additionalProperties": false,
   "required": ["artifactType", "schemaVersion", "producerVersion", "changeScopeId", "runId", "changes", "inputChecksum", "provenance"],

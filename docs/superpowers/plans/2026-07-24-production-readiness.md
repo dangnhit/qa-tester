@@ -1,4 +1,4 @@
-# Production-Readiness Plan — `@vigentix/qa-skills`
+# Production-Readiness Plan — `@dangnhit/qa-skills`
 
 **Driving question:** Is this bundle sufficient to serve real SDLC testing as a plugin for Claude Code, Codex, and Cursor?
 **Answer chosen:** make it sufficient as an **Evidence/Gate layer**, not as a browser runner. Keep the deterministic release gate, Requirement Authority model, fail-closed evidence, and safety envelope; add a lane that lets the runtime *observe* an external runner (Playwright) instead of re-implementing what Playwright already does.

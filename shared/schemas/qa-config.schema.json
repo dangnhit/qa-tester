@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/qa-config.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/qa-config.schema.json",
   "title": "QA Skills Declarative Configuration",
   "type": "object",
   "additionalProperties": false,

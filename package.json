@@ -1,6 +1,28 @@
 {
-  "name": "@vigentix/qa-skills",
+  "name": "@dangnhit/qa-skills",
   "version": "1.0.0",
+  "description": "Deterministic, evidence-backed QA runtime for Codex, Claude Code, and Cursor: versioned artifact contracts, a Playwright Runtime Browser Driver, redacted evidence, and reproducible release gates. Never calls an LLM.",
+  "keywords": [
+    "qa",
+    "testing",
+    "playwright",
+    "release-gate",
+    "evidence",
+    "sarif",
+    "junit",
+    "agent-skills",
+    "claude-code",
+    "codex"
+  ],
+  "homepage": "https://github.com/dangnhit/qa-tester#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dangnhit/qa-tester.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dangnhit/qa-tester/issues"
+  },
+  "author": "Dang Nguyen",
   "license": "Apache-2.0",
   "type": "module",
   "files": [

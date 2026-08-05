@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/evidence-gap.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/evidence-gap.schema.json",
   "title": "Evidence Gap",
   "type": "object",
   "additionalProperties": false,

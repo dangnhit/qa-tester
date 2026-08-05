@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/workflow-checkpoint.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/workflow-checkpoint.schema.json",
   "title": "Workflow Checkpoint",
   "type": "object", "additionalProperties": false,
   "required": ["artifactType", "schemaVersion", "producerVersion", "checkpointId", "runId", "mode", "inputChecksum", "revision", "completedOperations", "operationOutputs", "state", "stateChecksum"],

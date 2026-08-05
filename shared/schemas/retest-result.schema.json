@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/retest-result.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/retest-result.schema.json",
   "title": "Retest Result",
   "type": "object",
   "additionalProperties": false,

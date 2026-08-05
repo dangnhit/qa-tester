@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Package name: `@vigentix/qa-skills`; CLI binary: `qa-skill`; orchestrator skill: `qa-tester`.
+- Package name: `@dangnhit/qa-skills`; CLI binary: `qa-skill`; orchestrator skill: `qa-tester`.
 - Node engine is `>=22`; source is strict ESM TypeScript; npm lockfile is committed.
 - JSON Schema Draft 2020-12 files under `shared/schemas/` are the source of truth; canonical run artifacts are JSON; Markdown is derived.
 - Runtime embeds no LLM and never silently repairs invalid agent output.

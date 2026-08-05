@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/planning-action.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/planning-action.schema.json",
   "title": "Bounded Planning Action",
   "oneOf": [
     {

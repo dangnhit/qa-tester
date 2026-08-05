@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/qa-execution-report.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/qa-execution-report.schema.json",
   "title": "QA Execution Report",
   "type": "object",
   "additionalProperties": false,

@@ -9,7 +9,7 @@ Resolve the runtime locally: project `node_modules/.bin/qa-skill`, then `qa-skil
 For a local-package API integration, run this complete plan-only adapter after creating `workflow.json` with valid registered bundle references:
 
 ```js
-import { createQaTester } from "@vigentix/qa-skills";
+import { createQaTester } from "@dangnhit/qa-skills";
 import input from "./workflow.json" with { type: "json" };
 console.log(await createQaTester({})(input));
 ```

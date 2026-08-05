@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/release-gate.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/release-gate.schema.json",
   "title": "Release Gate",
   "type": "object",
   "additionalProperties": false,

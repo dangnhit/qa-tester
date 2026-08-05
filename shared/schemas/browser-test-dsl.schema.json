@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/browser-test-dsl.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/browser-test-dsl.schema.json",
   "title": "Browser Test DSL",
   "type": "object",
   "additionalProperties": false,

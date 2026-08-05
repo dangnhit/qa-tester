@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vigentix.dev/qa-skills/schemas/coverage-obligation.schema.json",
+  "$id": "https://dangnhit.github.io/qa-tester/schemas/coverage-obligation.schema.json",
   "title": "Coverage Obligation",
   "type": "object",
   "additionalProperties": false,
