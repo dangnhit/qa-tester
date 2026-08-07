@@ -154,10 +154,10 @@ try {
   // executed, which happens after the `tsc` invocation.
   const consumerSource = `import {
   ${expectedValueExports.map((entry) => entry.name).join(", ")},
-} from "@dangnhit/qa-skills";
+} from "@gwinnguyen/qa-skills";
 import type {
   ${expectedTypeExports.join(", ")},
-} from "@dangnhit/qa-skills";
+} from "@gwinnguyen/qa-skills";
 // Type-only namespace import: proves the "./cli" subpath resolves to a real declaration file at the
 // packaging boundary without importing a VALUE from it. "./cli" compiles to the same file
 // bin.qa-skill points at (src/cli/index.ts) and runs the CLI as a side effect the instant it is
@@ -166,7 +166,7 @@ import type {
 // \`tsx\` (elides \`import type\` as a syntax-level TypeScript construct, confirmed by measurement, see
 // the comment beside the \`tsx\` invocation) -- so this line can only ever fail by not type-checking,
 // never by running the CLI mid-smoke-test.
-import type * as QaSkillsCli from "@dangnhit/qa-skills/cli";
+import type * as QaSkillsCli from "@gwinnguyen/qa-skills/cli";
 type CliSubpathHasTypes = typeof QaSkillsCli;
 
 ${expectedValueExports.map((entry) => entry.kind === "function"
@@ -186,7 +186,7 @@ process.stdout.write("consumer.mts: all ${expectedValueExports.length} public va
   // wrong-shaped) in the shipped `.js`. Confirmed by mutation: deleting a value's `export` from the
   // built `.js` while leaving the `.d.ts` untouched left this smoke test green before this fix.
   //
-  // `consumer.mts` mixes `import type * as QaSkillsCli from "@dangnhit/qa-skills/cli"` in with real
+  // `consumer.mts` mixes `import type * as QaSkillsCli from "@gwinnguyen/qa-skills/cli"` in with real
   // value imports, so actually EXECUTING the file must not run "./cli" as a side effect (see "What
   // v1.0 freezes" in the README on why importing it as a value does). Measured, not assumed: a probe
   // file with `import type * as X from "<module-with-a-console.log-side-effect>"` printed nothing
@@ -197,7 +197,7 @@ process.stdout.write("consumer.mts: all ${expectedValueExports.length} public va
   // Node minor first shipped default type-stripping, so it runs identically on every Node line this
   // package's `engines` field admits (>=22), not only the Node 24 leg CI gates `smoke:package` behind.
   run(join(root, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx"), ["consumer.mts"], consumer);
-  const installedPackageRoot = join(consumer, "node_modules", "@dangnhit", "qa-skills");
+  const installedPackageRoot = join(consumer, "node_modules", "@gwinnguyen", "qa-skills");
   const installed = JSON.parse(await readFile(join(installedPackageRoot, "package.json"), "utf8")) as { version?: string; types?: string; private?: boolean };
   if (!installed.version) throw new Error("installed package.json is missing a version");
   if (!installed.types || installed.private === true) throw new Error("installed package metadata is not publishable and typed");
@@ -253,7 +253,7 @@ process.stdout.write("consumer.mts: all ${expectedValueExports.length} public va
     }
   }
 
-  process.stdout.write(`clean consumer accepted @dangnhit/qa-skills@${version}\n`);
+  process.stdout.write(`clean consumer accepted @gwinnguyen/qa-skills@${version}\n`);
 } finally {
   if (tarball) await rm(tarball, { force: true });
   await rm(consumer, { recursive: true, force: true });

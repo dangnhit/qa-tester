@@ -1,7 +1,7 @@
 {
   "name": "qa-skills-bootstrap",
-  "description": "Bootstraps @dangnhit/qa-skills in a project: resolves the local runtime, verifies its version range, installs the checksummed canonical Skill Bundle, and verifies the Runtime Binding. The eight QA skills themselves are installed by the runtime, never copied by this plugin.",
-  "version": "1.0.1",
+  "description": "Bootstraps @gwinnguyen/qa-skills in a project: resolves the local runtime, verifies its version range, installs the checksummed canonical Skill Bundle, and verifies the Runtime Binding. The eight QA skills themselves are installed by the runtime, never copied by this plugin.",
+  "version": "1.0.2",
   "author": {
     "name": "Dang Nguyen",
     "url": "https://github.com/dangnhit/qa-tester"

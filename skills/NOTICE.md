@@ -4,7 +4,7 @@ Copyright 2026 Dang Nguyen
 
 Licensed under the Apache License, Version 2.0. You may not use these files except in compliance
 with the License. A copy is at <http://www.apache.org/licenses/LICENSE-2.0>, and the full text
-ships with the `@dangnhit/qa-skills` package and lives at
+ships with the `@gwinnguyen/qa-skills` package and lives at
 <https://github.com/dangnhit/qa-tester/blob/main/LICENSE>.
 
 ## If you are reading this inside your own repository

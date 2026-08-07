@@ -2,7 +2,7 @@
 
 ## Supported version
 
-The current `1.0.x` line receives security fixes. Pre-1.0 development versions receive none; a `0.1.x` installation should be moved onto `1.0.x`, whose public contract — the named exports of `@dangnhit/qa-skills` and the documented CLI commands, flags, and exit codes — is frozen for the whole `1.x` range.
+The current `1.0.x` line receives security fixes. Pre-1.0 development versions receive none; a `0.1.x` installation should be moved onto `1.0.x`, whose public contract — the named exports of `@gwinnguyen/qa-skills` and the documented CLI commands, flags, and exit codes — is frozen for the whole `1.x` range.
 
 Pin an exact package version or commit, and verify the local runtime binding before execution:
 

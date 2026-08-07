@@ -4,7 +4,7 @@
 
 Build a portable QA system for Codex, Claude Code, and Cursor in which coding agents provide reasoning while a model-independent TypeScript runtime validates artifacts, executes browser tests, captures evidence, and produces deterministic reports.
 
-The system is named **QA Skills**. The npm package is `@dangnhit/qa-skills`, the CLI binary is `qa-skill`, and the orchestrator skill is `qa-tester`.
+The system is named **QA Skills**. The npm package is `@gwinnguyen/qa-skills`, the CLI binary is `qa-skill`, and the orchestrator skill is `qa-tester`.
 
 ## MVP boundaries
 

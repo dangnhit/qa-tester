@@ -5,11 +5,27 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 What "breaking" means here is exactly what [v1.0 froze](README.md#what-v10-freezes): the named
-exports of `@dangnhit/qa-skills`, and the documented CLI commands, flags, and exit codes. The
+exports of `@gwinnguyen/qa-skills`, and the documented CLI commands, flags, and exit codes. The
 `dist/` layout, internal module boundaries, helper names, and artifact JSON beyond its published
 JSON Schema are implementation details and may change in a minor release.
 
 ## [Unreleased]
+
+## [1.0.2] — 2026-08-07
+
+### Changed
+
+- **The package is now `@gwinnguyen/qa-skills`.** The previous name named a scope that does not
+  exist on the registry: `@dangnhit` is the GitHub owner, while the publishing npm account is
+  `gwinnguyen`, and npm resolves a scope only to a username or an org. No release was ever
+  published under the old name, so nothing can break — but a checkout that ran `npm install` from
+  a local path or tarball must update the dependency name.
+
+  Only the npm package name moved. The schema `$id` base stays
+  `https://dangnhit.github.io/qa-tester/schemas/` and every repository URL stays
+  `github.com/dangnhit/qa-tester`, because those identify the project's source, not its registry
+  scope. Published provenance will therefore attest a `@gwinnguyen`-scoped package built from
+  `dangnhit/qa-tester`, which is the honest description of both.
 
 ## [1.0.1] — 2026-08-05
 
@@ -50,8 +66,9 @@ the Codex user-scope shim lands, and the `sharp` bump — and both are noted in 
 
 ### Changed
 
-- Published under a personal namespace: the package is `@dangnhit/qa-skills` and the schema `$id`
-  base is `https://dangnhit.github.io/qa-tester/schemas/`.
+- Published under a personal namespace: the package was renamed to `@dangnhit/qa-skills` and the
+  schema `$id` base to `https://dangnhit.github.io/qa-tester/schemas/`. (The package name moved
+  again in 1.0.2, to `@gwinnguyen/qa-skills`; this entry records what 1.0.1 itself carried.)
 - `NOTICE` now travels in the npm tarball (npm force-includes `LICENSE` but not `NOTICE`), no
   longer claims the package bundles its dependencies, and no longer cites a file absent from the
   tarball.
@@ -67,6 +84,7 @@ the Codex user-scope shim lands, and the `sharp` bump — and both are noted in 
 
 First stable release; the public contract described above is frozen for the whole `1.x` range.
 
-[Unreleased]: https://github.com/dangnhit/qa-tester/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/dangnhit/qa-tester/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/dangnhit/qa-tester/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/dangnhit/qa-tester/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/dangnhit/qa-tester/releases/tag/v1.0.0

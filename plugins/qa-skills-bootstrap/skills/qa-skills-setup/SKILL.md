@@ -38,7 +38,7 @@ If neither path resolves, stop and give the user this setup, then wait — do no
 their behalf:
 
 ```sh
-npm install --save-dev @dangnhit/qa-skills
+npm install --save-dev @gwinnguyen/qa-skills
 npx playwright install chromium
 ```
 
