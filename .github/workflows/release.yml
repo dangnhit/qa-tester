@@ -54,14 +54,21 @@ jobs:
     name: Publish to npm
     needs: gate
     runs-on: ubuntu-latest
-    # `id-token: write` is what lets npm attach a provenance attestation binding the
-    # published tarball to this workflow run and this commit. Without it, `--provenance`
-    # fails rather than silently publishing an unattested package.
+    # `id-token: write` is what makes this job publishable at all. There is no npm token
+    # anywhere in this workflow: the package is configured on npmjs.com with a Trusted
+    # Publisher naming this repository, this workflow FILE, and the environment below, and
+    # npm exchanges the OIDC token minted by this permission for a short-lived publish
+    # credential. Nothing long-lived exists to leak, expire, or rotate. The same permission
+    # is what lets npm attach the provenance attestation.
     permissions:
       contents: read
       id-token: write
-    # Point this at a GitHub Environment holding NPM_TOKEN and require a reviewer on it,
-    # so no single push to a tag can reach the registry unattended.
+    # Load-bearing twice over. It is the reviewer gate -- a required reviewer on this
+    # environment means no push of a tag reaches the registry unattended. It is ALSO part of
+    # the Trusted Publisher's identity: the npmjs.com configuration names this exact
+    # environment, so an OIDC token minted for any other environment is refused. Renaming it
+    # here without renaming it there breaks publishing rather than weakening it, which is the
+    # correct direction for a mistake to fail in.
     environment: npm-publish
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -74,6 +81,9 @@ jobs:
       # dist/ is gitignored and `files` ships it, so publishing without this step would
       # upload a tarball whose `main`/`bin`/`types` all point at paths that do not exist.
       - run: npm run build
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # No `--provenance`: trusted publishing generates and publishes the attestation on its
+      # own, and no `NODE_AUTH_TOKEN`, because there is no token. If the Trusted Publisher
+      # configuration on npmjs.com ever stops matching this repository, this file's name, or
+      # the environment above, this step fails with an authentication error -- it does not
+      # fall back to publishing something unattested.
+      - run: npm publish --access public
